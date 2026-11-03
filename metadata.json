@@ -1,0 +1,8 @@
+{
+  "name": "VanEscolar - Gestão de Transporte Escolar",
+  "description": "MVP de transporte escolar com Painel do Motorista, App dos Pais em tempo real, simulação GPS e Repository Pattern relacional.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
