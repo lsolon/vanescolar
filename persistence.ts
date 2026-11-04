@@ -86,12 +86,12 @@ export class CredencialError extends Error {
 }
 
 /** Cria o Firestore real (firebase-admin, API modular) usando conta de serviço ou credenciais padrão do Google Cloud. */
-export async function createFirestoreFromEnv(): Promise<FirestoreLike> {
+export async function createFirestoreFromEnv(env: NodeJS.ProcessEnv = process.env): Promise<FirestoreLike> {
   const { initializeApp, getApps, cert, applicationDefault } = await import('firebase-admin/app');
   const { getFirestore } = await import('firebase-admin/firestore');
-  const projectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || undefined;
+  const projectId = env.FIREBASE_PROJECT_ID || env.VITE_FIREBASE_PROJECT_ID || undefined;
   if (!getApps().length) {
-    const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
+    const raw = env.FIREBASE_SERVICE_ACCOUNT;
     if (raw) {
       const cred = JSON.parse(raw);
       for (const campo of ['type', 'project_id', 'private_key', 'client_email']) {
@@ -195,7 +195,7 @@ export async function createPersistence(env: NodeJS.ProcessEnv = process.env): P
   if (kind === 'memory') reason = env.PERSISTENCE === 'memory' ? 'PERSISTENCE=memory' : 'sem_FIREBASE_SERVICE_ACCOUNT_nem_DATA_DIR';
   try {
     if (kind === 'firestore') {
-      return new Persistence(new FirestoreStore(await createFirestoreFromEnv()));
+      return new Persistence(new FirestoreStore(await createFirestoreFromEnv(env)));
     }
     if (kind === 'file') {
       return new Persistence(new FileStore(env.DATA_DIR || path.resolve(process.cwd(), 'data')));
