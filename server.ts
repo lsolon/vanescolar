@@ -11,6 +11,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { createPersistence } from './persistence';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -132,7 +133,8 @@ interface DriverInvitation {
   nota?: string;
 }
 
-let driverInvitationsDB: DriverInvitation[] = [
+// O convite fixo de demonstração é público (repositório aberto): só existe com DEMO_MODE=true.
+let driverInvitationsDB: DriverInvitation[] = DEMO_MODE ? [
   {
     code: 'DRV-INIT-2026',
     createdBy: 'admin@vanescolar.com.br',
@@ -140,7 +142,7 @@ let driverInvitationsDB: DriverInvitation[] = [
     expiresAt: Date.now() + 72 * 3600 * 1000,
     used: false
   }
-];
+] : [];
 
 let usersDB: UserRecord[] = [
   {
@@ -446,9 +448,64 @@ function broadcast(event: string, data: any) {
 }
 
 async function startServer() {
+  // ==========================================================================
+  // PERSISTÊNCIA: carrega o estado salvo (Firestore/arquivo) antes de aceitar requisições
+  // ==========================================================================
+  const persistence = await createPersistence();
+  const seedEmails = new Set(usersDB.map((u) => u.email.toLowerCase()));
+  try {
+    const saved = await persistence.load();
+    if (Array.isArray(saved.users)) usersDB.splice(0, usersDB.length, ...saved.users);
+    if (Array.isArray(saved.invitations)) driverInvitationsDB.splice(0, driverInvitationsDB.length, ...saved.invitations);
+    if (saved.state) {
+      if (saved.state.viagem) serverState.viagem = saved.state.viagem;
+      if (Array.isArray(saved.state.paradas)) serverState.paradas = saved.state.paradas;
+      if (Array.isArray(saved.state.mensagens)) serverState.mensagens = saved.state.mensagens;
+    }
+    if (Array.isArray(saved.settings?.adminEmails)) {
+      for (const e of saved.settings.adminEmails) {
+        const email = String(e).toLowerCase().trim();
+        if (email && !ADMIN_EMAILS.includes(email)) ADMIN_EMAILS.push(email);
+      }
+    }
+    // Segurança: senhas das contas de demonstração nunca valem fora do DEMO_MODE, mesmo que tenham sido salvas.
+    if (!SEED_LOGIN_ENABLED) {
+      for (const u of usersDB) if (seedEmails.has(u.email.toLowerCase())) u.passwordHash = '';
+    }
+    console.log(`[Persistência] Armazenamento: ${persistence.kind} | usuários: ${usersDB.length} | convites: ${driverInvitationsDB.length} | paradas: ${serverState.paradas.length}`);
+  } catch (err: any) {
+    console.error('[Persistência] Falha ao carregar o estado salvo (seguindo com dados em memória):', err?.message || err);
+  }
+  persistence.attach(() => ({
+    users: usersDB,
+    invitations: driverInvitationsDB,
+    state: { viagem: serverState.viagem, paradas: serverState.paradas, mensagens: serverState.mensagens },
+    settings: { adminEmails: ADMIN_EMAILS }
+  }));
+  const shutdown = async (signal: string) => {
+    console.log(`[VanEscolar Server] ${signal} recebido: salvando estado antes de encerrar...`);
+    try { await persistence.flush(); } catch (err: any) { console.error('[Persistência] Falha ao salvar no encerramento:', err?.message || err); }
+    process.exit(0);
+  };
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
+
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '100kb' }));
+
+  // Qualquer requisição que altera dados (POST/PUT/PATCH/DELETE) e termina com sucesso agenda uma gravação.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+      res.on('finish', () => { if (res.statusCode < 400) persistence.scheduleSave(); });
+    }
+    next();
+  });
+
+  // Saúde do servidor (não expõe dados): útil para conferir se a persistência está ativa.
+  app.get('/api/health', (_req: Request, res: Response) => {
+    res.json({ ok: true, persistence: persistence.kind });
+  });
 
   app.use((_req: Request, res: Response, next: NextFunction) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
