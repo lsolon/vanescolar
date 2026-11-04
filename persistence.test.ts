@@ -97,3 +97,17 @@ test('Persistence.disable: para de gravar e informa o motivo (não sobrescreve d
   assert.equal(p.kind, 'memory');
   assert.equal(p.reason, 'falha_ao_ler_firestore');
 });
+
+test('createPersistence: credencial incompleta informa o campo ausente (sem vazar valores)', async () => {
+  const { createPersistence } = await import('./persistence');
+  const orig = console.error; console.error = () => {};
+  try {
+    const p1 = await createPersistence({ FIREBASE_SERVICE_ACCOUNT: '{"apiKey":"abc"}' } as any);
+    assert.equal(p1.kind, 'memory');
+    assert.equal(p1.reason, 'credencial_campo_ausente_type');
+    const p2 = await createPersistence({ FIREBASE_SERVICE_ACCOUNT: 'isto nao e json' } as any);
+    assert.equal(p2.reason, 'FIREBASE_SERVICE_ACCOUNT_nao_e_json_valido');
+    const p3 = await createPersistence({ FIREBASE_SERVICE_ACCOUNT: JSON.stringify({ type: 'service_account', project_id: 'x', client_email: 'a@b.c', private_key: 'chave-quebrada' }) } as any);
+    assert.equal(p3.reason, 'credencial_private_key_formato_invalido');
+  } finally { console.error = orig; }
+});

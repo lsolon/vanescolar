@@ -80,21 +80,32 @@ export class FirestoreStore implements DocStore {
   }
 }
 
-/** Cria o Firestore real (firebase-admin) usando conta de serviço ou credenciais padrão do Google Cloud. */
+/** Erro de credencial com código curto (seguro para exibir: nunca contém valores secretos). */
+export class CredencialError extends Error {
+  constructor(public codigo: string) { super(codigo); }
+}
+
+/** Cria o Firestore real (firebase-admin, API modular) usando conta de serviço ou credenciais padrão do Google Cloud. */
 export async function createFirestoreFromEnv(): Promise<FirestoreLike> {
-  const admin: any = await import('firebase-admin');
-  const appMod = admin.default ?? admin;
+  const { initializeApp, getApps, cert, applicationDefault } = await import('firebase-admin/app');
+  const { getFirestore } = await import('firebase-admin/firestore');
   const projectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || undefined;
-  if (!appMod.apps?.length) {
+  if (!getApps().length) {
     const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
     if (raw) {
       const cred = JSON.parse(raw);
-      appMod.initializeApp({ credential: appMod.credential.cert(cred), projectId: projectId || cred.project_id });
+      for (const campo of ['type', 'project_id', 'private_key', 'client_email']) {
+        if (typeof cred?.[campo] !== 'string' || !cred[campo]) throw new CredencialError(`campo_ausente_${campo}`);
+      }
+      if (cred.type !== 'service_account') throw new CredencialError('type_nao_e_service_account');
+      if (!String(cred.private_key).includes('BEGIN PRIVATE KEY')) throw new CredencialError('private_key_formato_invalido');
+      if (projectId && projectId !== cred.project_id) throw new CredencialError('project_id_difere_de_FIREBASE_PROJECT_ID');
+      initializeApp({ credential: cert(cred), projectId: projectId || cred.project_id });
     } else {
-      appMod.initializeApp({ credential: appMod.credential.applicationDefault(), projectId });
+      initializeApp({ credential: applicationDefault(), projectId });
     }
   }
-  return appMod.firestore();
+  return getFirestore() as unknown as FirestoreLike;
 }
 
 export function chooseStoreKind(env: NodeJS.ProcessEnv = process.env): 'firestore' | 'file' | 'memory' {
@@ -191,7 +202,9 @@ export async function createPersistence(env: NodeJS.ProcessEnv = process.env): P
     }
   } catch (err: any) {
     console.error('[Persistência] Não foi possível iniciar o armazenamento, usando memória:', err?.message || err);
-    reason = err instanceof SyntaxError ? 'FIREBASE_SERVICE_ACCOUNT_nao_e_json_valido' : 'falha_ao_iniciar_firestore';
+    reason = err instanceof SyntaxError ? 'FIREBASE_SERVICE_ACCOUNT_nao_e_json_valido'
+      : err instanceof CredencialError ? `credencial_${err.codigo}`
+      : `falha_ao_iniciar_firestore${typeof err?.code === 'string' ? '_' + err.code.replace(/[^a-z0-9/_-]/gi, '').slice(0, 40) : ''}`;
   }
   const p = new Persistence(null);
   p.reason = reason;
