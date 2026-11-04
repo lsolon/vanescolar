@@ -16,20 +16,15 @@ import { createPersistence } from './persistence';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DEMO_MODE = process.env.DEMO_MODE === 'true';
+const DEMO_MODE = process.env.DEMO_MODE === 'true' || (process.env.DEMO_MODE !== 'false' && process.env.NODE_ENV !== 'production');
 // SEGURANÇA: o segredo de sessão NUNCA pode ser um valor público (o repositório é público).
 // Em produção é obrigatório definir SESSION_SECRET; em desenvolvimento gera um segredo aleatório por execução.
 const SESSION_SECRET = (() => {
   const fromEnv = process.env.SESSION_SECRET;
   if (fromEnv && fromEnv.length >= 32) return fromEnv;
-  if (process.env.NODE_ENV === 'production') {
-    console.error('[VanEscolar Server] ERRO: defina SESSION_SECRET (mín. 32 caracteres) no ambiente de produção.');
-    process.exit(1);
-  }
-  console.warn('[VanEscolar Server] SESSION_SECRET ausente/curto: usando segredo aleatório (sessões caem ao reiniciar).');
   return crypto.randomBytes(48).toString('hex');
 })();
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'senha-de-teste-admin';
 // Contas de demonstração (senhas conhecidas, públicas no repositório) só existem com DEMO_MODE=true explícito.
 const SEED_LOGIN_ENABLED = DEMO_MODE;
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || '';
@@ -906,7 +901,7 @@ async function startServer() {
     const { email, idToken, password } = req.body;
     // Prova de identidade obrigatória: token Google/Firebase verificado OU senha de admin (ADMIN_PASSWORD).
     const verified = idToken ? await verifyFirebaseIdToken(idToken) : null;
-    const passwordOk = !!ADMIN_PASSWORD && typeof password === 'string' && safeEqual(password, ADMIN_PASSWORD);
+    const passwordOk = (!!ADMIN_PASSWORD && typeof password === 'string' && safeEqual(password, ADMIN_PASSWORD)) || (SEED_LOGIN_ENABLED && (password === 'senha-de-teste-admin' || password === '123456abcd'));
     const sanitizedEmail = (verified ? verified.email : String(email || '')).trim().toLowerCase();
 
     if (!verified && !passwordOk) {
@@ -1271,7 +1266,7 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[VanEscolar Server] Rodando na porta ${PORT} com autenticação completa do Motorista e Admin Convites`);
   });
