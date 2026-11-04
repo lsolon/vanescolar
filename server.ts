@@ -366,45 +366,107 @@ let serverState = {
   mensagens: [] as Array<{ id: string; remetente: string; papel: 'MOTORISTA' | 'PAI'; texto: string; timestamp: string }>
 };
 
-function getFilteredStateForUser(user: SessionPayload) {
-  const cloned = JSON.parse(JSON.stringify(serverState));
+// ============================================================================
+// ESTADO POR MOTORISTA: cada motorista tem a sua própria viagem, GPS e mensagens.
+// As paradas já carregam `id_motorista`. O motorista 1 (demonstração) herda o estado inicial.
+// ============================================================================
+interface Trip {
+  viagem: typeof serverState.viagem;
+  gpsAtual: typeof serverState.gpsAtual;
+  mensagens: typeof serverState.mensagens;
+}
+const tripsDB = new Map<number, Trip>();
+tripsDB.set(1, { viagem: serverState.viagem, gpsAtual: serverState.gpsAtual, mensagens: serverState.mensagens });
 
-  // Se o usuário autenticado for motorista, busca o perfil real em usersDB
-  if (user.role === 'motorista') {
-    const driverRecord = usersDB.find(
-      (u) => u.id === user.userId || (user.email && u.email.toLowerCase() === user.email.toLowerCase())
-    );
-    if (driverRecord) {
-      cloned.motorista = {
-        id: driverRecord.id,
-        uuid: `m-${driverRecord.id}`,
-        nome: driverRecord.fullName,
-        telefone: driverRecord.whatsapp || driverRecord.phone || '(21) 98765-4321',
-        veiculo_modelo: driverRecord.veiculoModelo || 'Renault Master Executiva',
-        veiculo_placa: driverRecord.veiculoPlaca || 'RIO-2026',
-        capacidade_alunos: driverRecord.capacidade || 16,
-        horarios: driverRecord.horarios || ['Manhã', 'Tarde'],
-        aceita_enderecos_dinamicos: (driverRecord as any).aceita_enderecos_dinamicos ?? false,
-        dispositivo_bloqueado: !!(driverRecord as any).dispositivo_bloqueado,
-        created_at: new Date().toISOString()
-      };
-      cloned.viagem = {
-        ...cloned.viagem,
-        id_motorista: driverRecord.id,
-        rota_nome: `Rota ${driverRecord.fullName.split(' ')[0]} - Jacarepaguá`
-      };
-    }
+function makeTrip(driverId: number): Trip {
+  return {
+    viagem: {
+      id: 1000 + driverId,
+      uuid: `v-${1000 + driverId}`,
+      id_motorista: driverId,
+      data: new Date().toISOString().slice(0, 10),
+      periodo: 'MANHA_IDA',
+      status: 'AGENDADA',
+      rota_nome: 'Rota',
+      distancia_km_estimada: 0,
+      created_at: new Date().toISOString()
+    },
+    gpsAtual: {
+      latitude: -22.9068,
+      longitude: -43.1729,
+      speedKmH: 0,
+      heading: 0,
+      timestamp: new Date().toISOString(),
+      accuracyMeters: 0,
+      currentAddress: '',
+      nextStopName: '',
+      etaNextStopMinutes: 0
+    },
+    mensagens: []
+  };
+}
+
+function getTrip(driverId: number): Trip {
+  let t = tripsDB.get(driverId);
+  if (!t) {
+    t = makeTrip(driverId);
+    tripsDB.set(driverId, t);
+  }
+  return t;
+}
+
+/** Dono (motorista) da parada; paradas antigas sem dono pertencem ao motorista 1. */
+function donoDaParada(p: any): number {
+  return p?.id_motorista ?? 1;
+}
+
+/** Qual motorista "enxerga" este usuário: motorista = ele mesmo; responsável = motorista do seu aluno; admin = motorista 1. */
+function driverIdFor(user: { role: string; userId?: number; studentId?: number }): number | null {
+  if (user.role === 'motorista') return user.userId ?? null;
+  if (user.role === 'admin') return 1;
+  const parada = serverState.paradas.find((p: any) => p.id_aluno === user.studentId);
+  return parada ? donoDaParada(parada) : null;
+}
+
+/** Perfil público do motorista, montado a partir do cadastro real (nunca de um objeto global). */
+function perfilMotorista(driverId: number) {
+  const rec = usersDB.find((u) => u.id === driverId);
+  if (!rec) return null;
+  return {
+    id: rec.id,
+    uuid: `m-${rec.id}`,
+    nome: rec.fullName,
+    telefone: rec.whatsapp || rec.phone || '',
+    veiculo_modelo: rec.veiculoModelo || 'Van escolar',
+    veiculo_placa: rec.veiculoPlaca || '',
+    capacidade_alunos: rec.capacidade || 16,
+    horarios: rec.horarios || ['Manhã', 'Tarde'],
+    aceita_enderecos_dinamicos: (rec as any).aceita_enderecos_dinamicos ?? false,
+    dispositivo_bloqueado: !!(rec as any).dispositivo_bloqueado,
+    created_at: new Date().toISOString()
+  };
+}
+
+function getFilteredStateForUser(user: SessionPayload) {
+  const driverId = driverIdFor(user);
+  const trip = driverId !== null ? getTrip(driverId) : makeTrip(0);
+  const cloned = JSON.parse(JSON.stringify({
+    motorista: serverState.motorista,
+    paradas: serverState.paradas,
+    viagem: trip.viagem,
+    gpsAtual: trip.gpsAtual,
+    mensagens: trip.mensagens
+  }));
+  const perfil = driverId !== null ? perfilMotorista(driverId) : null;
+  if (perfil) {
+    cloned.motorista = perfil;
+    cloned.viagem.rota_nome = `Rota ${perfil.nome.split(' ')[0]} - Jacarepaguá`;
   }
 
   // Motorista vê EXCLUSIVAMENTE suas próprias paradas/alunos
   if (user.role === 'motorista') {
     cloned.paradas = cloned.paradas
-      .filter((p: any) => {
-        if (p.id_motorista !== undefined && p.id_motorista !== null) {
-          return p.id_motorista === user.userId;
-        }
-        return user.userId === 1;
-      })
+      .filter((p: any) => donoDaParada(p) === user.userId)
       .map((p: any) => ({
         ...p,
         endereco_real: undefined,
@@ -430,8 +492,12 @@ function getFilteredStateForUser(user: SessionPayload) {
   return cloned;
 }
 
-function broadcast(event: string, data: any) {
+function broadcast(event: string, data: any, driverId?: number | null) {
   sseClients.forEach((client) => {
+    // Eventos de um motorista só chegam a ele, aos responsáveis dos seus alunos e a administradores.
+    if (driverId !== undefined && driverId !== null && client.role !== 'admin') {
+      if (driverIdFor({ role: client.role, userId: client.userId, studentId: client.studentId }) !== driverId) return;
+    }
     try {
       const filteredData = getFilteredStateForUser({ role: client.role, userId: client.userId || 1, email: '', studentId: client.studentId, exp: Date.now() + 99999 });
       const payload = `event: ${event}\ndata: ${JSON.stringify({ ...data, estado: filteredData })}\n\n`;
@@ -453,9 +519,15 @@ async function startServer() {
     if (Array.isArray(saved.users)) usersDB.splice(0, usersDB.length, ...saved.users);
     if (Array.isArray(saved.invitations)) driverInvitationsDB.splice(0, driverInvitationsDB.length, ...saved.invitations);
     if (saved.state) {
-      if (saved.state.viagem) serverState.viagem = saved.state.viagem;
       if (Array.isArray(saved.state.paradas)) serverState.paradas = saved.state.paradas;
-      if (Array.isArray(saved.state.mensagens)) serverState.mensagens = saved.state.mensagens;
+      // Formato novo: uma viagem + mensagens por motorista. Formato antigo (único) pertence ao motorista 1.
+      const trips: Record<string, { viagem?: any; mensagens?: any[] }> =
+        saved.state.trips || (saved.state.viagem ? { '1': { viagem: saved.state.viagem, mensagens: saved.state.mensagens } } : {});
+      for (const [id, t] of Object.entries(trips)) {
+        const trip = getTrip(Number(id));
+        if (t?.viagem) trip.viagem = t.viagem;
+        if (Array.isArray(t?.mensagens)) trip.mensagens = t.mensagens;
+      }
     }
     if (Array.isArray(saved.settings?.adminEmails)) {
       for (const e of saved.settings.adminEmails) {
@@ -475,7 +547,10 @@ async function startServer() {
   persistence.attach(() => ({
     users: usersDB,
     invitations: driverInvitationsDB,
-    state: { viagem: serverState.viagem, paradas: serverState.paradas, mensagens: serverState.mensagens },
+    state: {
+      paradas: serverState.paradas,
+      trips: Object.fromEntries([...tripsDB.entries()].map(([id, t]) => [id, { viagem: t.viagem, mensagens: t.mensagens }]))
+    },
     settings: { adminEmails: ADMIN_EMAILS }
   }));
   const shutdown = async (signal: string) => {
@@ -549,12 +624,9 @@ async function startServer() {
   const requireTripOwnership = (req: Request, res: Response, next: NextFunction) => {
     const user = (req as any).user as SessionPayload;
     if (user.role === 'admin' || user.role === 'motorista') return next(); // Admins e Motoristas operam a viagem ativa
-    const viagem = serverState.viagem;
-    if (viagem && viagem.id_motorista !== user.userId) {
-      auditLog('ACESSO_NEGADO_VIAGEM', user.email, `Usuário ${user.userId} tentou acessar viagem ${viagem.id}`);
-      return res.status(403).json({ error: 'Acesso negado: esta viagem pertence a outro usuário.' });
-    }
-    next();
+    // Responsáveis nunca operam a viagem (rotas de motorista).
+    auditLog('ACESSO_NEGADO_VIAGEM', user.email, `Usuário ${user.userId} tentou operar uma viagem`);
+    return res.status(403).json({ error: 'Acesso negado: esta viagem pertence a outro usuário.' });
   };
 
   const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
@@ -1029,9 +1101,11 @@ async function startServer() {
   app.get('/api/events', (req: Request, res: Response) => {
     const token = req.query.token as string;
     const payload = token ? verifyToken(token) : null;
-    const role = payload ? payload.role : 'responsavel';
-    const studentId = payload ? payload.studentId : undefined;
-    const userId = payload ? payload.userId : 1;
+    // SEGURANÇA: a transmissão ao vivo (GPS, mensagens, dados do motorista) exige sessão válida.
+    if (!payload) return res.status(401).json({ error: 'Sessão inválida ou expirada.' });
+    const role = payload.role;
+    const studentId = payload.studentId;
+    const userId = payload.userId;
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -1042,7 +1116,7 @@ async function startServer() {
     const client: SSEClient = { id: clientId, res, role, studentId, userId };
     sseClients.push(client);
 
-    const initialFiltered = getFilteredStateForUser({ role, userId, email: payload?.email || '', studentId, exp: Date.now() + 99999 });
+    const initialFiltered = getFilteredStateForUser({ role, userId, email: payload.email || '', studentId, exp: Date.now() + 99999 });
     res.write(`event: INIT_STATE\ndata: ${JSON.stringify(initialFiltered)}\n\n`);
 
     req.on('close', () => {
@@ -1063,14 +1137,18 @@ async function startServer() {
   app.post('/api/paradas/:id/status', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const paradaId = parseInt(req.params.id, 10);
     const { status, observacao } = req.body;
+    const userMot = (req as any).user as SessionPayload;
     const parada = serverState.paradas.find((p) => p.id === paradaId || p.id_aluno === paradaId);
-    if (!parada) return res.status(404).json({ error: 'Parada não encontrada' });
+    // SEGURANÇA: um motorista só altera as paradas dos SEUS alunos.
+    if (!parada || (userMot.role === 'motorista' && donoDaParada(parada) !== userMot.userId)) {
+      return res.status(404).json({ error: 'Parada não encontrada' });
+    }
 
     parada.status_embarque = status;
     if (observacao !== undefined) (parada as any).observacao = observacao;
     const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
-    broadcast('STATUS_EMBARQUE_ATUALIZADO', { paradaId: parada.id, status, timestamp, alunoId: parada.id_aluno });
+    broadcast('STATUS_EMBARQUE_ATUALIZADO', { paradaId: parada.id, status, timestamp, alunoId: parada.id_aluno }, donoDaParada(parada));
     res.json({ sucesso: true, parada });
   });
 
@@ -1087,7 +1165,7 @@ async function startServer() {
       (parada as any).motivo_ausencia = motivo || 'Ausência informada pelo responsável';
       if (observacao) (parada as any).observacao = observacao;
     }
-    broadcast('AUSENCIA_NOTIFICADA', { alunoId, motivo: motivo || 'Ausência informada pelo responsável', paradaId: parada?.id });
+    broadcast('AUSENCIA_NOTIFICADA', { alunoId, motivo: motivo || 'Ausência informada pelo responsável', paradaId: parada?.id }, parada ? donoDaParada(parada) : undefined);
     res.json({ sucesso: true, parada });
   });
 
@@ -1102,39 +1180,43 @@ async function startServer() {
       parada.status_embarque = 'PENDENTE';
       delete (parada as any).motivo_ausencia;
     }
-    broadcast('AUSENCIA_CANCELADA', { alunoId, paradaId: parada?.id });
+    broadcast('AUSENCIA_CANCELADA', { alunoId, paradaId: parada?.id }, parada ? donoDaParada(parada) : undefined);
     res.json({ sucesso: true });
   });
 
   app.post('/api/rotas/:acao', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const { acao } = req.params;
-    if (acao === 'iniciar') serverState.viagem.status = 'EM_ANDAMENTO';
-    else if (acao === 'encerrar') serverState.viagem.status = 'CONCLUIDA';
-    broadcast('ROTA_STATUS_ALTERADO', { status: serverState.viagem.status });
-    res.json({ sucesso: true, status: serverState.viagem.status });
+    const driverId = driverIdFor((req as any).user) as number;
+    const trip = getTrip(driverId);
+    if (acao === 'iniciar') trip.viagem.status = 'EM_ANDAMENTO';
+    else if (acao === 'encerrar') trip.viagem.status = 'CONCLUIDA';
+    broadcast('ROTA_STATUS_ALTERADO', { status: trip.viagem.status }, driverId);
+    res.json({ sucesso: true, status: trip.viagem.status });
   });
 
   app.post('/api/gps', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const { latitude, longitude, speedKmH, heading, currentAddress, nextStopName, etaNextStopMinutes } = req.body;
-    serverState.gpsAtual = {
-      latitude: latitude ?? serverState.gpsAtual.latitude,
-      longitude: longitude ?? serverState.gpsAtual.longitude,
-      speedKmH: speedKmH ?? serverState.gpsAtual.speedKmH,
-      heading: heading ?? serverState.gpsAtual.heading,
+    const driverId = driverIdFor((req as any).user) as number;
+    const trip = getTrip(driverId);
+    trip.gpsAtual = {
+      latitude: latitude ?? trip.gpsAtual.latitude,
+      longitude: longitude ?? trip.gpsAtual.longitude,
+      speedKmH: speedKmH ?? trip.gpsAtual.speedKmH,
+      heading: heading ?? trip.gpsAtual.heading,
       timestamp: new Date().toISOString(),
       accuracyMeters: 5,
-      currentAddress: currentAddress ?? serverState.gpsAtual.currentAddress,
-      nextStopName: nextStopName ?? serverState.gpsAtual.nextStopName,
-      etaNextStopMinutes: etaNextStopMinutes ?? serverState.gpsAtual.etaNextStopMinutes
+      currentAddress: currentAddress ?? trip.gpsAtual.currentAddress,
+      nextStopName: nextStopName ?? trip.gpsAtual.nextStopName,
+      etaNextStopMinutes: etaNextStopMinutes ?? trip.gpsAtual.etaNextStopMinutes
     };
-    broadcast('GPS_ATUALIZADO', serverState.gpsAtual);
+    broadcast('GPS_ATUALIZADO', trip.gpsAtual, driverId);
     res.json({ sucesso: true });
   });
 
   app.post('/api/paradas/nova', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
     const { nomeAluno, endereco, pontoReferencia, escola, telefone, responsavelNome } = req.body;
-    const novoId = serverState.paradas.length + 1;
+    const novoId = serverState.paradas.reduce((m: number, p: any) => Math.max(m, p.id % 1000, (p.id_aluno ?? 0) - 210), 0) + 1;
     const codigoVinculo = `VAN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
     const novaParada = {
@@ -1160,16 +1242,18 @@ async function startServer() {
     };
 
     serverState.paradas.push(novaParada as any);
-    broadcast('NOVA_PARADA_CADASTRADA', { novaParada });
+    broadcast('NOVA_PARADA_CADASTRADA', { novaParada }, user.userId);
     res.json({ sucesso: true, novaParada, codigoVinculo });
   });
 
-  app.post('/api/limpar-dados', authenticate, requireDriver, requireTripOwnership, (_req: Request, res: Response) => {
+  app.post('/api/limpar-dados', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     if (!DEMO_MODE) return res.status(403).json({ error: 'Modo demonstração desativado.' });
-    serverState.paradas = [];
-    serverState.mensagens = [];
-    serverState.viagem.status = 'AGENDADA';
-    broadcast('DADOS_LIMPOS', {});
+    const driverId = driverIdFor((req as any).user) as number;
+    const trip = getTrip(driverId);
+    serverState.paradas = serverState.paradas.filter((p: any) => donoDaParada(p) !== driverId);
+    trip.mensagens.length = 0;
+    trip.viagem.status = 'AGENDADA';
+    broadcast('DADOS_LIMPOS', {}, driverId);
     res.json({ sucesso: true });
   });
 
@@ -1193,8 +1277,10 @@ async function startServer() {
       texto,
       timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
     };
-    serverState.mensagens.push(novaMsg);
-    broadcast('MENSAGEM_ENVIADA', { mensagem: novaMsg });
+    const msgDriverId = driverIdFor(user);
+    if (msgDriverId === null) return res.status(403).json({ error: 'Você ainda não está vinculado a um motorista.' });
+    getTrip(msgDriverId).mensagens.push(novaMsg);
+    broadcast('MENSAGEM_ENVIADA', { mensagem: novaMsg }, msgDriverId);
     res.json({ sucesso: true, mensagem: novaMsg });
   });
 
@@ -1206,9 +1292,8 @@ async function startServer() {
     const user = usersDB.find((u) => u.id === userPayload.userId);
     if (user) {
       (user as any).aceita_enderecos_dinamicos = aceita !== undefined ? Boolean(aceita) : !(user as any).aceita_enderecos_dinamicos;
-      (serverState.motorista as any).aceita_enderecos_dinamicos = (user as any).aceita_enderecos_dinamicos;
       auditLog('ENDERECOS_DINAMICOS_TOGGLE', user.email, `Endereços dinâmicos alterados para ${(user as any).aceita_enderecos_dinamicos}`);
-      broadcast('MOTORISTA_CONFIG_ALTERADA', { id_motorista: user.id, aceita_enderecos_dinamicos: (user as any).aceita_enderecos_dinamicos });
+      broadcast('MOTORISTA_CONFIG_ALTERADA', { id_motorista: user.id, aceita_enderecos_dinamicos: (user as any).aceita_enderecos_dinamicos }, user.id);
       return res.json({ sucesso: true, aceita_enderecos_dinamicos: (user as any).aceita_enderecos_dinamicos });
     }
     res.status(404).json({ error: 'Motorista não encontrado' });
@@ -1219,32 +1304,40 @@ async function startServer() {
     const token = (req as any).token;
     if (token) invalidatedTokens.add(token);
 
-    serverState.motorista.dispositivo_bloqueado = true;
+    const ksDriverId = driverIdFor((req as any).user) as number;
+    const ksRec = usersDB.find((u) => u.id === ksDriverId);
+    if (ksRec) (ksRec as any).dispositivo_bloqueado = true;
     auditLog('KILL_SWITCH_SESSAO_REVOGADA', (req as any).user.email, req.body.motivo || 'Dispositivo Comprometido');
-    broadcast('KILL_SWITCH_ATIVADO', { motivo: req.body.motivo || 'Dispositivo Comprometido' });
+    broadcast('KILL_SWITCH_ATIVADO', { motivo: req.body.motivo || 'Dispositivo Comprometido' }, ksDriverId);
     res.json({ sucesso: true, bloqueadoEm: new Date().toISOString() });
   });
 
   app.post('/api/motoristas/desbloquear', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const { pin } = req.body;
-    if (pin === '9988' || pin === '123456') {
-      serverState.motorista.dispositivo_bloqueado = false;
-      broadcast('DISPOSITIVO_DESBLOQUEADO', {});
+    // SEGURANÇA: o PIN de desbloqueio não pode ser um valor público; vem de KILL_SWITCH_PIN (fixo '9988' só no DEMO_MODE).
+    const pinEsperado = process.env.KILL_SWITCH_PIN || (DEMO_MODE ? '9988' : '');
+    if (pinEsperado && typeof pin === 'string' && safeEqual(pin, pinEsperado)) {
+      const unDriverId = driverIdFor((req as any).user) as number;
+      const unRec = usersDB.find((u) => u.id === unDriverId);
+      if (unRec) (unRec as any).dispositivo_bloqueado = false;
+      broadcast('DISPOSITIVO_DESBLOQUEADO', {}, unDriverId);
       res.json({ sucesso: true });
     } else {
       res.status(401).json({ error: 'PIN incorreto' });
     }
   });
 
-  app.post('/api/reset', authenticate, requireDriver, requireTripOwnership, (_req: Request, res: Response) => {
+  app.post('/api/reset', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     if (!DEMO_MODE) return res.status(403).json({ error: 'Modo demonstração desativado.' });
-    serverState.motorista.dispositivo_bloqueado = false;
-    serverState.viagem.status = 'AGENDADA';
-    serverState.paradas.forEach((p) => {
+    const rsDriverId = driverIdFor((req as any).user) as number;
+    const rsRec = usersDB.find((u) => u.id === rsDriverId);
+    if (rsRec) (rsRec as any).dispositivo_bloqueado = false;
+    getTrip(rsDriverId).viagem.status = 'AGENDADA';
+    serverState.paradas.filter((p: any) => donoDaParada(p) === rsDriverId).forEach((p) => {
       p.status_embarque = 'PENDENTE';
       delete (p as any).motivo_ausencia;
     });
-    broadcast('DATABASE_RESET', {});
+    broadcast('DATABASE_RESET', {}, rsDriverId);
     res.json({ sucesso: true });
   });
 

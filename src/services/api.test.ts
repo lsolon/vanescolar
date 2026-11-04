@@ -302,3 +302,63 @@ test('Segurança: /api/auth/google recusa token não verificável', async () => 
   const r = await postJson('/api/auth/google', { email: 'leandrosolon@gmail.com', idToken: 'falso-falso-falso-falso' });
   assert.equal(r.status, 401);
 });
+
+// ---------------------------------------------------------------------------
+// ESTADO POR MOTORISTA: um motorista nunca vê nem altera os dados de outro
+// ---------------------------------------------------------------------------
+const BASE = 'http://localhost:3000';
+async function jsonReq(method: string, path: string, token?: string, body?: unknown) {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  let data: any = null;
+  try { data = await res.json(); } catch {}
+  return { status: res.status, data };
+}
+async function novoMotorista(adminToken: string, nome: string) {
+  const conv = await jsonReq('POST', '/api/admin/convites-motorista', adminToken, { nota: nome });
+  const email = `iso_${nome}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}@teste.com`;
+  const reg = await jsonReq('POST', '/api/auth/register-motorista', undefined, {
+    fullName: nome, email, password: 'senhaSegura123!', phone: '21999990000',
+    vehicleModel: 'Van', vehiclePlate: 'AAA-0000', invitationCode: conv.data.invitation.code, lgpdConsent: true
+  });
+  assert.ok(reg.data?.token, `registro de ${nome} deve devolver token`);
+  return reg.data.token as string;
+}
+
+test('Estado por motorista: viagem, GPS, mensagens e alunos são isolados entre motoristas', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const tokenA = await novoMotorista(adm.data.token, 'Ana');
+  const tokenB = await novoMotorista(adm.data.token, 'Bruno');
+
+  // A cadastra um aluno e inicia a viagem, envia GPS e mensagem
+  const aluno = await jsonReq('POST', '/api/paradas/nova', tokenA, {
+    nomeAluno: 'Aluno da Ana', endereco: 'Rua A, 1', pontoReferencia: '', escola: 'Escola A',
+    nomeResponsavel: 'Resp A', telefoneResponsavel: '21988887777'
+  });
+  assert.equal(aluno.status, 200);
+  await jsonReq('POST', '/api/rotas/iniciar', tokenA);
+  await jsonReq('POST', '/api/gps', tokenA, { latitude: -22.1, longitude: -43.2 });
+  await jsonReq('POST', '/api/mensagens', tokenA, { texto: 'mensagem privada da Ana' });
+
+  const estA = await jsonReq('GET', '/api/estado', tokenA);
+  const estB = await jsonReq('GET', '/api/estado', tokenB);
+  assert.equal(estA.data.viagem.status, 'EM_ANDAMENTO');
+  assert.equal(estB.data.viagem.status, 'AGENDADA', 'viagem do B não pode ser afetada pela do A');
+  assert.equal(estB.data.paradas.length, 0, 'B não vê alunos do A');
+  assert.equal(estB.data.mensagens.length, 0, 'B não vê mensagens do A');
+  assert.notEqual(estB.data.gpsAtual.latitude, -22.1, 'B não vê o GPS do A');
+  assert.notEqual(estA.data.motorista.id, estB.data.motorista.id);
+
+  // B não consegue alterar a parada do A
+  const idParadaA = aluno.data.novaParada.id;
+  const invasao = await jsonReq('POST', `/api/paradas/${idParadaA}/status`, tokenB, { status: 'EMBARCADO' });
+  assert.equal(invasao.status, 404);
+});
+
+test('Segurança: transmissão ao vivo (SSE) exige sessão válida', async () => {
+  assert.equal((await fetch(`${BASE}/api/events`)).status, 401);
+  assert.equal((await fetch(`${BASE}/api/events?token=falso`)).status, 401);
+});
