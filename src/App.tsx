@@ -11,6 +11,7 @@ import { DualDeviceView } from './components/shared/DualDeviceView';
 import { ArchitectureModal } from './components/shared/ArchitectureModal';
 import { RealTestModal } from './components/shared/RealTestModal';
 import { LandingPage } from './components/auth/LandingPage';
+import { AdminDashboard } from './components/admin/AdminDashboard';
 import { TransportRepository, subscribeToDatabaseChanges } from './services/api';
 import {
   Bus,
@@ -27,7 +28,7 @@ import {
 export default function App() {
   const isDemoMode = (typeof window !== 'undefined' && window.location.search.includes('demo=true')) || import.meta.env.VITE_DEMO_MODE === 'true';
 
-  const [viewMode, setViewMode] = useState<'LANDING' | 'DUAL' | 'DRIVER' | 'PARENT'>('LANDING');
+  const [viewMode, setViewMode] = useState<'LANDING' | 'DUAL' | 'DRIVER' | 'PARENT' | 'ADMIN'>('LANDING');
   const [isRotaAtiva, setIsRotaAtiva] = useState<boolean>(false);
   const [isFastGPS, setIsFastGPS] = useState<boolean>(true); // 3s para testar rapidamente na UI, ou 10s padrão
   const [isArchModalOpen, setIsArchModalOpen] = useState<boolean>(false);
@@ -47,6 +48,8 @@ export default function App() {
         setIsStandaloneMobile(true);
       } else if (role === 'dupla' || role === 'dual' || role === 'simulador') {
         setViewMode('DUAL');
+      } else if (window.location.pathname === '/admin' || role === 'admin') {
+        setViewMode('ADMIN');
       } else {
         setViewMode('LANDING');
       }
@@ -75,7 +78,7 @@ export default function App() {
   }, []);
 
   // Navegação entre ambientes com sincronização da URL no navegador
-  const navigateTo = (mode: 'LANDING' | 'DUAL' | 'DRIVER' | 'PARENT') => {
+  const navigateTo = (mode: 'LANDING' | 'DUAL' | 'DRIVER' | 'PARENT' | 'ADMIN') => {
     setViewMode(mode);
     if (typeof window !== 'undefined') {
       if (mode === 'DRIVER') {
@@ -86,6 +89,9 @@ export default function App() {
         setIsStandaloneMobile(true);
       } else if (mode === 'DUAL') {
         window.history.pushState(null, '', '?role=dupla');
+        setIsStandaloneMobile(false);
+      } else if (mode === 'ADMIN') {
+        window.history.pushState(null, '', '/admin');
         setIsStandaloneMobile(false);
       } else {
         window.history.pushState(null, '', '/');
@@ -138,11 +144,14 @@ export default function App() {
         <LandingPage
           onLoginDriver={() => navigateTo('DRIVER')}
           onLoginParent={() => navigateTo('PARENT')}
+          onLoginAdmin={() => navigateTo('ADMIN')}
           onOpenDualSimulator={() => navigateTo('DUAL')}
           onOpenQRModal={() => setIsTestModalOpen(true)}
           onOpenArchitecture={() => setIsArchModalOpen(true)}
           onLimparDados={handleLimparDados}
         />
+      ) : viewMode === 'ADMIN' ? (
+        <AdminDashboard onLogout={() => navigateTo('LANDING')} />
       ) : (
         <>
           {/* ==================================================================== */}

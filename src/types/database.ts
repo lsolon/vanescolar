@@ -16,18 +16,41 @@
  * ============================================================================
  */
 
-export type StatusEmbarque = 'PENDENTE' | 'EMBARCOU' | 'ENTREGUE' | 'AUSENTE';
+export type StatusEmbarque = 'PENDENTE' | 'EMBARCOU' | 'ENTREGUE' | 'AUSENTE' | 'Aguardando';
 
 export type StatusViagem = 'AGENDADA' | 'EM_ANDAMENTO' | 'FINALIZADA' | 'CANCELADA';
 
 export type PeriodoViagem = 'MANHA_IDA' | 'MANHA_VOLTA' | 'TARDE_IDA' | 'TARDE_VOLTA';
 
+export type DiaSemana = 'SEGUNDA' | 'TERCA' | 'QUARTA' | 'QUINTA' | 'SEXTA' | 'SABADO' | 'DOMINGO';
+
+export interface EnderecoDetalhado {
+  rua: string;
+  numero: string;
+  bairro?: string;
+  cidade?: string;
+  latitude: number;
+  longitude: number;
+  complemento?: string;
+  ponto_referencia?: string;
+}
+
+export interface EnderecosDinamicosSemana {
+  SEGUNDA?: EnderecoDetalhado;
+  TERCA?: EnderecoDetalhado;
+  QUARTA?: EnderecoDetalhado;
+  QUINTA?: EnderecoDetalhado;
+  SEXTA?: EnderecoDetalhado;
+  SABADO?: EnderecoDetalhado;
+  DOMINGO?: EnderecoDetalhado;
+}
+
 /**
- * Tabela SQL: motoristas
- * Chave Primária: id (SERIAL ou UUID)
+ * 1. Tabela: Motorista (Configurações e Tenant)
+ * Chave Primária: id (UUID - Tenant ID)
  */
 export interface Motorista {
-  id: number;
+  id: number | string;
   uuid: string;
   nome: string;
   telefone: string;
@@ -37,83 +60,92 @@ export interface Motorista {
   veiculo_placa: string;
   veiculo_capacidade: number;
   status_operacional: 'ATIVO' | 'INATIVO' | 'EM_ROTA';
+  aceita_enderecos_dinamicos: boolean; // Flag que define se este motorista permite endereços por dia da semana
+  horarios?: string[];
   dispositivo_bloqueado?: boolean;
   motivo_bloqueio?: string;
   bloqueado_em?: string;
+  totp_enabled?: boolean;
   created_at: string;
 }
 
 /**
- * Tabela SQL: responsaveis
- * Chave Primária: id (SERIAL ou UUID)
+ * 2. Tabela: Responsável (O Contratante - Acesso e Faturamento)
+ * Chave Primária: id (UUID)
+ * Filtro Multi-Tenant: id_motorista
  */
 export interface Responsavel {
-  id: number;
+  id: number | string;
   uuid: string;
+  id_motorista: number | string; // Filtro Multi-Tenant (RLS lógico)
   nome: string;
-  parentesco: string; // Ex: 'Pai', 'Mãe', 'Tutor'
+  nome_completo: string; // Exibição no painel e contratos
+  cpf: string; // Para geração de faturas (Mercado Pago/Pix)
+  telefone_whatsapp: string; // Acionamentos rápidos
   telefone: string;
   email: string;
-  endereco_padrao: string;
-  bairro: string;
-  cidade: string;
+  endereco_cobranca: string; // Endereço fiscal, independente do embarque
+  endereco_padrao?: string;
+  parentesco?: string;
+  bairro?: string;
+  cidade?: string;
   created_at: string;
 }
 
 /**
- * Tabela SQL: alunos
- * Chave Primária: id (SERIAL ou UUID)
- * Chaves Estrangeiras: id_responsavel -> responsaveis(id), id_motorista -> motoristas(id)
+ * 3. Tabela: Aluno (O Passageiro - Logística)
+ * Chave Primária: id (UUID)
+ * Chaves Estrangeiras: id_responsavel, id_motorista
  */
 export interface Aluno {
-  id: number;
+  id: number | string;
   uuid: string;
-  id_responsavel: number;
-  id_motorista: number;
+  id_responsavel: number | string; // Vínculo com contratante
+  id_motorista: number | string; // Filtro Multi-Tenant
   nome: string;
-  nome_mascarado_lgpd: string; // Ex: "Maria C."
-  data_nascimento: string;
-  escola_destino: string;
-  turma: string;
+  nome_aluno: string; // Nome da criança
+  escola_id: string; // Vínculo com a instituição
+  escola_destino?: string;
+  turma?: string;
+  data_nascimento?: string;
   turno: 'MANHA' | 'TARDE' | 'INTEGRAL';
-  endereco_embarque_real: string; // Restrito / Não exposto por extenso no painel do motorista
-  endereco_mascarado: string; // Ex: "Rua F... - Próximo à Praça" (Requisito Explícito)
-  ponto_referencia_generico: string;
-  bairro: string;
-  foto_url: string;
+  endereco_embarque: EnderecoDetalhado; // Lat/Long, rua e número padrão
+  endereco_desembarque: EnderecoDetalhado; // Lat/Long, rua e número padrão
+  enderecos_dinamicos?: EnderecosDinamicosSemana; // Mapeamento por dia (só processado se o motorista permitir)
+  referencia_mascarada: string; // String curta para a tela do motorista
+  nome_mascarado_lgpd?: string;
+  endereco_embarque_real?: string;
+  endereco_mascarado?: string;
+  ponto_referencia_generico?: string;
+  bairro?: string;
+  foto_url?: string;
   contato_emergencia?: string;
   observacoes_medicas?: string;
   created_at: string;
 }
 
-/**
- * Tabela SQL: viagens_diario
- * Chave Primária: id (SERIAL ou UUID)
- * Chave Estrangeira: id_motorista -> motoristas(id)
- */
 export interface ViagemDiario {
-  id: number;
+  id: number | string;
   uuid: string;
-  id_motorista: number;
-  data: string; // YYYY-MM-DD
-  periodo: PeriodoViagem;
-  status: StatusViagem;
-  hora_inicio?: string;
-  hora_fim?: string;
+  id_motorista: number | string;
+  data: string;
+  periodo: PeriodoViagem | string;
+  status: StatusViagem | string;
   rota_nome: string;
-  distancia_km_estimada: number;
+  distancia_km_estimada?: number;
   created_at: string;
 }
 
 /**
- * Tabela SQL: paradas_viagem
- * Chave Primária: id (SERIAL ou UUID)
- * Chaves Estrangeiras: id_viagem -> viagens_diario(id), id_aluno -> alunos(id)
+ * 4. Tabela: Viagem_Diario / ParadaViagem (A Rota de Execução)
  */
 export interface ParadaViagem {
-  id: number;
-  id_viagem: number;
-  id_aluno: number;
+  id: number | string;
+  id_parada?: string;
+  id_viagem: number | string;
+  id_aluno: number | string;
+  id_motorista?: number | string;
+  tipo?: 'Ida' | 'Volta';
   ordem_sequencia: number;
   status_embarque: StatusEmbarque;
   hora_prevista: string;
@@ -121,6 +153,7 @@ export interface ParadaViagem {
   hora_desembarque?: string;
   latitude: number;
   longitude: number;
+  endereco_efetivo?: EnderecoDetalhado & { e_dinamico: boolean; descricao_efetiva: string };
   observacao?: string;
   motivo_ausencia?: string;
   notificado_ausencia_em?: string;
@@ -132,9 +165,9 @@ export interface ParadaViagem {
  * Nenhum endereço residencial completo por extenso viaja neste objeto.
  */
 export interface ParadaMotoristaSanitizada {
-  parada_id: number;
-  viagem_id: number;
-  aluno_id: number;
+  parada_id: number | string;
+  viagem_id: number | string;
+  aluno_id: number | string;
   ordem_sequencia: number;
   nome_aluno_sanitizado: string; // Ex: "Maria C."
   nome_completo_para_chamada?: string; // Disponível em visualização restrita

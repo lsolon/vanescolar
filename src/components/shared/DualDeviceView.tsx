@@ -62,11 +62,11 @@ export const DualDeviceView: React.FC<DualDeviceViewProps> = ({
 
       {/* DISPOSITIVOS LADO A LADO COM MOLDURAS MOBILE */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 w-full justify-items-center">
-        {/* DISPOSITIVO 1: PAINEL DO MOTORISTA (DAVID) */}
+        {/* DISPOSITIVO 1: PAINEL DO MOTORISTA */}
         <div className="flex flex-col items-center w-full max-w-[440px]">
           <div className="flex items-center gap-2 mb-2 text-xs font-bold text-amber-400">
             <Bus className="w-4 h-4" />
-            <span>DISPOSITIVO DO MOTORISTA (TIO DAVID)</span>
+            <span>DISPOSITIVO DO MOTORISTA (DIÁRIO DE BORDO)</span>
           </div>
 
           <div className="w-full h-[760px] bg-slate-950 rounded-[40px] border-4 border-slate-800 shadow-2xl overflow-hidden relative ring-1 ring-slate-700/50 flex flex-col">

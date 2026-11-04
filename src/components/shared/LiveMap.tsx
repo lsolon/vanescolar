@@ -11,6 +11,7 @@ interface LiveMapProps {
   ocultarOutrasParadas?: boolean; // Requisito de privacidade: oculta paradas de outras crianças
   onSelectWaypoint?: (index: number) => void;
   compact?: boolean;
+  motoristaNome?: string;
 }
 
 export const LiveMap: React.FC<LiveMapProps> = ({
@@ -20,7 +21,8 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   highlightAlunoId = 201,
   ocultarOutrasParadas = false,
   onSelectWaypoint,
-  compact = false
+  compact = false,
+  motoristaNome
 }) => {
   // Conversão de Coordenadas Lat/Lng da Freguesia para coordenadas SVG locais (0..800 x 0..520)
   // Bounding box da Freguesia (Jacarepaguá):
@@ -279,9 +281,9 @@ export const LiveMap: React.FC<LiveMapProps> = ({
           {/* Badge flutuante com placa / motorista */}
           <g transform="translate(0, -26)">
             <rect
-              x="-45"
+              x="-55"
               y="-10"
-              width="90"
+              width="110"
               height="18"
               rx="9"
               fill="#0f172a"
@@ -289,7 +291,11 @@ export const LiveMap: React.FC<LiveMapProps> = ({
               strokeWidth="1.5"
             />
             <text x="0" y="3" fill="#fef08a" fontSize="10" fontWeight="bold" textAnchor="middle">
-              🚐 Van Tio David
+              {motoristaNome
+                ? (motoristaNome.toLowerCase().startsWith('tio ') || motoristaNome.toLowerCase().startsWith('tia ')
+                    ? `🚐 ${motoristaNome}`
+                    : `🚐 Van ${motoristaNome.split(' ')[0]}`)
+                : '🚐 Van Escolar'}
             </text>
           </g>
         </g>

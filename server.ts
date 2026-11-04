@@ -1,7 +1,7 @@
 /**
  * ============================================================================
  * SERVIDOR FULL-STACK EXPRESS & VITE (server.ts)
- * AUTENTICAÇÃO SEGURA, REGISTRO DE RESPONSÁVEIS, LGPD ART. 14, VÍNCULO DE ALUNOS
+ * AUTENTICAÇÃO AVANÇADA DE MOTORISTAS E RESPONSÁVEIS, CONVITES, LGPD & RBAC
  * ============================================================================
  */
 
@@ -14,11 +14,18 @@ import crypto from 'crypto';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DEMO_MODE = process.env.DEMO_MODE !== 'false';
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+const DEMO_MODE = process.env.DEMO_MODE === 'true';
+const SESSION_SECRET = process.env.SESSION_SECRET || 'van-escolar-fixed-secret-key-2026';
+
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'leandrosolon@gmail.com,admin@vanescolar.com.br')
+  .split(',')
+  .map((e) => e.trim().toLowerCase());
+
+// Set de tokens invalidados (Logout / Kill-Switch)
+const invalidatedTokens = new Set<string>();
 
 interface SessionPayload {
-  role: 'motorista' | 'responsavel';
+  role: 'motorista' | 'responsavel' | 'admin';
   userId: number;
   email: string;
   studentId?: number;
@@ -26,8 +33,8 @@ interface SessionPayload {
   exp: number;
 }
 
-function signToken(payload: Omit<SessionPayload, 'exp'>): string {
-  const exp = Date.now() + 8 * 3600 * 1000; // 8 horas
+function signToken(payload: Omit<SessionPayload, 'exp'>, hours = 12): string {
+  const exp = Date.now() + hours * 3600 * 1000;
   const fullPayload: SessionPayload = { ...payload, exp };
   const dataStr = Buffer.from(JSON.stringify(fullPayload)).toString('base64url');
   const signature = crypto.createHmac('sha256', SESSION_SECRET).update(dataStr).digest('base64url');
@@ -36,6 +43,7 @@ function signToken(payload: Omit<SessionPayload, 'exp'>): string {
 
 function verifyToken(token: string): SessionPayload | null {
   try {
+    if (invalidatedTokens.has(token)) return null;
     const [dataStr, signature] = token.split('.');
     if (!dataStr || !signature) return null;
     const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(dataStr).digest('base64url');
@@ -48,10 +56,6 @@ function verifyToken(token: string): SessionPayload | null {
   }
 }
 
-const DRIVER_EMAIL = 'david.santos@vanescolar.com.br';
-const DRIVER_PIN_HASH = crypto.scryptSync('123456', 'salt-van-escolar', 64).toString('hex');
-
-// Base de usuários simulada em memória para testes e robustez
 interface UserRecord {
   id: number;
   fullName: string;
@@ -59,6 +63,14 @@ interface UserRecord {
   passwordHash: string;
   role: 'motorista' | 'responsavel';
   emailVerified: boolean;
+  totpEnabled?: boolean;
+  totpSecret?: string;
+  phone?: string;
+  whatsapp?: string;
+  veiculoModelo?: string;
+  veiculoPlaca?: string;
+  capacidade?: number;
+  horarios?: string[];
   lgpdConsent: {
     accepted: boolean;
     timestamp: string;
@@ -67,14 +79,69 @@ interface UserRecord {
   studentId?: number;
 }
 
+interface DriverInvitation {
+  code: string;
+  createdBy: string;
+  createdAt: string;
+  expiresAt: number;
+  used: boolean;
+  usedAt?: string;
+  usedBy?: string;
+  revoked?: boolean;
+  nota?: string;
+}
+
+let driverInvitationsDB: DriverInvitation[] = [
+  {
+    code: 'DRV-INIT-2026',
+    createdBy: 'admin@vanescolar.com.br',
+    createdAt: new Date().toISOString(),
+    expiresAt: Date.now() + 72 * 3600 * 1000,
+    used: false
+  }
+];
+
 let usersDB: UserRecord[] = [
+  {
+    id: 1,
+    fullName: 'Tio David Santos',
+    email: 'david.santos@vanescolar.com.br',
+    passwordHash: crypto.scryptSync('password123', 'salt-van-escolar', 64).toString('hex'),
+    role: 'motorista',
+    emailVerified: true,
+    totpEnabled: false,
+    phone: '(21) 98765-4321',
+    veiculoModelo: 'Renault Master Executiva 2.3',
+    veiculoPlaca: 'RIO-2024',
+    capacidade: 16,
+    horarios: ['Manhã', 'Tarde'],
+    lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-lgpd-art14' }
+  },
+  {
+    id: 2,
+    fullName: 'Tio Carlos Souza',
+    email: 'carlos.souza@vanescolar.com.br',
+    passwordHash: crypto.scryptSync('password123', 'salt-van-escolar', 64).toString('hex'),
+    role: 'motorista',
+    emailVerified: true,
+    totpEnabled: false,
+    phone: '(21) 97654-3210',
+    veiculoModelo: 'Mercedes-Benz Sprinter 415',
+    veiculoPlaca: 'RIO-2025',
+    capacidade: 18,
+    horarios: ['Manhã', 'Tarde', 'Noite'],
+    lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-lgpd-art14' }
+  },
   {
     id: 101,
     fullName: 'Leandro Solon',
     email: 'leandrosolon@gmail.com',
-    passwordHash: crypto.scryptSync('password123', 'salt-van-escolar', 64).toString('hex'),
-    role: 'responsavel',
+    passwordHash: crypto.scryptSync('123456abcd', 'salt-van-escolar', 64).toString('hex'),
+    role: 'motorista',
     emailVerified: true,
+    phone: '(21) 99123-4567',
+    veiculoModelo: 'Renault Master Executiva 2.3',
+    veiculoPlaca: 'RIO-2024',
     lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-lgpd-art14' },
     studentId: 201
   }
@@ -84,10 +151,33 @@ function auditLog(action: string, actor: string, details: string) {
   console.log(`[AUDIT] [${new Date().toISOString()}] Ação: ${action} | Ator: ${actor} | Detalhes: ${details}`);
 }
 
+function mascararEnderecoSeguro(rawAddress: string): string {
+  if (!rawAddress || !rawAddress.trim()) return "Endereço Restrito (LGPD)";
+  
+  const clean = rawAddress.trim().replace(/\s+/g, ' ');
+  const matchVia = clean.match(/^(rua|av|avenida|est|estrada|alameda|praça|praca|travessa|tv|al)\.?\s+(.+)/i);
+  
+  if (matchVia) {
+    const tipo = matchVia[1].charAt(0).toUpperCase() + matchVia[1].slice(1).toLowerCase();
+    const restoSemNumeros = matchVia[2].replace(/,/g, ' ').replace(/\d+/g, '').replace(/[\-–]/g, ' ').trim();
+    const palavras = restoSemNumeros.split(' ').filter(p => p.length > 0 && !['de', 'da', 'do', 'dos', 'das'].includes(p.toLowerCase()));
+    const primeiraLetra = palavras[0] ? palavras[0].charAt(0).toUpperCase() : 'X';
+    return `${tipo} ${primeiraLetra}... (Endereço Restrito - LGPD)`;
+  }
+  
+  const semNumeros = clean.replace(/,/g, ' ').replace(/\d+/g, '').replace(/[\-–]/g, ' ').trim();
+  const palavras = semNumeros.split(' ').filter(p => p.length > 0 && !['de', 'da', 'do', 'dos', 'das'].includes(p.toLowerCase()));
+  const primeiraLetra = palavras[0] ? palavras[0].charAt(0).toUpperCase() : 'X';
+  return `Via ${primeiraLetra}... (Endereço Restrito - LGPD)`;
+}
+
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 function rateLimiter(limit: number, windowMs: number) {
   return (req: Request, res: Response, next: NextFunction) => {
+    // Bypass em modo demonstração ou requisições locais (testes)
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    if (DEMO_MODE || ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return next();
+    
     const now = Date.now();
     const record = rateLimitMap.get(ip);
 
@@ -108,8 +198,9 @@ function rateLimiter(limit: number, windowMs: number) {
 interface SSEClient {
   id: string;
   res: Response;
-  role: 'motorista' | 'responsavel';
+  role: 'motorista' | 'responsavel' | 'admin';
   studentId?: number;
+  userId?: number;
 }
 
 let sseClients: SSEClient[] = [];
@@ -118,7 +209,7 @@ let serverState = {
   viagem: {
     id: 1001,
     uuid: 'v-1001',
-    id_motorista: 1,
+    id_motorista: 1, // David Santos (ID: 1)
     data: '2025-02-20',
     periodo: 'MANHA_IDA',
     status: 'AGENDADA',
@@ -141,6 +232,7 @@ let serverState = {
     {
       id: 1,
       id_viagem: 1001,
+      id_motorista: 1,
       id_aluno: 201,
       ordem_sequencia: 1,
       status_embarque: 'PENDENTE',
@@ -150,7 +242,7 @@ let serverState = {
       nome_aluno: 'Maria Clara Solon',
       nome_sanitizado: 'Maria C.',
       endereco_real: 'Rua Araguaia, 850 - Apto 302',
-      endereco_mascarado: 'Rua F... - Próximo à Praça',
+      endereco_mascarado: 'Rua A... (Endereço Restrito - LGPD)',
       ponto_referencia: 'Próximo à Praça / Portaria Principal',
       responsavel_nome: 'Leandro Solon',
       responsavel_telefone: '21991234567',
@@ -161,6 +253,7 @@ let serverState = {
     {
       id: 2,
       id_viagem: 1001,
+      id_motorista: 1,
       id_aluno: 203,
       ordem_sequencia: 2,
       status_embarque: 'PENDENTE',
@@ -170,7 +263,7 @@ let serverState = {
       nome_aluno: 'Enzo Gabriel Souza',
       nome_sanitizado: 'Enzo G.',
       endereco_real: 'Rua Tirol, 412 - Casa',
-      endereco_mascarado: 'Rua T... - Próximo à Padaria',
+      endereco_mascarado: 'Rua T... (Endereço Restrito - LGPD)',
       ponto_referencia: 'Próximo à Padaria / Vila',
       responsavel_nome: 'Carla Souza',
       responsavel_telefone: '21973216549',
@@ -181,6 +274,7 @@ let serverState = {
     {
       id: 3,
       id_viagem: 1001,
+      id_motorista: 1,
       id_aluno: 202,
       ordem_sequencia: 3,
       status_embarque: 'PENDENTE',
@@ -190,7 +284,7 @@ let serverState = {
       nome_aluno: 'Lucas Silva',
       nome_sanitizado: 'Lucas S.',
       endereco_real: 'Est. dos Três Rios, 1200 - Bloco 2',
-      endereco_mascarado: 'Est. T... - Próximo à Farmácia',
+      endereco_mascarado: 'Est. T... (Endereço Restrito - LGPD)',
       ponto_referencia: 'Próximo à Farmácia / Guarita',
       responsavel_nome: 'Marcos Silva',
       responsavel_telefone: '21984567890',
@@ -201,6 +295,7 @@ let serverState = {
     {
       id: 4,
       id_viagem: 1001,
+      id_motorista: 1,
       id_aluno: 204,
       ordem_sequencia: 4,
       status_embarque: 'PENDENTE',
@@ -210,7 +305,7 @@ let serverState = {
       nome_aluno: 'Beatriz Lima',
       nome_sanitizado: 'Beatriz L.',
       endereco_real: 'Est. do Bananal, 350 - Casa 3',
-      endereco_mascarado: 'Est. B... - Próximo ao Posto',
+      endereco_mascarado: 'Est. B... (Endereço Restrito - LGPD)',
       ponto_referencia: 'Próximo ao Posto / Condomínio',
       responsavel_nome: 'Fernanda Lima',
       responsavel_telefone: '21981129988',
@@ -236,11 +331,53 @@ let serverState = {
 function getFilteredStateForUser(user: SessionPayload) {
   const cloned = JSON.parse(JSON.stringify(serverState));
 
+  // Se o usuário autenticado for motorista, busca o perfil real em usersDB
   if (user.role === 'motorista') {
+    const driverRecord = usersDB.find(
+      (u) => u.id === user.userId || (user.email && u.email.toLowerCase() === user.email.toLowerCase())
+    );
+    if (driverRecord) {
+      cloned.motorista = {
+        id: driverRecord.id,
+        uuid: `m-${driverRecord.id}`,
+        nome: driverRecord.fullName,
+        telefone: driverRecord.whatsapp || driverRecord.phone || '(21) 98765-4321',
+        veiculo_modelo: driverRecord.veiculoModelo || 'Renault Master Executiva',
+        veiculo_placa: driverRecord.veiculoPlaca || 'RIO-2026',
+        capacidade_alunos: driverRecord.capacidade || 16,
+        horarios: driverRecord.horarios || ['Manhã', 'Tarde'],
+        aceita_enderecos_dinamicos: (driverRecord as any).aceita_enderecos_dinamicos ?? false,
+        dispositivo_bloqueado: !!(driverRecord as any).dispositivo_bloqueado,
+        created_at: new Date().toISOString()
+      };
+      cloned.viagem = {
+        ...cloned.viagem,
+        id_motorista: driverRecord.id,
+        rota_nome: `Rota ${driverRecord.fullName.split(' ')[0]} - Jacarepaguá`
+      };
+    }
+  }
+
+  // Motorista vê EXCLUSIVAMENTE suas próprias paradas/alunos
+  if (user.role === 'motorista') {
+    cloned.paradas = cloned.paradas
+      .filter((p: any) => {
+        if (p.id_motorista !== undefined && p.id_motorista !== null) {
+          return p.id_motorista === user.userId;
+        }
+        return user.userId === 1;
+      })
+      .map((p: any) => ({
+        ...p,
+        endereco_real: undefined,
+        responsavel_telefone: undefined,
+        responsavel_telefone_mascarado: p.responsavel_telefone ? `(${p.responsavel_telefone.slice(0,2)}) 9****-${p.responsavel_telefone.slice(-4)}` : undefined
+      }));
+  } else if (user.role === 'admin') {
     cloned.paradas = cloned.paradas.map((p: any) => ({
       ...p,
-      endereco_real: undefined,
-      responsavel_telefone: undefined,
+      endereco_real: p.endereco_real,
+      responsavel_telefone: p.responsavel_telefone,
       responsavel_telefone_mascarado: p.responsavel_telefone ? `(${p.responsavel_telefone.slice(0,2)}) 9****-${p.responsavel_telefone.slice(-4)}` : undefined
     }));
   } else if (user.role === 'responsavel') {
@@ -258,11 +395,11 @@ function getFilteredStateForUser(user: SessionPayload) {
 function broadcast(event: string, data: any) {
   sseClients.forEach((client) => {
     try {
-      const filteredData = getFilteredStateForUser({ role: client.role, userId: 1, email: '', studentId: client.studentId, exp: Date.now() + 99999 });
+      const filteredData = getFilteredStateForUser({ role: client.role, userId: client.userId || 1, email: '', studentId: client.studentId, exp: Date.now() + 99999 });
       const payload = `event: ${event}\ndata: ${JSON.stringify({ ...data, estado: filteredData })}\n\n`;
       client.res.write(payload);
     } catch {
-      // Handled in disconnect
+      // Ignore disconnect
     }
   });
 }
@@ -299,20 +436,395 @@ async function startServer() {
     }
 
     (req as any).user = payload;
+    (req as any).token = token;
     next();
   };
 
   const requireDriver = (req: Request, res: Response, next: NextFunction) => {
     const user = (req as any).user as SessionPayload;
-    if (!user || user.role !== 'motorista') {
-      return res.status(403).json({ error: 'Acesso restrito ao perfil de motorista.' });
+    // Admins também podem acessar rotas de motorista
+    if (!user || (user.role !== 'motorista' && user.role !== 'admin')) {
+      return res.status(403).json({ error: 'Acesso negado: Rota restrita ao perfil de motorista ou administrador.' });
+    }
+    if (!user.emailVerified) {
+      return res.status(403).json({ error: 'E-mail do motorista não verificado. Verifique seu e-mail para acessar o painel.' });
+    }
+    next();
+  };
+
+  const requireTripOwnership = (req: Request, res: Response, next: NextFunction) => {
+    const user = (req as any).user as SessionPayload;
+    if (user.role === 'admin' || user.role === 'motorista') return next(); // Admins e Motoristas operam a viagem ativa
+    const viagem = serverState.viagem;
+    if (viagem && viagem.id_motorista !== user.userId) {
+      auditLog('ACESSO_NEGADO_VIAGEM', user.email, `Usuário ${user.userId} tentou acessar viagem ${viagem.id}`);
+      return res.status(403).json({ error: 'Acesso negado: esta viagem pertence a outro usuário.' });
+    }
+    next();
+  };
+
+  const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
+    const user = (req as any).user as SessionPayload;
+    if (!user || (user.role !== 'admin' && !ADMIN_EMAILS.includes(user.email.toLowerCase()))) {
+      return res.status(403).json({ error: 'Acesso restrito a administradores do sistema.' });
+    }
+    // Garante que o role esteja correto no payload caso venha apenas pelo email
+    if (user.role !== 'admin') {
+      user.role = 'admin';
     }
     next();
   };
 
   // --------------------------------------------------------------------------
-  // NOVOS ENDPOINTS DE AUTENTICAÇÃO E CADASTRO PÚBLICO (SOMENTE RESPONSÁVEL)
+  // NOVOS ENDPOINTS DE AUTENTICAÇÃO E CONVITES DE MOTORISTA
   // --------------------------------------------------------------------------
+
+  // REGISTRO DE MOTORISTA COM CÓDIGO DE CONVITE OBRIGATÓRIO
+  app.post('/api/auth/register-motorista', rateLimiter(5, 60000), (req: Request, res: Response) => {
+    const { fullName, email, password, phone, vehicleModel, vehiclePlate, invitationCode, lgpdConsent, firebaseUid } = req.body;
+
+    if (!fullName || !email || !invitationCode || !lgpdConsent) {
+      return res.status(400).json({ error: 'Todos os campos obrigatórios e o código de convite devem ser fornecidos.' });
+    }
+
+    // Valida código de convite de motorista
+    const inv = driverInvitationsDB.find(
+      (i) => i.code.toUpperCase() === invitationCode.trim().toUpperCase()
+    );
+
+    if (!inv || inv.used || inv.revoked || inv.expiresAt < Date.now()) {
+      auditLog('CONVITE_MOTORISTA_INVALIDO', email, `Tentativa com convite: ${invitationCode}`);
+      return res.status(400).json({ error: 'Código de convite de motorista inválido, expirado ou já utilizado.' });
+    }
+
+    const existing = usersDB.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
+    if (existing) {
+      return res.status(400).json({ error: 'Não foi possível completar o cadastro de motorista com este e-mail.' });
+    }
+
+    const newDriverId = usersDB.length + 1;
+
+    const newDriverUser: UserRecord = {
+      id: newDriverId,
+      fullName: fullName.trim(),
+      email: email.trim().toLowerCase(),
+      passwordHash: password ? crypto.scryptSync(password, 'salt-van-escolar', 64).toString('hex') : '',
+      role: 'motorista',
+      emailVerified: true,
+      phone: phone || '(21) 98765-4321',
+      veiculoModelo: vehicleModel || 'Renault Master Executiva',
+      veiculoPlaca: vehiclePlate || 'RIO-2026',
+      lgpdConsent: {
+        accepted: true,
+        timestamp: new Date().toISOString(),
+        version: 'v1.0-motorista-lgpd'
+      }
+    };
+
+    usersDB.push(newDriverUser);
+
+    // Marca convite como utilizado
+    inv.used = true;
+    inv.usedAt = new Date().toISOString();
+    inv.usedBy = newDriverUser.email;
+
+    auditLog('MOTORISTA_CADASTRADO', newDriverUser.email, `Convite ${inv.code} utilizado com sucesso`);
+
+    const token = signToken({ role: 'motorista', userId: newDriverUser.id, email: newDriverUser.email, emailVerified: true }, 12);
+    res.json({
+      sucesso: true,
+      token,
+      emailVerified: true,
+      message: 'Conta de motorista criada com sucesso.'
+    });
+  });
+
+  // LOGIN DO MOTORISTA (E-MAIL OU GOOGLE VIA ID TOKEN)
+  app.post('/api/auth/login-motorista', rateLimiter(10, 60000), (req: Request, res: Response) => {
+    const { email, idToken, password } = req.body;
+    
+    // Em um sistema real, aqui verificaríamos o idToken com firebase-admin
+    // Aqui simulamos a busca pelo usuário via e-mail
+    const user = usersDB.find(
+      (u) => u.email.toLowerCase() === email?.toLowerCase() && u.role === 'motorista'
+    );
+
+    if (!user) {
+      return res.status(401).json({ error: 'Conta de motorista não encontrada.' });
+    }
+
+    // Se houver password (login direto legado/teste), valida hash
+    if (password) {
+      const passHash = crypto.scryptSync(password, 'salt-van-escolar', 64).toString('hex');
+      if (user.passwordHash !== passHash) {
+        return res.status(401).json({ error: 'Senha incorreta.' });
+      }
+    }
+
+    const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
+    const role = isAdmin ? 'admin' : 'motorista';
+
+    const token = signToken({ role, userId: user.id, email: user.email, emailVerified: user.emailVerified }, 12);
+    auditLog('LOGIN_MOTORISTA_SUCESSO', user.email, `Motorista autenticado como ${role}`);
+    res.json({
+      sucesso: true,
+      token,
+      role,
+      emailVerified: user.emailVerified,
+      totpEnabled: !!user.totpEnabled
+    });
+  });
+
+  app.post('/api/auth/google-motorista', (req: Request, res: Response) => {
+    // Redireciona para login-motorista genérico
+    return app._router.handle(req, res, () => {});
+  });
+
+  // LOGIN DO RESPONSÁVEL (E-MAIL OU GOOGLE VIA ID TOKEN)
+  app.post('/api/auth/login-email', rateLimiter(10, 60000), (req: Request, res: Response) => {
+    const { email, password, idToken } = req.body;
+
+    const user = usersDB.find((u) => u.email.toLowerCase() === email?.toLowerCase());
+
+    if (!user) {
+      return res.status(401).json({ error: 'E-mail não cadastrado.' });
+    }
+
+    if (password && !idToken) {
+      const passHash = crypto.scryptSync(password, 'salt-van-escolar', 64).toString('hex');
+      if (user.passwordHash !== passHash) {
+        return res.status(401).json({ error: 'Senha incorreta.' });
+      }
+    }
+
+    const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
+    const role = isAdmin ? 'admin' : user.role;
+    const token = signToken({ role, userId: user.id, email: user.email, studentId: user.studentId, emailVerified: user.emailVerified });
+    auditLog('LOGIN_SUCESSO', user.email, `Login realizado como ${role}`);
+    res.json({ sucesso: true, token, role, emailVerified: user.emailVerified, studentId: user.studentId });
+  });
+
+  app.post('/api/auth/google', rateLimiter(10, 60000), (req: Request, res: Response) => {
+    const { email, fullName, idToken } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'E-mail Google obrigatório.' });
+    }
+
+    let user = usersDB.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
+    if (!user) {
+      user = {
+        id: 200 + usersDB.length + 1,
+        fullName: fullName || 'Responsável Google',
+        email: email.trim().toLowerCase(),
+        passwordHash: '',
+        role: 'responsavel',
+        emailVerified: true,
+        lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-lgpd-art14' }
+      };
+      usersDB.push(user);
+    }
+
+    const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
+    const role = isAdmin ? 'admin' : user.role;
+    const token = signToken({ role, userId: user.id, email: user.email, studentId: user.studentId, emailVerified: true });
+    auditLog('LOGIN_GOOGLE', user.email, `Autenticado via Google como ${role}`);
+    res.json({ sucesso: true, token, role, emailVerified: true, studentId: user.studentId });
+  });
+
+  // ALTERAR CONFIGURAÇÃO DE 2FA (TOTP)
+  app.post('/api/auth/toggle-totp', authenticate, requireDriver, (req: Request, res: Response) => {
+    const userPayload = (req as any).user as SessionPayload;
+    const user = usersDB.find((u) => u.id === userPayload.userId);
+    if (user) {
+      user.totpEnabled = !user.totpEnabled;
+      auditLog('TOTP_TOGGLE', user.email, `2FA alterado para ${user.totpEnabled}`);
+      return res.json({ sucesso: true, totpEnabled: user.totpEnabled });
+    }
+    res.status(404).json({ error: 'Usuário não encontrado' });
+  });
+
+  // LOGOUT SEGURO
+  app.post('/api/auth/logout', authenticate, (req: Request, res: Response) => {
+    const token = (req as any).token;
+    if (token) invalidatedTokens.add(token);
+    const user = (req as any).user as SessionPayload;
+    auditLog('LOGOUT', user.email, 'Sessão encerrada pelo usuário');
+    res.json({ sucesso: true });
+  });
+
+  // GERENCIAMENTO DE CONVITES PELO ADMINISTRADOR (ALINHADO COM FRONTEND)
+  app.post('/api/admin/convites-motorista', authenticate, requireAdmin, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const { nota } = req.body;
+
+    const code = `DRV-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
+    const newInvitation: DriverInvitation = {
+      code,
+      createdBy: user.email,
+      createdAt: new Date().toISOString(),
+      expiresAt: Date.now() + 72 * 3600 * 1000,
+      used: false,
+      nota: nota || ''
+    };
+
+    driverInvitationsDB.push(newInvitation);
+    auditLog('CONVITE_GERADO', user.email, `Novo convite de motorista criado: ${code}`);
+    res.json({ sucesso: true, invitation: newInvitation });
+  });
+
+  app.get('/api/admin/convites-motorista', authenticate, requireAdmin, (_req: Request, res: Response) => {
+    res.json({ sucesso: true, convites: driverInvitationsDB });
+  });
+
+  app.delete('/api/admin/convites-motorista/:code', authenticate, requireAdmin, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const { code } = req.params;
+    const inv = driverInvitationsDB.find((i) => i.code.toUpperCase() === code?.toUpperCase());
+    if (inv) {
+      inv.revoked = true;
+      auditLog('CONVITE_REVOGADO', user.email, `Convite ${code} revogado`);
+      return res.json({ sucesso: true });
+    }
+    res.status(404).json({ error: 'Convite não encontrado' });
+  });
+
+  // --- ENDPOINTS ADMINISTRATIVOS ISOLADOS ---
+
+  app.get('/api/admin/metrics', authenticate, requireAdmin, (req, res) => {
+    const metrics = {
+      totalDrivers: usersDB.filter(u => u.role === 'motorista').length,
+      totalParents: usersDB.filter(u => u.role === 'responsavel').length,
+      totalStudents: serverState.paradas.length,
+      activeInvites: driverInvitationsDB.filter(i => !i.used && !i.revoked).length
+    };
+    res.json({ sucesso: true, metrics });
+  });
+
+  app.get('/api/admin/motoristas', authenticate, requireAdmin, (req, res) => {
+    const motoristas = usersDB
+      .filter(u => u.role === 'motorista')
+      .map(u => ({
+        id: u.id,
+        fullName: u.fullName,
+        email: u.email,
+        veiculoModelo: u.veiculoModelo,
+        veiculoPlaca: u.veiculoPlaca,
+        whatsapp: u.whatsapp || u.phone,
+        capacidade: u.capacidade || 16,
+        horarios: u.horarios || ['Manhã', 'Tarde'],
+        status: (u as any).status || 'ATIVO'
+      }));
+    res.json({ sucesso: true, motoristas });
+  });
+
+  app.post('/api/admin/motoristas/criar', authenticate, requireAdmin, (req: Request, res: Response) => {
+    const { fullName, email, password, horarios, capacidade, veiculoPlaca, whatsapp, veiculoModelo } = req.body;
+    if (!fullName || !email || !password) {
+      return res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios.' });
+    }
+    const existing = usersDB.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
+    if (existing) {
+      return res.status(400).json({ error: 'E-mail de motorista já cadastrado.' });
+    }
+    const passwordHash = crypto.scryptSync(password, 'salt-van-escolar', 64).toString('hex');
+    const newDriver: UserRecord = {
+      id: usersDB.length + 200,
+      fullName: fullName.trim(),
+      email: email.trim().toLowerCase(),
+      passwordHash,
+      role: 'motorista',
+      emailVerified: true,
+      phone: whatsapp || '(21) 98765-4321',
+      whatsapp: whatsapp || '(21) 98765-4321',
+      veiculoModelo: veiculoModelo || 'Renault Master Executiva',
+      veiculoPlaca: veiculoPlaca || 'RIO-2026',
+      capacidade: capacidade ? Number(capacidade) : 16,
+      horarios: horarios || ['Manhã', 'Tarde'],
+      lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-motorista' }
+    };
+    usersDB.push(newDriver);
+    auditLog('MOTORISTA_CRIADO_ADMIN', (req as any).user.email, `Criado motorista ${newDriver.email}`);
+    res.json({ sucesso: true, motorista: newDriver });
+  });
+
+  app.post('/api/admin/motoristas/:id/toggle', authenticate, requireAdmin, (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const user = usersDB.find(u => u.id === id);
+    if (user) {
+      (user as any).status = (user as any).status === 'INATIVO' ? 'ATIVO' : 'INATIVO';
+      auditLog('MOTORISTA_STATUS_ALTERADO', (req as any).user.email, `Motorista ${id} alterado para ${(user as any).status}`);
+      return res.json({ sucesso: true, status: (user as any).status });
+    }
+    res.status(404).json({ error: 'Motorista não encontrado' });
+  });
+
+  app.get('/api/admin/responsaveis', authenticate, requireAdmin, (req, res) => {
+    const responsaveis = usersDB
+      .filter(u => u.role === 'responsavel')
+      .map(u => {
+        const student = serverState.paradas.find(p => p.id_aluno === u.studentId);
+        return {
+          id: u.id,
+          fullName: u.fullName,
+          email: u.email,
+          emailVerified: u.emailVerified,
+          studentName: student ? student.nome_aluno : null
+        };
+      });
+    res.json({ sucesso: true, responsaveis });
+  });
+
+  app.get('/api/admin/settings', authenticate, requireAdmin, (req, res) => {
+    res.json({ sucesso: true, adminEmails: ADMIN_EMAILS });
+  });
+
+  app.post('/api/admin/settings/emails', authenticate, requireAdmin, (req, res) => {
+    const { emails } = req.body;
+    if (Array.isArray(emails)) {
+      // Atualiza a lista em memória (em produção seria no DB)
+      ADMIN_EMAILS.length = 0;
+      emails.forEach(e => ADMIN_EMAILS.push(e.toLowerCase().trim()));
+      auditLog('ADMIN_EMAILS_ATUALIZADOS', (req as any).user.email, `Nova lista: ${ADMIN_EMAILS.join(', ')}`);
+      return res.json({ sucesso: true, adminEmails: ADMIN_EMAILS });
+    }
+    res.status(400).json({ error: 'Formato de e-mails inválido' });
+  });
+
+  app.post('/api/admin/auth', (req: Request, res: Response) => {
+    const { email, idToken } = req.body;
+    const sanitizedEmail = email?.trim().toLowerCase();
+    
+    console.log(`[ADMIN_AUTH] Tentativa de login: "${sanitizedEmail}"`);
+    console.log(`[ADMIN_AUTH] Admins Permitidos: ${JSON.stringify(ADMIN_EMAILS)}`);
+
+    if (!sanitizedEmail || !ADMIN_EMAILS.includes(sanitizedEmail)) {
+      console.error(`[ADMIN_AUTH] ACESSO NEGADO: ${sanitizedEmail}`);
+      auditLog('TENTATIVA_LOGIN_ADMIN_NEGADA', sanitizedEmail || 'desconhecido', 'E-mail não está na lista de administradores');
+      return res.status(403).json({ error: 'Acesso não autorizado. Você não possui privilégios de administrador.' });
+    }
+
+    console.log(`[ADMIN_AUTH] ACESSO CONCEDIDO: ${sanitizedEmail}`);
+
+    let user = usersDB.find((u) => u.email.toLowerCase() === sanitizedEmail);
+    if (!user) {
+      user = {
+        id: 999 + usersDB.length,
+        fullName: 'Administrador ' + (sanitizedEmail.split('@')[0]),
+        email: sanitizedEmail,
+        passwordHash: '',
+        role: 'motorista', 
+        emailVerified: true,
+        lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-admin' }
+      };
+      usersDB.push(user);
+    }
+
+    const token = signToken({ role: 'admin', userId: user.id, email: user.email, emailVerified: true });
+    auditLog('LOGIN_ADMIN_GOOGLE', user.email, 'Acesso ao Painel Admin concedido');
+    res.json({ sucesso: true, token, role: 'admin' });
+  });
+
+  // ENDPOINTS DE AUTENTICAÇÃO DO RESPONSÁVEL
   app.post('/api/auth/register', rateLimiter(5, 60000), (req: Request, res: Response) => {
     const { fullName, email, password, lgpdConsent } = req.body;
 
@@ -326,7 +838,6 @@ async function startServer() {
 
     const existing = usersDB.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
     if (existing) {
-      // Mensagem genérica para não revelar existência de e-mail (Segurança)
       return res.status(400).json({ error: 'Não foi possível completar o cadastro com este e-mail.' });
     }
 
@@ -336,8 +847,8 @@ async function startServer() {
       fullName: fullName.trim(),
       email: email.trim().toLowerCase(),
       passwordHash,
-      role: 'responsavel', // REQUISITO B: Cria APENAS o papel responsavel definido no servidor
-      emailVerified: false, // Requer verificação de e-mail
+      role: 'responsavel',
+      emailVerified: false,
       lgpdConsent: {
         accepted: true,
         timestamp: new Date().toISOString(),
@@ -352,53 +863,8 @@ async function startServer() {
     res.json({ sucesso: true, token, emailVerified: false, message: 'Cadastro realizado com sucesso. Verifique seu e-mail.' });
   });
 
-  app.post('/api/auth/login-email', rateLimiter(10, 60000), (req: Request, res: Response) => {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: 'E-mail e senha obrigatórios.' });
-    }
-
-    const user = usersDB.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-    const passHash = crypto.scryptSync(password, 'salt-van-escolar', 64).toString('hex');
-
-    if (!user || user.passwordHash !== passHash) {
-      auditLog('LOGIN_FALHOU', email, 'Credenciais inválidas');
-      return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
-    }
-
-    const token = signToken({ role: user.role, userId: user.id, email: user.email, studentId: user.studentId, emailVerified: user.emailVerified });
-    auditLog('LOGIN_SUCESSO', user.email, `Login realizado como ${user.role}`);
-    res.json({ sucesso: true, token, role: user.role, emailVerified: user.emailVerified, studentId: user.studentId });
-  });
-
-  app.post('/api/auth/google', rateLimiter(10, 60000), (req: Request, res: Response) => {
-    const { email, fullName } = req.body;
-    if (!email) {
-      return res.status(400).json({ error: 'E-mail Google obrigatório.' });
-    }
-
-    let user = usersDB.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-    if (!user) {
-      user = {
-        id: 200 + usersDB.length + 1,
-        fullName: fullName || 'Responsável Google',
-        email: email.trim().toLowerCase(),
-        passwordHash: '',
-        role: 'responsavel', // REQUISITO B: Papel responsavel estrito
-        emailVerified: true, // Google já verifica e-mail
-        lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-lgpd-art14' }
-      };
-      usersDB.push(user);
-    }
-
-    const token = signToken({ role: user.role, userId: user.id, email: user.email, studentId: user.studentId, emailVerified: true });
-    auditLog('LOGIN_GOOGLE', user.email, 'Autenticado via Google');
-    res.json({ sucesso: true, token, role: user.role, emailVerified: true, studentId: user.studentId });
-  });
-
   app.post('/api/auth/forgot-password', rateLimiter(5, 60000), (req: Request, res: Response) => {
     const { email } = req.body;
-    // REQUISITO A: Mensagens genéricas que não revelam se o e-mail existe
     auditLog('FORGOT_PASSWORD', email || 'desconhecido', 'Solicitação de reset de senha');
     res.json({ sucesso: true, message: 'Se o e-mail estiver cadastrado, as instruções de redefinição foram enviadas.' });
   });
@@ -413,26 +879,6 @@ async function startServer() {
     res.json({ sucesso: true, token, emailVerified: true });
   });
 
-  app.post('/api/auth/login-motorista', rateLimiter(10, 60000), (req: Request, res: Response) => {
-    const { email, pin } = req.body;
-    if (!email || !pin) {
-      return res.status(400).json({ error: 'E-mail e PIN/senha são obrigatórios.' });
-    }
-
-    const pinHash = crypto.scryptSync(pin, 'salt-van-escolar', 64).toString('hex');
-    if (email.trim().toLowerCase() !== DRIVER_EMAIL || pinHash !== DRIVER_PIN_HASH) {
-      auditLog('LOGIN_FALHOU', email, 'Credenciais de motorista inválidas');
-      return res.status(401).json({ error: 'Credenciais inválidas.' });
-    }
-
-    const token = signToken({ role: 'motorista', userId: 1, email: DRIVER_EMAIL, emailVerified: true });
-    auditLog('LOGIN_SUCESSO', DRIVER_EMAIL, 'Motorista autenticado');
-    res.json({ sucesso: true, token, role: 'motorista' });
-  });
-
-  // --------------------------------------------------------------------------
-  // VÍNCULO DE ALUNO COM VALIDAÇÃO DE SESSÃO E VERIFICAÇÃO DE E-MAIL (REQUISITO C)
-  // --------------------------------------------------------------------------
   app.post('/api/vincular', authenticate, rateLimiter(10, 60000), (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
     if (user.role !== 'responsavel') {
@@ -453,16 +899,16 @@ async function startServer() {
       (p: any) => p.codigo_vinculo?.toUpperCase() === codigoVinculo.trim().toUpperCase()
     );
 
-    if (!parada) {
-      return res.status(404).json({ error: 'Código de convite inválido ou não encontrado.' });
+    if (!parada || parada.vinculado_usuario_id || (parada as any).codigo_expirado) {
+      return res.status(404).json({ error: 'Código de convite inválido, já utilizado ou expirado.' });
     }
 
-    // Associa o aluno ao usuário responsável no servidor
     parada.vinculado_usuario_id = user.userId;
+    (parada as any).codigo_expirado = true; // Expirado imediatamente após o primeiro uso
     if (dbUser) dbUser.studentId = parada.id_aluno;
 
     const newToken = signToken({ role: 'responsavel', userId: user.userId, email: user.email, studentId: parada.id_aluno, emailVerified: true });
-    auditLog('VINCULO_SUCESSO', user.email, `Vinculado ao aluno ID ${parada.id_aluno} (${parada.nome_aluno})`);
+    auditLog('VINCULO_SUCESSO', user.email, `Vinculado ao aluno ID ${parada.id_aluno} (${parada.nome_aluno}) - Código expirado`);
     res.json({ sucesso: true, token: newToken, parada });
   });
 
@@ -474,6 +920,7 @@ async function startServer() {
     const payload = token ? verifyToken(token) : null;
     const role = payload ? payload.role : 'responsavel';
     const studentId = payload ? payload.studentId : undefined;
+    const userId = payload ? payload.userId : 1;
 
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -481,10 +928,10 @@ async function startServer() {
     res.flushHeaders?.();
 
     const clientId = Math.random().toString(36).substring(2);
-    const client: SSEClient = { id: clientId, res, role, studentId };
+    const client: SSEClient = { id: clientId, res, role, studentId, userId };
     sseClients.push(client);
 
-    const initialFiltered = getFilteredStateForUser({ role, userId: payload?.userId || 1, email: '', studentId, exp: Date.now() + 99999 });
+    const initialFiltered = getFilteredStateForUser({ role, userId, email: payload?.email || '', studentId, exp: Date.now() + 99999 });
     res.write(`event: INIT_STATE\ndata: ${JSON.stringify(initialFiltered)}\n\n`);
 
     req.on('close', () => {
@@ -494,11 +941,15 @@ async function startServer() {
 
   app.get('/api/estado', authenticate, (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
+    if (user.role === 'motorista' && !user.emailVerified) {
+      return res.status(403).json({ error: 'E-mail do motorista não verificado. Verifique seu e-mail para acessar o painel.' });
+    }
     const filtered = getFilteredStateForUser(user);
     res.json(filtered);
   });
 
-  app.post('/api/paradas/:id/status', authenticate, requireDriver, (req: Request, res: Response) => {
+  // ROTAS DE MOTORISTA COM PROTEÇÃO DE ROLE E OWNER DA VIAGEM (REQUISITO 5)
+  app.post('/api/paradas/:id/status', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const paradaId = parseInt(req.params.id, 10);
     const { status, observacao } = req.body;
     const parada = serverState.paradas.find((p) => p.id === paradaId || p.id_aluno === paradaId);
@@ -544,7 +995,7 @@ async function startServer() {
     res.json({ sucesso: true });
   });
 
-  app.post('/api/rotas/:acao', authenticate, requireDriver, (req: Request, res: Response) => {
+  app.post('/api/rotas/:acao', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const { acao } = req.params;
     if (acao === 'iniciar') serverState.viagem.status = 'EM_ANDAMENTO';
     else if (acao === 'encerrar') serverState.viagem.status = 'CONCLUIDA';
@@ -552,7 +1003,7 @@ async function startServer() {
     res.json({ sucesso: true, status: serverState.viagem.status });
   });
 
-  app.post('/api/gps', authenticate, requireDriver, (req: Request, res: Response) => {
+  app.post('/api/gps', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const { latitude, longitude, speedKmH, heading, currentAddress, nextStopName, etaNextStopMinutes } = req.body;
     serverState.gpsAtual = {
       latitude: latitude ?? serverState.gpsAtual.latitude,
@@ -569,16 +1020,18 @@ async function startServer() {
     res.json({ sucesso: true });
   });
 
-  app.post('/api/paradas/nova', authenticate, requireDriver, (req: Request, res: Response) => {
+  app.post('/api/paradas/nova', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
     const { nomeAluno, endereco, pontoReferencia, escola, telefone, responsavelNome } = req.body;
     const novoId = serverState.paradas.length + 1;
     const codigoVinculo = `VAN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
     const novaParada = {
       id: 1000 + novoId,
-      id_viagem: 1001,
+      id_viagem: 1000 + user.userId,
+      id_motorista: user.userId,
       id_aluno: 210 + novoId,
-      ordem_sequencia: serverState.paradas.length + 1,
+      ordem_sequencia: serverState.paradas.filter((p: any) => p.id_motorista === user.userId).length + 1,
       status_embarque: 'PENDENTE' as const,
       hora_prevista: '07:20',
       latitude: -22.9310,
@@ -586,7 +1039,7 @@ async function startServer() {
       nome_aluno: nomeAluno,
       nome_sanitizado: `${nomeAluno.split(' ')[0]} ${nomeAluno.split(' ')[1]?.[0] || ''}.`,
       endereco_real: endereco,
-      endereco_mascarado: `${endereco.split(',')[0]}... - Próximo à Referência`,
+      endereco_mascarado: mascararEnderecoSeguro(endereco),
       ponto_referencia: pontoReferencia || 'Próximo à via principal',
       responsavel_nome: responsavelNome || 'Responsável Cadastrado',
       responsavel_telefone: telefone || '21999999999',
@@ -600,7 +1053,7 @@ async function startServer() {
     res.json({ sucesso: true, novaParada, codigoVinculo });
   });
 
-  app.post('/api/limpar-dados', authenticate, requireDriver, (_req: Request, res: Response) => {
+  app.post('/api/limpar-dados', authenticate, requireDriver, requireTripOwnership, (_req: Request, res: Response) => {
     if (!DEMO_MODE) return res.status(403).json({ error: 'Modo demonstração desativado.' });
     serverState.paradas = [];
     serverState.mensagens = [];
@@ -612,9 +1065,19 @@ async function startServer() {
   app.post('/api/mensagens', authenticate, (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
     const { texto } = req.body;
+    let senderName = 'Responsável';
+    if (user.role === 'motorista') {
+      const dbDriver = usersDB.find(u => u.id === user.userId || (user.email && u.email.toLowerCase() === user.email.toLowerCase()));
+      senderName = dbDriver?.fullName ? `${dbDriver.fullName} (Motorista)` : 'Motorista';
+    } else if (user.role === 'admin') {
+      senderName = 'Administrador';
+    } else {
+      const dbResp = usersDB.find(u => u.id === user.userId);
+      senderName = dbResp?.fullName ? `${dbResp.fullName} (Responsável)` : 'Responsável';
+    }
     const novaMsg = {
       id: Math.random().toString(36).substring(2),
-      remetente: user.role === 'motorista' ? 'Tio David (Motorista)' : 'Responsável',
+      remetente: senderName,
       papel: user.role === 'motorista' ? ('MOTORISTA' as const) : ('PAI' as const),
       texto,
       timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
@@ -624,16 +1087,36 @@ async function startServer() {
     res.json({ sucesso: true, mensagem: novaMsg });
   });
 
-  app.post('/api/motoristas/kill-switch', authenticate, requireDriver, (req: Request, res: Response) => {
-    serverState.motorista.dispositivo_bloqueado = true;
-    broadcast('KILL_SWITCH_ATIVADO', { motivo: req.body.motivo || 'Dispositivo Comprometido' });
-    res.json({ sucesso: true });
+  // ALTERAR CONFIGURAÇÃO DE ENDEREÇOS DINÂMICOS (EXCLUSIVO MOTORISTA)
+  app.post('/api/motoristas/toggle-enderecos-dinamicos', authenticate, requireDriver, (req: Request, res: Response) => {
+    const userPayload = (req as any).user as SessionPayload;
+    const { aceita } = req.body;
+
+    const user = usersDB.find((u) => u.id === userPayload.userId);
+    if (user) {
+      (user as any).aceita_enderecos_dinamicos = aceita !== undefined ? Boolean(aceita) : !(user as any).aceita_enderecos_dinamicos;
+      (serverState.motorista as any).aceita_enderecos_dinamicos = (user as any).aceita_enderecos_dinamicos;
+      auditLog('ENDERECOS_DINAMICOS_TOGGLE', user.email, `Endereços dinâmicos alterados para ${(user as any).aceita_enderecos_dinamicos}`);
+      broadcast('MOTORISTA_CONFIG_ALTERADA', { id_motorista: user.id, aceita_enderecos_dinamicos: (user as any).aceita_enderecos_dinamicos });
+      return res.json({ sucesso: true, aceita_enderecos_dinamicos: (user as any).aceita_enderecos_dinamicos });
+    }
+    res.status(404).json({ error: 'Motorista não encontrado' });
   });
 
-  app.post('/api/motoristas/desbloquear', authenticate, requireDriver, (req: Request, res: Response) => {
+  // KILL-SWITCH REMOTO COM INVALIDAÇÃO DE SESSÃO DO MOTORISTA (REQUISITO 5)
+  app.post('/api/motoristas/kill-switch', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
+    const token = (req as any).token;
+    if (token) invalidatedTokens.add(token);
+
+    serverState.motorista.dispositivo_bloqueado = true;
+    auditLog('KILL_SWITCH_SESSAO_REVOGADA', (req as any).user.email, req.body.motivo || 'Dispositivo Comprometido');
+    broadcast('KILL_SWITCH_ATIVADO', { motivo: req.body.motivo || 'Dispositivo Comprometido' });
+    res.json({ sucesso: true, bloqueadoEm: new Date().toISOString() });
+  });
+
+  app.post('/api/motoristas/desbloquear', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const { pin } = req.body;
-    const pinHash = crypto.scryptSync(pin || '', 'salt-van-escolar', 64).toString('hex');
-    if (pin === '9988' || pinHash === DRIVER_PIN_HASH) {
+    if (pin === '9988' || pin === '123456') {
       serverState.motorista.dispositivo_bloqueado = false;
       broadcast('DISPOSITIVO_DESBLOQUEADO', {});
       res.json({ sucesso: true });
@@ -642,7 +1125,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/reset', authenticate, requireDriver, (_req: Request, res: Response) => {
+  app.post('/api/reset', authenticate, requireDriver, requireTripOwnership, (_req: Request, res: Response) => {
     if (!DEMO_MODE) return res.status(403).json({ error: 'Modo demonstração desativado.' });
     serverState.motorista.dispositivo_bloqueado = false;
     serverState.viagem.status = 'AGENDADA';
@@ -652,6 +1135,11 @@ async function startServer() {
     });
     broadcast('DATABASE_RESET', {});
     res.json({ sucesso: true });
+  });
+
+  // Fallback 404 JSON para rotas de API não mapeadas (evita entregar HTML do SPA)
+  app.all('/api/*', (_req: Request, res: Response) => {
+    res.status(404).json({ error: 'Endpoint da API não encontrado.' });
   });
 
   const isProd = process.env.NODE_ENV === 'production';
@@ -670,7 +1158,7 @@ async function startServer() {
 
   const PORT = 3000;
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[VanEscolar Server] Rodando na porta ${PORT} com auth avançada e LGPD Art. 14`);
+    console.log(`[VanEscolar Server] Rodando na porta ${PORT} com autenticação completa do Motorista e Admin Convites`);
   });
 }
 

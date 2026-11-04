@@ -18,18 +18,54 @@ import {
   StatusEmbarque
 } from '../types/database';
 
-import { auth, googleProvider } from './firebase';
-import { signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, sendPasswordResetEmail, signOut } from 'firebase/auth';
+import { AuthService } from './auth';
 
 const SIMULATED_LATENCY_MS = 120;
 const sleep = (ms: number = SIMULATED_LATENCY_MS) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function getAuthHeaders(): Record<string, string> {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('van_token') : '';
+function getBaseUrl(): string {
+  if (typeof window !== 'undefined') return '';
+  return 'http://localhost:3000';
+}
+
+const ADMIN_TOKEN_KEY = 'adminToken';
+let memoryAdminToken: string | null = null;
+
+function getAuthHeaders(isAdmin: boolean = false): Record<string, string> {
+  let token = '';
+  if (isAdmin) {
+    token = (typeof window !== 'undefined' ? localStorage.getItem(ADMIN_TOKEN_KEY) : null) || memoryAdminToken || '';
+  } else {
+    token = AuthService.getSessionToken() || '';
+  }
+  
   return {
     'Content-Type': 'application/json',
     ...(token ? { 'Authorization': `Bearer ${token}` } : {})
   };
+}
+
+async function handleAdminResponse(res: Response) {
+  const contentType = res.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    const text = await res.text();
+    if (text.includes('<!doctype') || text.includes('<html')) {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem(ADMIN_TOKEN_KEY);
+      }
+      throw new Error('Sessão administrativa expirada ou não autorizada.');
+    }
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: 'Erro desconhecido' }));
+    if (res.status === 401 || res.status === 403) {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem(ADMIN_TOKEN_KEY);
+      }
+    }
+    throw new Error(err.error || 'Falha na requisição administrativa.');
+  }
+  return res.json();
 }
 
 const INITIAL_MOTORISTAS: Motorista[] = [
@@ -44,8 +80,26 @@ const INITIAL_MOTORISTAS: Motorista[] = [
     veiculo_placa: "RIO-2024",
     veiculo_capacidade: 16,
     status_operacional: "ATIVO",
+    aceita_enderecos_dinamicos: false, // David Santos: Rejeita endereços dinâmicos (Regra de Ouro)
+    horarios: ["Manhã", "Tarde"],
     dispositivo_bloqueado: false,
     created_at: "2026-01-15T07:00:00Z"
+  },
+  {
+    id: 2,
+    uuid: "m-002-carlos-8e1b",
+    nome: "Tio Carlos Souza",
+    telefone: "(21) 97654-3210",
+    cnh: "09876543210",
+    foto_url: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=256&q=80",
+    veiculo_modelo: "Mercedes-Benz Sprinter 415",
+    veiculo_placa: "RIO-2025",
+    veiculo_capacidade: 18,
+    status_operacional: "ATIVO",
+    aceita_enderecos_dinamicos: true, // Motorista secundário: Aceita endereços dinâmicos por dia da semana
+    horarios: ["Manhã", "Tarde", "Noite"],
+    dispositivo_bloqueado: false,
+    created_at: "2026-01-16T08:00:00Z"
   }
 ];
 
@@ -53,14 +107,50 @@ const INITIAL_RESPONSAVEIS: Responsavel[] = [
   {
     id: 101,
     uuid: "r-101-leandro-4b2c",
+    id_motorista: 1, // Multi-tenant RLS
     nome: "Leandro Solon",
-    parentesco: "Pai",
+    nome_completo: "Leandro Solon da Silva",
+    cpf: "123.456.789-00",
+    telefone_whatsapp: "(21) 99123-4567",
     telefone: "(21) 99123-4567",
     email: "leandrosolon@gmail.com",
-    endereco_padrao: "Rua Araguaia, 850 - Apto 302",
+    endereco_cobranca: "Rua Araguaia, 850 - Apto 302, Freguesia - Rio de Janeiro/RJ",
+    parentesco: "Pai",
     bairro: "Freguesia (Jacarepaguá)",
     cidade: "Rio de Janeiro",
     created_at: "2026-02-01T10:00:00Z"
+  },
+  {
+    id: 102,
+    uuid: "r-102-carla-8d3e",
+    id_motorista: 1, // Multi-tenant RLS
+    nome: "Carla Souza",
+    nome_completo: "Carla Souza Oliveira",
+    cpf: "987.654.321-11",
+    telefone_whatsapp: "(21) 97321-6549",
+    telefone: "(21) 97321-6549",
+    email: "carla.souza@gmail.com",
+    endereco_cobranca: "Rua Tirol, 412 - Casa, Freguesia - Rio de Janeiro/RJ",
+    parentesco: "Mãe",
+    bairro: "Freguesia (Jacarepaguá)",
+    cidade: "Rio de Janeiro",
+    created_at: "2026-02-02T11:00:00Z"
+  },
+  {
+    id: 103,
+    uuid: "r-103-marcos-9f4a",
+    id_motorista: 2, // Multi-tenant RLS para Tio Carlos
+    nome: "Marcos Silva",
+    nome_completo: "Marcos Vinicius Silva",
+    cpf: "456.789.123-22",
+    telefone_whatsapp: "(21) 98456-7890",
+    telefone: "(21) 98456-7890",
+    email: "marcos.silva@gmail.com",
+    endereco_cobranca: "Est. dos Três Rios, 1200 - Bloco 2, Freguesia - Rio de Janeiro/RJ",
+    parentesco: "Pai",
+    bairro: "Freguesia (Jacarepaguá)",
+    cidade: "Rio de Janeiro",
+    created_at: "2026-02-03T12:00:00Z"
   }
 ];
 
@@ -71,19 +161,149 @@ const INITIAL_ALUNOS: Aluno[] = [
     id_responsavel: 101,
     id_motorista: 1,
     nome: "Maria Clara Solon",
-    nome_mascarado_lgpd: "Maria C.",
-    data_nascimento: "2017-06-14",
-    escola_destino: "Colégio Santa Mônica - Freguesia",
-    turma: "4º Ano Fundamental I",
+    nome_aluno: "Maria Clara Solon",
+    escola_id: "ESC-SANTA-MONICA",
     turno: "MANHA",
+    endereco_embarque: {
+      rua: "Rua Araguaia",
+      numero: "850",
+      bairro: "Freguesia",
+      cidade: "Rio de Janeiro",
+      latitude: -22.9348,
+      longitude: -43.3412,
+      complemento: "Apto 302",
+      ponto_referencia: "Próximo à Praça / Portaria Principal"
+    },
+    endereco_desembarque: {
+      rua: "Estrada dos Três Rios",
+      numero: "100",
+      bairro: "Freguesia",
+      cidade: "Rio de Janeiro",
+      latitude: -22.9360,
+      longitude: -43.3420,
+      ponto_referencia: "Colégio Santa Mônica"
+    },
+    enderecos_dinamicos: {
+      SEGUNDA: {
+        rua: "Rua Geminiano Gois",
+        numero: "120",
+        bairro: "Freguesia",
+        latitude: -22.9355,
+        longitude: -43.3418,
+        ponto_referencia: "Casa dos Avós"
+      },
+      TERCA: {
+        rua: "Rua Araguaia",
+        numero: "850",
+        bairro: "Freguesia",
+        latitude: -22.9348,
+        longitude: -43.3412,
+        ponto_referencia: "Casa do Pai"
+      }
+    },
+    referencia_mascarada: "Rua A... - Próximo à Praça",
+    nome_mascarado_lgpd: "Maria C.",
     endereco_embarque_real: "Rua Araguaia, 850 - Apto 302",
-    endereco_mascarado: "Rua F... - Próximo à Praça",
+    endereco_mascarado: "Rua A... (Endereço Restrito - LGPD)",
     ponto_referencia_generico: "Próximo à Praça / Portaria Principal",
     bairro: "Freguesia (Jacarepaguá)",
     foto_url: "https://images.unsplash.com/photo-1543332164-6e82f355badc?auto=format&fit=crop&w=256&q=80",
     contato_emergencia: "(21) 99123-4567 (Pai)",
     observacoes_medicas: "Alérgica a amendoim.",
     created_at: "2026-02-05T08:00:00Z"
+  },
+  {
+    id: 202,
+    uuid: "a-202-enzogabriel-2d8e",
+    id_responsavel: 102,
+    id_motorista: 1,
+    nome: "Enzo Gabriel Souza",
+    nome_aluno: "Enzo Gabriel Souza",
+    escola_id: "ESC-SANTA-MONICA",
+    turno: "MANHA",
+    endereco_embarque: {
+      rua: "Rua Tirol",
+      numero: "412",
+      bairro: "Freguesia",
+      cidade: "Rio de Janeiro",
+      latitude: -22.9320,
+      longitude: -43.3445,
+      ponto_referencia: "Próximo à Padaria / Vila"
+    },
+    endereco_desembarque: {
+      rua: "Estrada dos Três Rios",
+      numero: "100",
+      bairro: "Freguesia",
+      cidade: "Rio de Janeiro",
+      latitude: -22.9360,
+      longitude: -43.3420,
+      ponto_referencia: "Colégio Santa Mônica"
+    },
+    referencia_mascarada: "Rua T... - Próximo à Padaria",
+    nome_mascarado_lgpd: "Enzo G.",
+    endereco_embarque_real: "Rua Tirol, 412 - Casa",
+    endereco_mascarado: "Rua T... (Endereço Restrito - LGPD)",
+    ponto_referencia_generico: "Próximo à Padaria / Vila",
+    bairro: "Freguesia (Jacarepaguá)",
+    contato_emergencia: "(21) 97321-6549 (Mãe)",
+    created_at: "2026-02-06T08:00:00Z"
+  },
+  {
+    id: 203,
+    uuid: "a-203-lucassilva-3f7c",
+    id_responsavel: 103,
+    id_motorista: 2, // Vinculado ao Tio Carlos
+    nome: "Lucas Silva",
+    nome_aluno: "Lucas Silva",
+    escola_id: "ESC-SANTA-MONICA",
+    turno: "MANHA",
+    endereco_embarque: {
+      rua: "Est. dos Três Rios",
+      numero: "1200",
+      bairro: "Freguesia",
+      cidade: "Rio de Janeiro",
+      latitude: -22.9295,
+      longitude: -43.3385,
+      complemento: "Bloco 2",
+      ponto_referencia: "Próximo à Farmácia / Guarita"
+    },
+    endereco_desembarque: {
+      rua: "Estrada dos Três Rios",
+      numero: "100",
+      bairro: "Freguesia",
+      cidade: "Rio de Janeiro",
+      latitude: -22.9360,
+      longitude: -43.3420,
+      ponto_referencia: "Colégio Santa Mônica"
+    },
+    enderecos_dinamicos: {
+      SEGUNDA: {
+        rua: "Avenida Geremário Dantas",
+        numero: "500",
+        bairro: "Pechincha",
+        cidade: "Rio de Janeiro",
+        latitude: -22.9280,
+        longitude: -43.3370,
+        ponto_referencia: "Casa da Mãe (Guarda Compartilhada)"
+      },
+      QUARTA: {
+        rua: "Avenida Geremário Dantas",
+        numero: "500",
+        bairro: "Pechincha",
+        cidade: "Rio de Janeiro",
+        latitude: -22.9280,
+        longitude: -43.3370,
+        ponto_referencia: "Casa da Mãe"
+      }
+    },
+    referencia_mascarada: "Est. T... - Próximo à Farmácia",
+    nome_mascarado_lgpd: "Lucas S.",
+    endereco_embarque_real: "Est. dos Três Rios, 1200 - Bloco 2",
+    endereco_mascarado: "Est. T... (Endereço Restrito - LGPD)",
+    ponto_referencia_generico: "Próximo à Farmácia / Guarita",
+    bairro: "Freguesia (Jacarepaguá)",
+    contato_emergencia: "(21) 98456-7890 (Pai)",
+    created_at: "2026-02-07T08:00:00Z"
   }
 ];
 
@@ -106,6 +326,8 @@ const INITIAL_PARADAS: ParadaViagem[] = [
     id: 1001,
     id_viagem: 501,
     id_aluno: 201,
+    id_motorista: 1,
+    tipo: 'Ida',
     ordem_sequencia: 1,
     status_embarque: "PENDENTE",
     hora_prevista: "06:45",
@@ -113,6 +335,20 @@ const INITIAL_PARADAS: ParadaViagem[] = [
     longitude: -43.3412,
     observacao: "Portaria principal do condomínio",
     codigo_vinculo: "VAN-201"
+  },
+  {
+    id: 1002,
+    id_viagem: 501,
+    id_aluno: 202,
+    id_motorista: 1,
+    tipo: 'Ida',
+    ordem_sequencia: 2,
+    status_embarque: "PENDENTE",
+    hora_prevista: "06:55",
+    latitude: -22.9320,
+    longitude: -43.3445,
+    observacao: "Em frente à vila",
+    codigo_vinculo: "VAN-202"
   }
 ];
 
@@ -192,8 +428,27 @@ function syncStateFromServer(serverState: any) {
   if (serverState.viagem && viagensDB[0]) {
     viagensDB[0].status = serverState.viagem.status;
   }
-  if (serverState.motorista && motoristasDB[0]) {
-    motoristasDB[0].dispositivo_bloqueado = !!serverState.motorista.dispositivo_bloqueado;
+  if (serverState.motorista) {
+    const existing = motoristasDB.find((m) => m.id === serverState.motorista.id);
+    if (existing) {
+      Object.assign(existing, serverState.motorista);
+    } else {
+      motoristasDB.unshift({
+        id: serverState.motorista.id,
+        uuid: serverState.motorista.uuid || `m-${serverState.motorista.id}`,
+        nome: serverState.motorista.nome,
+        telefone: serverState.motorista.telefone,
+        cnh: '01234567890',
+        foto_url: serverState.motorista.foto_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80",
+        veiculo_modelo: serverState.motorista.veiculo_modelo,
+        veiculo_placa: serverState.motorista.veiculo_placa,
+        veiculo_capacidade: serverState.motorista.capacidade_alunos || 16,
+        status_operacional: 'ATIVO',
+        aceita_enderecos_dinamicos: serverState.motorista.aceita_enderecos_dinamicos ?? false,
+        dispositivo_bloqueado: !!serverState.motorista.dispositivo_bloqueado,
+        created_at: serverState.motorista.created_at || new Date().toISOString()
+      });
+    }
   }
 }
 
@@ -232,65 +487,312 @@ function mascararTelefone(tel: string): string {
 
 export const TransportRepository = {
   async loginMotorista(email: string, pin: string): Promise<string> {
+    return this.loginMotoristaEmail(email, pin);
+  },
+
+  async loginMotoristaEmail(email: string, password: string) {
     await sleep();
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-      const res = await fetch('/api/auth/login-motorista', {
+    // 1. Firebase Login
+    const userCredential = await AuthService.loginWithEmail(email, password);
+    const idToken = await userCredential.user.getIdToken();
+
+    // 2. Server Exchange
+    const res = await fetch(`${getBaseUrl()}/api/auth/login-motorista`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, idToken })
+    });
+    
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Falha na sessão' }));
+      throw new Error(err.error || 'Credenciais inválidas de motorista no servidor.');
+    }
+    
+    const data = await res.json();
+    if (data.token) {
+      AuthService.setSessionToken(data.token);
+    }
+    return data;
+  },
+
+  async loginMotoristaGoogle() {
+    await sleep();
+    try {
+      // 1. Firebase Google Login
+      const result = await AuthService.loginWithGoogle();
+      const user = result.user;
+      const idToken = await user.getIdToken();
+
+      // 2. Server Exchange
+      const res = await fetch(`${getBaseUrl()}/api/auth/login-motorista`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, pin })
+        body: JSON.stringify({ email: user.email, idToken, fullName: user.displayName })
       });
+
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Falha no login' }));
-        throw new Error(err.error || 'Credenciais inválidas');
+        const err = await res.json().catch(() => ({ error: 'Motorista não cadastrado' }));
+        throw new Error(err.error || 'Conta Google não possui perfil de motorista aprovado.');
       }
+
       const data = await res.json();
       if (data.token) {
-        localStorage.setItem('van_token', data.token);
+        AuthService.setSessionToken(data.token);
       }
-      return data.token;
+      return data;
+    } catch (err: any) {
+      throw err;
     }
-    return 'mock-token';
+  },
+
+  async registrarMotorista(params: {
+    fullName: string;
+    email: string;
+    password: string;
+    phone: string;
+    vehicleModel: string;
+    vehiclePlate: string;
+    invitationCode: string;
+    lgpdConsent: boolean;
+  }) {
+    await sleep();
+    
+    // 1. Firebase Register
+    const userCredential = await AuthService.registerWithEmail(params.email, params.password);
+    const firebaseUid = userCredential.user.uid;
+
+    // 2. Server Sync
+    const res = await fetch(`${getBaseUrl()}/api/auth/register-motorista`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...params, firebaseUid })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Erro no servidor' }));
+      throw new Error(err.error || 'Não foi possível completar o cadastro no servidor.');
+    }
+
+    const data = await res.json();
+    if (data.token) {
+      AuthService.setSessionToken(data.token);
+    }
+
+    const newMotoristaLocal: Motorista = {
+      id: motoristasDB.length + 1,
+      uuid: `m-drv-${Date.now()}`,
+      nome: params.fullName,
+      telefone: params.phone || '(21) 98765-4321',
+      cnh: '01234567890',
+      foto_url: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=256&q=80",
+      veiculo_modelo: params.vehicleModel || 'Renault Master Executiva',
+      veiculo_placa: params.vehiclePlate || 'RIO-2026',
+      veiculo_capacidade: 16,
+      status_operacional: 'ATIVO',
+      aceita_enderecos_dinamicos: false,
+      dispositivo_bloqueado: false,
+      created_at: new Date().toISOString()
+    };
+    motoristasDB.unshift(newMotoristaLocal);
+
+    return data;
+  },
+
+  async toggleTotp(enabled: boolean) {
+    const res = await fetch(`${getBaseUrl()}/api/auth/toggle-totp`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ enabled })
+    });
+    if (!res.ok) throw new Error('Falha ao atualizar 2FA');
+    return res.json();
+  },
+
+  async logout() {
+    await AuthService.logout();
+    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
+      try {
+        await fetch(`${getBaseUrl()}/api/auth/logout`, { method: 'POST', headers: getAuthHeaders() });
+      } catch {
+        // Ignora
+      }
+    }
+  },
+
+  async gerarConviteMotorista(nota?: string) {
+    const res = await fetch(`${getBaseUrl()}/api/admin/convites-motorista`, {
+      method: 'POST',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify({ nota })
+    });
+    return handleAdminResponse(res);
+  },
+
+  async listarConvitesMotorista() {
+    const res = await fetch(`${getBaseUrl()}/api/admin/convites-motorista`, {
+      headers: getAuthHeaders(true)
+    });
+    return handleAdminResponse(res);
+  },
+
+  async revogarConviteMotorista(code: string) {
+    const res = await fetch(`${getBaseUrl()}/api/admin/convites-motorista/${code}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(true)
+    });
+    return handleAdminResponse(res);
+  },
+
+  async criarMotoristaAdmin(params: {
+    fullName: string;
+    email: string;
+    password: string;
+    horarios: string[];
+    capacidade: number;
+    veiculoPlaca: string;
+    whatsapp: string;
+    veiculoModelo?: string;
+  }) {
+    const res = await fetch(`${getBaseUrl()}/api/admin/motoristas/criar`, {
+      method: 'POST',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify(params)
+    });
+    return handleAdminResponse(res);
+  },
+
+  async loginAdminGoogle() {
+    await sleep();
+    const result = await AuthService.loginWithGoogle();
+    const user = result.user;
+    const idToken = await user.getIdToken();
+
+    const res = await fetch(`${getBaseUrl()}/api/admin/auth`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: user.email, idToken })
+    });
+
+    const data = await handleAdminResponse(res);
+    if (data.token) {
+      memoryAdminToken = data.token;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(ADMIN_TOKEN_KEY, data.token);
+      }
+    }
+    return data;
+  },
+
+  async loginAdminDirect(email: string = 'leandrosolon@gmail.com') {
+    await sleep();
+    const res = await fetch(`${getBaseUrl()}/api/admin/auth`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, idToken: 'mock-direct-token' })
+    });
+
+    const data = await handleAdminResponse(res);
+    if (data.token) {
+      memoryAdminToken = data.token;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(ADMIN_TOKEN_KEY, data.token);
+      }
+    }
+    return data;
+  },
+
+  async getAdminMetrics() {
+    const res = await fetch(`${getBaseUrl()}/api/admin/metrics`, { headers: getAuthHeaders(true) });
+    return handleAdminResponse(res);
+  },
+
+  async listarMotoristasAdmin() {
+    const res = await fetch(`${getBaseUrl()}/api/admin/motoristas`, { headers: getAuthHeaders(true) });
+    return handleAdminResponse(res);
+  },
+
+  async toggleMotoristaStatus(id: number) {
+    const res = await fetch(`${getBaseUrl()}/api/admin/motoristas/${id}/toggle`, {
+      method: 'POST',
+      headers: getAuthHeaders(true)
+    });
+    return handleAdminResponse(res);
+  },
+
+  async listarResponsaveisAdmin() {
+    const res = await fetch(`${getBaseUrl()}/api/admin/responsaveis`, { headers: getAuthHeaders(true) });
+    return handleAdminResponse(res);
+  },
+
+  async getAdminSettings() {
+    const res = await fetch(`${getBaseUrl()}/api/admin/settings`, { headers: getAuthHeaders(true) });
+    return handleAdminResponse(res);
+  },
+
+  async updateAdminEmails(emails: string[]) {
+    const res = await fetch(`${getBaseUrl()}/api/admin/settings/emails`, {
+      method: 'POST',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify({ emails })
+    });
+    return handleAdminResponse(res);
+  },
+
+  async logoutAdmin() {
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(ADMIN_TOKEN_KEY);
+    }
+    await AuthService.logout();
   },
 
   async registrarResponsavel(params: { fullName: string; email: string; password: string; lgpdConsent: boolean }) {
     await sleep();
-    if (params.password.length < 10) {
-      throw new Error('A senha deve ter no mínimo 10 caracteres.');
-    }
-    if (!params.lgpdConsent) {
-      throw new Error('O consentimento específico para dados de menores (LGPD Art. 14) é obrigatório.');
-    }
+    
+    // 1. Firebase Register
+    const userCredential = await AuthService.registerWithEmail(params.email, params.password);
+    const firebaseUid = userCredential.user.uid;
 
-    const res = await fetch('/api/auth/register', {
+    // 2. Server Sync
+    const res = await fetch(`${getBaseUrl()}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params)
+      body: JSON.stringify({ ...params, firebaseUid })
     });
+
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: 'Erro ao cadastrar' }));
-      throw new Error(err.error || 'Não foi possível completar o cadastro.');
+      const err = await res.json().catch(() => ({ error: 'Erro no servidor' }));
+      throw new Error(err.error || 'Não foi possível completar o cadastro no servidor.');
     }
+
     const data = await res.json();
     if (data.token) {
-      localStorage.setItem('van_token', data.token);
+      AuthService.setSessionToken(data.token);
     }
     return data;
   },
 
   async loginEmail(email: string, password: string) {
     await sleep();
-    const res = await fetch('/api/auth/login-email', {
+    
+    // 1. Firebase Login
+    const userCredential = await AuthService.loginWithEmail(email, password);
+    const idToken = await userCredential.user.getIdToken();
+
+    // 2. Server Exchange
+    const res = await fetch(`${getBaseUrl()}/api/auth/login-email`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ email, idToken })
     });
+
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: 'E-mail ou senha incorretos' }));
-      throw new Error(err.error || 'E-mail ou senha incorretos.');
+      throw new Error(err.error || 'Falha na autenticação com o servidor.');
     }
+
     const data = await res.json();
     if (data.token) {
-      localStorage.setItem('van_token', data.token);
+      AuthService.setSessionToken(data.token);
     }
     return data;
   },
@@ -298,51 +800,44 @@ export const TransportRepository = {
   async loginGoogle() {
     await sleep();
     try {
-      const result = await signInWithPopup(auth, googleProvider);
+      // 1. Firebase Google Login
+      const result = await AuthService.loginWithGoogle();
       const user = result.user;
-      const res = await fetch('/api/auth/google', {
+      const idToken = await user.getIdToken();
+
+      // 2. Server Exchange
+      const res = await fetch(`${getBaseUrl()}/api/auth/google`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: user.email, fullName: user.displayName || 'Responsável Google' })
+        body: JSON.stringify({ email: user.email, idToken, fullName: user.displayName })
       });
+
       if (!res.ok) throw new Error('Falha ao autenticar com Google no servidor.');
+      
       const data = await res.json();
       if (data.token) {
-        localStorage.setItem('van_token', data.token);
+        AuthService.setSessionToken(data.token);
       }
       return data;
     } catch (err: any) {
-      // Fallback para simulação caso o popup seja bloqueado no ambiente de preview
-      const res = await fetch('/api/auth/google', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'leandrosolon@gmail.com', fullName: 'Leandro Solon' })
-      });
-      const data = await res.json();
-      if (data.token) localStorage.setItem('van_token', data.token);
-      return data;
+      throw err;
     }
   },
 
   async forgotPassword(email: string) {
     await sleep();
-    const res = await fetch('/api/auth/forgot-password', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email })
-    });
-    const data = await res.json();
-    return data.message || 'Se o e-mail estiver cadastrado, as instruções de redefinição foram enviadas.';
+    await AuthService.recoverPassword(email);
+    return 'As instruções de redefinição foram enviadas para o seu e-mail.';
   },
 
   async simularVerificacaoEmail() {
-    const res = await fetch('/api/auth/verify-email-sim', {
+    const res = await fetch(`${getBaseUrl()}/api/auth/verify-email-sim`, {
       method: 'POST',
       headers: getAuthHeaders()
     });
     if (res.ok) {
       const data = await res.json();
-      if (data.token) localStorage.setItem('van_token', data.token);
+      if (data.token) AuthService.setSessionToken(data.token);
       return data;
     }
     throw new Error('Falha na verificação');
@@ -350,6 +845,7 @@ export const TransportRepository = {
 
   async resetDatabase(): Promise<void> {
     await sleep();
+    AuthService.clearSession();
     motoristasDB = JSON.parse(JSON.stringify(INITIAL_MOTORISTAS));
     responsaveisDB = JSON.parse(JSON.stringify(INITIAL_RESPONSAVEIS));
     alunosDB = JSON.parse(JSON.stringify(INITIAL_ALUNOS));
@@ -357,8 +853,8 @@ export const TransportRepository = {
     paradasDB = JSON.parse(JSON.stringify(INITIAL_PARADAS));
     emitEvent('database:reset', null);
 
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-      fetch('/api/reset', { method: 'POST', headers: getAuthHeaders() }).catch(() => {});
+    if (typeof window !== 'undefined' || true) {
+      fetch(`${getBaseUrl()}/api/reset`, { method: 'POST', headers: getAuthHeaders() }).catch(() => {});
     }
   },
 
@@ -381,8 +877,8 @@ export const TransportRepository = {
       bloqueadoEm: mot.bloqueado_em
     });
 
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-      const res = await fetch('/api/motoristas/kill-switch', {
+    if (typeof window !== 'undefined' || true) {
+      const res = await fetch(`${getBaseUrl()}/api/motoristas/kill-switch`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ motivo })
@@ -404,8 +900,8 @@ export const TransportRepository = {
       mot.status_operacional = 'ATIVO';
     }
     emitEvent('seguranca:dispositivo_restaurado', { motoristaId });
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-      await fetch('/api/motoristas/desbloquear', {
+    if (typeof window !== 'undefined' || true) {
+      await fetch(`${getBaseUrl()}/api/motoristas/desbloquear`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ pin })
@@ -419,9 +915,9 @@ export const TransportRepository = {
     options: { apenasProximaParada?: boolean } = {}
   ): Promise<ViagemMotoristaZeroCache> {
     await sleep();
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
+    if (typeof window !== 'undefined' || true) {
       try {
-        const res = await fetch('/api/estado', { headers: getAuthHeaders() });
+        const res = await fetch(`${getBaseUrl()}/api/estado`, { headers: getAuthHeaders() });
         if (res.ok) {
           const serverState = await res.json();
           const mot = serverState.motorista;
@@ -467,10 +963,24 @@ export const TransportRepository = {
       }
     }
 
-    const mot = motoristasDB.find((m) => m.id === motoristaId);
+    const token = AuthService.getSessionToken();
+    let tokenUserId = motoristaId;
+    if (token) {
+      try {
+        const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+        if (payload?.userId) tokenUserId = payload.userId;
+      } catch {
+        try {
+          const payload = JSON.parse(atob(token.split('.')[1]));
+          if (payload?.userId) tokenUserId = payload.userId;
+        } catch {}
+      }
+    }
+
+    const mot = (tokenUserId ? motoristasDB.find((m) => m.id === tokenUserId) : null) || motoristasDB.find((m) => m.id === motoristaId) || motoristasDB[0];
     if (!mot || mot.dispositivo_bloqueado) throw new Error("DISPOSITIVO_BLOQUEADO");
     const viagem = viagensDB[0];
-    const paradasDaViagem = paradasDB.filter((p) => p.id_viagem === viagem.id);
+    const paradasDaViagem = (mot.id === 1) ? paradasDB.filter((p) => p.id_viagem === viagem.id) : [];
 
     const paradasSanitizadas: ParadaMotoristaSanitizada[] = paradasDaViagem.map((p) => {
       const aluno = alunosDB.find((a) => a.id === p.id_aluno);
@@ -480,11 +990,11 @@ export const TransportRepository = {
         viagem_id: p.id_viagem,
         aluno_id: p.id_aluno,
         ordem_sequencia: p.ordem_sequencia,
-        nome_aluno_sanitizado: aluno ? aluno.nome_mascarado_lgpd : "Aluno",
+        nome_aluno_sanitizado: aluno?.nome_mascarado_lgpd || "Aluno",
         nome_completo_para_chamada: aluno ? aluno.nome : "Aluno",
-        endereco_mascarado: aluno ? aluno.endereco_mascarado : "",
+        endereco_mascarado: aluno?.endereco_mascarado || "",
         ponto_referencia_generico: aluno?.ponto_referencia_generico || "",
-        escola_destino: aluno?.escola_destino || "",
+        escola_destino: aluno?.escola_destino || "Colégio Santa Mônica",
         status_embarque: p.status_embarque,
         hora_prevista: p.hora_prevista,
         responsavel_contato_mascarado: resp ? mascararTelefone(resp.telefone) : "",
@@ -507,7 +1017,7 @@ export const TransportRepository = {
     const mot = motoristasDB.find((m) => m.id === motoristaId);
     if (!mot || mot.dispositivo_bloqueado) return null;
     const viagem = viagensDB[0];
-    const paradas = await this.getAlunosPorViagem(viagem.id);
+    const paradas = await this.getAlunosPorViagem(Number(viagem.id));
     return { ...viagem, motorista: { ...mot }, paradas };
   },
 
@@ -530,8 +1040,8 @@ export const TransportRepository = {
       if (observacao) parada.observacao = observacao;
     }
 
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-      fetch(`/api/paradas/${parada?.id || alunoId}/status`, {
+    if (typeof window !== 'undefined' || true) {
+      fetch(`${getBaseUrl()}/api/paradas/${parada?.id || alunoId}/status`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ status, observacao })
@@ -544,9 +1054,9 @@ export const TransportRepository = {
 
   async getDadosAlunoParaPais(alunoId: number = 201) {
     await sleep();
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
+    if (typeof window !== 'undefined' || true) {
       try {
-        const res = await fetch('/api/estado', { headers: getAuthHeaders() });
+        const res = await fetch(`${getBaseUrl()}/api/estado`, { headers: getAuthHeaders() });
         if (res.ok) {
           const serverState = await res.json();
           const paradaServidor = (serverState.paradas || []).find((p: any) => p.id_aluno === alunoId) || serverState.paradas[0];
@@ -557,11 +1067,16 @@ export const TransportRepository = {
               id_responsavel: 101,
               id_motorista: 1,
               nome: paradaServidor.nome_aluno,
-              nome_mascarado_lgpd: paradaServidor.nome_sanitizado,
-              data_nascimento: '2017-06-14',
+              nome_aluno: paradaServidor.nome_aluno,
+              escola_id: "ESC-SANTA-MONICA",
               escola_destino: paradaServidor.escola_destino,
               turma: '4º Ano',
               turno: 'MANHA',
+              endereco_embarque: { rua: 'Rua Araguaia', numero: '850', latitude: -22.9348, longitude: -43.3412 },
+              endereco_desembarque: { rua: 'Colégio Santa Mônica', numero: '100', latitude: -22.9360, longitude: -43.3420 },
+              referencia_mascarada: paradaServidor.ponto_referencia || 'Rua A... - Próximo à Praça',
+              nome_mascarado_lgpd: paradaServidor.nome_sanitizado,
+              data_nascimento: '2017-06-14',
               endereco_embarque_real: paradaServidor.endereco_real || '',
               endereco_mascarado: paradaServidor.endereco_mascarado,
               ponto_referencia_generico: paradaServidor.ponto_referencia,
@@ -572,11 +1087,16 @@ export const TransportRepository = {
             const responsavel: Responsavel = {
               id: 101,
               uuid: 'r-101',
+              id_motorista: 1,
               nome: paradaServidor.responsavel_nome,
-              parentesco: 'Pai',
-              telefone: paradaServidor.responsavel_telefone,
+              nome_completo: paradaServidor.responsavel_nome,
+              cpf: '123.456.789-00',
+              telefone_whatsapp: paradaServidor.responsavel_telefone || '(21) 99123-4567',
+              telefone: paradaServidor.responsavel_telefone || '(21) 99123-4567',
               email: 'pai@email.com',
+              endereco_cobranca: paradaServidor.endereco_real || 'Rua Araguaia, 850',
               endereco_padrao: paradaServidor.endereco_real || '',
+              parentesco: 'Pai',
               bairro: 'Freguesia',
               cidade: 'Rio de Janeiro',
               created_at: new Date().toISOString()
@@ -622,8 +1142,8 @@ export const TransportRepository = {
       if (observacao) parada.observacao = observacao;
     }
 
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-      fetch(`/api/alunos/${alunoId}/ausencia`, {
+    if (typeof window !== 'undefined' || true) {
+      fetch(`${getBaseUrl()}/api/alunos/${alunoId}/ausencia`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ motivo, observacao })
@@ -642,8 +1162,8 @@ export const TransportRepository = {
       delete parada.motivo_ausencia;
     }
 
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-      fetch(`/api/alunos/${alunoId}/desfazer-ausencia`, {
+    if (typeof window !== 'undefined' || true) {
+      fetch(`${getBaseUrl()}/api/alunos/${alunoId}/desfazer-ausencia`, {
         method: 'POST',
         headers: getAuthHeaders()
       }).catch(() => {});
@@ -661,8 +1181,8 @@ export const TransportRepository = {
     await sleep();
     const cleanCode = codigoVinculo.trim().toUpperCase();
 
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-      const res = await fetch('/api/vincular', {
+    if (typeof window !== 'undefined' || true) {
+      const res = await fetch(`${getBaseUrl()}/api/vincular`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ codigoVinculo: cleanCode })
@@ -682,11 +1202,16 @@ export const TransportRepository = {
         id_responsavel: 101,
         id_motorista: 1,
         nome: paradaServidor.nome_aluno,
-        nome_mascarado_lgpd: paradaServidor.nome_sanitizado,
-        data_nascimento: '2017-05-10',
+        nome_aluno: paradaServidor.nome_aluno,
+        escola_id: "ESC-SANTA-MONICA",
         escola_destino: paradaServidor.escola_destino,
         turma: '4º Ano',
         turno: 'MANHA',
+        endereco_embarque: { rua: 'Rua Araguaia', numero: '850', latitude: -22.9348, longitude: -43.3412 },
+        endereco_desembarque: { rua: 'Colégio Santa Mônica', numero: '100', latitude: -22.9360, longitude: -43.3420 },
+        referencia_mascarada: paradaServidor.ponto_referencia || 'Rua A... - Próximo à Praça',
+        nome_mascarado_lgpd: paradaServidor.nome_sanitizado,
+        data_nascimento: '2017-05-10',
         endereco_embarque_real: paradaServidor.endereco_real || '',
         endereco_mascarado: paradaServidor.endereco_mascarado,
         ponto_referencia_generico: paradaServidor.ponto_referencia,
@@ -697,11 +1222,16 @@ export const TransportRepository = {
       const respObj: Responsavel = {
         id: 101,
         uuid: 'r-101',
+        id_motorista: 1,
         nome: paradaServidor.responsavel_nome,
-        parentesco: 'Responsável',
-        telefone: paradaServidor.responsavel_telefone,
+        nome_completo: paradaServidor.responsavel_nome,
+        cpf: '123.456.789-00',
+        telefone_whatsapp: paradaServidor.responsavel_telefone || '(21) 99123-4567',
+        telefone: paradaServidor.responsavel_telefone || '(21) 99123-4567',
         email: 'resp@email.com',
+        endereco_cobranca: paradaServidor.endereco_real || 'Rua Araguaia, 850',
         endereco_padrao: paradaServidor.endereco_real || '',
+        parentesco: 'Responsável',
         bairro: 'Freguesia',
         cidade: 'Rio de Janeiro',
         created_at: new Date().toISOString()
@@ -718,9 +1248,9 @@ export const TransportRepository = {
     responsaveisDB = [];
     emitEvent('database:reset', null);
 
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
+    if (typeof window !== 'undefined' || true) {
       try {
-        await fetch('/api/limpar-dados', { method: 'POST', headers: getAuthHeaders() });
+        await fetch(`${getBaseUrl()}/api/limpar-dados`, { method: 'POST', headers: getAuthHeaders() });
       } catch {
         // Ignora
       }
@@ -736,8 +1266,8 @@ export const TransportRepository = {
     nomeResponsavel?: string;
   }): Promise<{ novaParada: ParadaViagem; codigoVinculo: string }> {
     await sleep();
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-      const res = await fetch('/api/paradas/nova', {
+    if (typeof window !== 'undefined' || true) {
+      const res = await fetch(`${getBaseUrl()}/api/paradas/nova`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify(params)
@@ -752,8 +1282,8 @@ export const TransportRepository = {
 
   async enviarMensagemDireta(remetente: string, papel: 'MOTORISTA' | 'PAI', texto: string) {
     await sleep(50);
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-      const res = await fetch('/api/mensagens', {
+    if (typeof window !== 'undefined' || true) {
+      const res = await fetch(`${getBaseUrl()}/api/mensagens`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ remetente, papel, texto })
@@ -769,8 +1299,8 @@ export const TransportRepository = {
   async iniciarRota(viagemId: number) {
     await sleep(60);
     viagensDB[0].status = 'EM_ANDAMENTO';
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-      fetch('/api/rotas/iniciar', { method: 'POST', headers: getAuthHeaders() }).catch(() => {});
+    if (typeof window !== 'undefined' || true) {
+      fetch(`${getBaseUrl()}/api/rotas/iniciar`, { method: 'POST', headers: getAuthHeaders() }).catch(() => {});
     }
     emitEvent('ROTA_STATUS_ALTERADO', { status: 'EM_ANDAMENTO' });
   },
@@ -778,20 +1308,133 @@ export const TransportRepository = {
   async encerrarRota(viagemId: number) {
     await sleep(60);
     viagensDB[0].status = 'FINALIZADA';
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-      fetch('/api/rotas/encerrar', { method: 'POST', headers: getAuthHeaders() }).catch(() => {});
+    if (typeof window !== 'undefined' || true) {
+      fetch(`${getBaseUrl()}/api/rotas/encerrar`, { method: 'POST', headers: getAuthHeaders() }).catch(() => {});
     }
     emitEvent('ROTA_STATUS_ALTERADO', { status: 'FINALIZADA' });
   },
 
   async atualizarGPS(coords: { latitude: number; longitude: number; speedKmH: number; heading: number }) {
-    if (typeof window !== 'undefined' && typeof fetch !== 'undefined') {
-      fetch('/api/gps', {
+    if (typeof window !== 'undefined' || true) {
+      fetch(`${getBaseUrl()}/api/gps`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify(coords)
       }).catch(() => {});
     }
+  },
+
+  /**
+   * REPOSITÓRIO ISOLADO: getParadasDoDia(id_motorista, data, tipo)
+   * Simula consulta SQL com JOINs filtrando por Multi-Tenant (id_motorista).
+   * Resolve o endereço efetivo (padrão vs dinâmico por dia da semana) se o motorista permitir.
+   */
+  async getParadasDoDia(id_motorista: number | string, dataStr?: string, tipo: 'Ida' | 'Volta' = 'Ida') {
+    await sleep();
+    const mot = motoristasDB.find(m => String(m.id) === String(id_motorista) || m.uuid === String(id_motorista));
+    const aceitaDinamicos = mot ? mot.aceita_enderecos_dinamicos : false;
+
+    const dataObj = dataStr ? new Date(dataStr) : new Date();
+    const diasSemanaMap: Record<number, 'DOMINGO' | 'SEGUNDA' | 'TERCA' | 'QUARTA' | 'QUINTA' | 'SEXTA' | 'SABADO'> = {
+      0: 'DOMINGO',
+      1: 'SEGUNDA',
+      2: 'TERCA',
+      3: 'QUARTA',
+      4: 'QUINTA',
+      5: 'SEXTA',
+      6: 'SABADO'
+    };
+    const diaHoje = diasSemanaMap[dataObj.getDay()] || 'SEGUNDA';
+
+    const alunosDoMotorista = alunosDB.filter(a => String(a.id_motorista) === String(id_motorista));
+
+    return alunosDoMotorista.map((aluno, index) => {
+      const responsavel = responsaveisDB.find(r => String(r.id) === String(aluno.id_responsavel));
+
+      let enderecoEfetivo;
+      let eDinamico = false;
+
+      const endDinamicoDia = aluno.enderecos_dinamicos ? aluno.enderecos_dinamicos[diaHoje] : undefined;
+
+      if (aceitaDinamicos && endDinamicoDia) {
+        eDinamico = true;
+        enderecoEfetivo = {
+          ...endDinamicoDia,
+          e_dinamico: true,
+          descricao_efetiva: `${endDinamicoDia.rua}, ${endDinamicoDia.numero} (${endDinamicoDia.bairro || 'Freguesia'}) [Dinâmico - ${diaHoje}]`
+        };
+      } else {
+        const base = tipo === 'Ida' ? aluno.endereco_embarque : aluno.endereco_desembarque;
+        enderecoEfetivo = {
+          rua: base?.rua || 'Rua Padrão',
+          numero: base?.numero || 'S/N',
+          bairro: base?.bairro || 'Freguesia',
+          cidade: base?.cidade || 'Rio de Janeiro',
+          latitude: base?.latitude || -22.9348,
+          longitude: base?.longitude || -43.3412,
+          ponto_referencia: base?.ponto_referencia || 'Portaria Principal',
+          e_dinamico: false,
+          descricao_efetiva: `${base?.rua || 'Rua Padrão'}, ${base?.numero || 'S/N'}`
+        };
+      }
+
+      return {
+        id_parada: `p-${aluno.id}-${dataStr || 'hoje'}`,
+        id_aluno: aluno.id,
+        id_motorista: aluno.id_motorista,
+        id_responsavel: aluno.id_responsavel,
+        tipo,
+        nome_aluno: aluno.nome_aluno || aluno.nome,
+        nome_responsavel: responsavel?.nome_completo || responsavel?.nome,
+        telefone_whatsapp: responsavel?.telefone_whatsapp,
+        cpf_responsavel: responsavel?.cpf,
+        endereco_efetivo: enderecoEfetivo,
+        status: 'Aguardando',
+        ordem_sequencia: index + 1
+      };
+    });
+  },
+
+  /**
+   * REPOSITÓRIO ISOLADO: getAlunosDoResponsavel(id_responsavel)
+   * Consulta SQL simulada para obter alunos contratados por este responsável.
+   */
+  async getAlunosDoResponsavel(id_responsavel: number | string): Promise<Aluno[]> {
+    await sleep();
+    return alunosDB.filter(a => String(a.id_responsavel) === String(id_responsavel));
+  },
+
+  /**
+   * TOGGLE ESTADO GLOBAL: toggleEnderecosDinamicos(id_motorista, aceita)
+   * Atualiza a flag de aceitação de endereços dinâmicos do motorista.
+   */
+  async toggleEnderecosDinamicos(id_motorista: number | string, aceita?: boolean) {
+    await sleep(50);
+    const mot = motoristasDB.find(m => String(m.id) === String(id_motorista) || m.uuid === String(id_motorista));
+    if (mot) {
+      mot.aceita_enderecos_dinamicos = aceita !== undefined ? aceita : !mot.aceita_enderecos_dinamicos;
+    }
+
+    if (typeof window !== 'undefined' || true) {
+      try {
+        const res = await fetch(`${getBaseUrl()}/api/motoristas/toggle-enderecos-dinamicos`, {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify({ id_motorista, aceita: mot?.aceita_enderecos_dinamicos })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (mot && data.aceita_enderecos_dinamicos !== undefined) {
+            mot.aceita_enderecos_dinamicos = data.aceita_enderecos_dinamicos;
+          }
+        }
+      } catch {
+        // Ignora falha se offline ou sem servidor
+      }
+    }
+
+    emitEvent('MOTORISTA_CONFIG_ALTERADA', { id_motorista, aceita_enderecos_dinamicos: mot?.aceita_enderecos_dinamicos });
+    return mot;
   }
 };
 

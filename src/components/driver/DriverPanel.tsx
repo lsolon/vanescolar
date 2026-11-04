@@ -51,7 +51,10 @@ import {
   Radio,
   FileCheck2,
   X,
-  LogOut
+  LogOut,
+  KeyRound,
+  UserPlus,
+  Copy
 } from 'lucide-react';
 import { LiveMap } from '../shared/LiveMap';
 
@@ -70,6 +73,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   onLogout
 }) => {
   const [viagemZeroCache, setViagemZeroCache] = useState<ViagemMotoristaZeroCache | null>(null);
+  const [aceitaDinamicos, setAceitaDinamicos] = useState<boolean>(false);
   const [carregando, setCarregando] = useState<boolean>(true);
   const [processandoAcaoId, setProcessandoAcaoId] = useState<number | null>(null);
   const [filtroStatus, setFiltroStatus] = useState<string>('TODOS');
@@ -87,14 +91,29 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const [pinDesbloqueio, setPinDesbloqueio] = useState<string>('');
   const [erroPin, setErroPin] = useState<string | null>(null);
 
+  // Modal de Cadastro de Novo Aluno pelo Motorista
+  const [modalNovoAlunoAberto, setModalNovoAlunoAberto] = useState<boolean>(false);
+  const [novoAlunoNome, setNovoAlunoNome] = useState<string>('');
+  const [novoAlunoEndereco, setNovoAlunoEndereco] = useState<string>('');
+  const [novoAlunoPontoRef, setNovoAlunoPontoRef] = useState<string>('');
+  const [novoAlunoEscola, setNovoAlunoEscola] = useState<string>('Colégio Santa Mônica');
+  const [novoAlunoResponsavel, setNovoAlunoResponsavel] = useState<string>('');
+  const [novoAlunoTelefone, setNovoAlunoTelefone] = useState<string>('');
+  const [cadastrandoAluno, setCadastrandoAluno] = useState<boolean>(false);
+  const [codigoGeradoSucesso, setCodigoGeradoSucesso] = useState<string | null>(null);
+  const [copiado, setCopiado] = useState<boolean>(false);
+
   // Carrega dados sanitizados via Repository Pattern (Zero-Cache)
   const carregarDadosZeroCache = async () => {
     try {
       setCarregando(true);
-      const dados = await TransportRepository.getViagemMotoristaZeroCache(1, {
+      const dados = await TransportRepository.getViagemMotoristaZeroCache(undefined, {
         apenasProximaParada
       });
       setViagemZeroCache(dados);
+      if (dados?.motorista) {
+        setAceitaDinamicos(dados.motorista.aceita_enderecos_dinamicos ?? false);
+      }
       setDispositivoBloqueado(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -134,7 +153,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
       }
 
       if (!dispositivoBloqueado) {
-        TransportRepository.getViagemMotoristaZeroCache(1, { apenasProximaParada }).then((dados) => {
+        TransportRepository.getViagemMotoristaZeroCache(undefined, { apenasProximaParada }).then((dados) => {
           setViagemZeroCache(dados);
         }).catch(() => {
           // Bloqueado
@@ -142,7 +161,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
       }
 
       if (event === 'aluno:ausencia_avisada' || event === 'AUSENCIA_NOTIFICADA') {
-        setMensagemSucesso('Alerta LGPD: O responsável (Leandro) registrou ausência pelo aplicativo dos Pais.');
+        setMensagemSucesso('Alerta LGPD: O responsável registrou ausência pelo aplicativo dos Pais.');
         setTimeout(() => setMensagemSucesso(null), 5000);
       }
     });
@@ -152,15 +171,16 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
   // Atualização do status de embarque com botões táteis veiculares
   const handleAtualizarStatus = async (
-    alunoId: number,
+    alunoId: number | string,
     novoStatus: StatusEmbarque,
     nomeAlunoSanitizado: string
   ) => {
     if (!viagemZeroCache) return;
-    setProcessandoAcaoId(alunoId);
+    const numericId = Number(alunoId);
+    setProcessandoAcaoId(numericId);
     try {
-      await TransportRepository.updateStatusEmbarque(alunoId, viagemZeroCache.viagem.id, novoStatus);
-      const atualizado = await TransportRepository.getViagemMotoristaZeroCache(1, { apenasProximaParada });
+      await TransportRepository.updateStatusEmbarque(numericId, Number(viagemZeroCache.viagem.id), novoStatus);
+      const atualizado = await TransportRepository.getViagemMotoristaZeroCache(undefined, { apenasProximaParada });
       setViagemZeroCache(atualizado);
 
       const statusMsg = novoStatus === 'EMBARCOU' ? 'embarcou na van' : (novoStatus === 'ENTREGUE' ? 'entregue na escola' : 'marcado como ausente');
@@ -173,11 +193,41 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
     }
   };
 
+  // Cadastro de Novo Aluno na van pelo motorista
+  const handleCadastrarAluno = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!novoAlunoNome.trim() || !novoAlunoEndereco.trim()) return;
+    setCadastrandoAluno(true);
+    try {
+      const res = await TransportRepository.cadastrarNovoAlunoComCodigo({
+        nomeAluno: novoAlunoNome.trim(),
+        endereco: novoAlunoEndereco.trim(),
+        pontoReferencia: novoAlunoPontoRef.trim(),
+        escola: novoAlunoEscola.trim() || 'Colégio Santa Mônica',
+        nomeResponsavel: novoAlunoResponsavel.trim() || 'Responsável',
+        telefoneResponsavel: novoAlunoTelefone.trim() || '(21) 99999-8888'
+      });
+      setCodigoGeradoSucesso(res.codigoVinculo);
+      setNovoAlunoNome('');
+      setNovoAlunoEndereco('');
+      setNovoAlunoPontoRef('');
+      setNovoAlunoEscola('Colégio Santa Mônica');
+      setNovoAlunoResponsavel('');
+      setNovoAlunoTelefone('');
+      await carregarDadosZeroCache();
+      setMensagemSucesso(`Aluno cadastrado com sucesso! Código de vínculo: ${res.codigoVinculo}`);
+    } catch (err: unknown) {
+      console.error('Erro ao cadastrar aluno:', err);
+    } finally {
+      setCadastrandoAluno(false);
+    }
+  };
+
   // Acionamento do Kill-Switch remoto
   const handleConfirmarKillSwitch = async () => {
     try {
       const motivo = "Alerta manual do motorista: Dispositivo Comprometido / Suspeita de Acesso Não Autorizado";
-      await TransportRepository.acionarKillSwitch(1, motivo);
+      await TransportRepository.acionarKillSwitch(Number(viagemZeroCache?.motorista?.id || 1), motivo);
       setModalKillSwitchAberto(false);
       setDispositivoBloqueado(true);
       setMotivoBloqueio(motivo);
@@ -339,10 +389,31 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           </div>
 
           <div className="flex items-center gap-1.5">
+            {/* BOTÃO 2FA / TOTP */}
+            <button
+              onClick={async () => {
+                try {
+                  const current = viagemZeroCache?.motorista;
+                  const res = await TransportRepository.toggleTotp(!current?.totp_enabled);
+                  setMensagemSucesso(res.message || 'Configuração 2FA atualizada!');
+                  setTimeout(() => setMensagemSucesso(null), 3000);
+                  carregarDadosZeroCache();
+                } catch {
+                  setMensagemSucesso('Erro ao atualizar 2FA');
+                  setTimeout(() => setMensagemSucesso(null), 3000);
+                }
+              }}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 text-[11px] font-bold transition-all cursor-pointer"
+              title="Ativar ou desativar verificação em 2 etapas (TOTP)"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+              <span>{viagemZeroCache?.motorista?.totp_enabled ? '2FA: Ativo' : '2FA: Ativar'}</span>
+            </button>
+
             {/* BOTÃO CRÍTICO: KILL-SWITCH REMOTO / DISPOSITIVO COMPROMETIDO */}
             <button
               onClick={() => setModalKillSwitchAberto(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 text-[11px] font-bold transition-all active:scale-95 shadow-sm"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 text-[11px] font-bold transition-all active:scale-95 shadow-sm cursor-pointer"
               title="Acionar bloqueio imediato caso o dispositivo seja perdido ou comprometido"
             >
               <ShieldAlert className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
@@ -352,8 +423,11 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             {/* BOTÃO SAIR / LOGOUT */}
             {onLogout && (
               <button
-                onClick={onLogout}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] font-bold transition-all active:scale-95"
+                onClick={async () => {
+                  await TransportRepository.logout();
+                  onLogout();
+                }}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] font-bold transition-all active:scale-95 cursor-pointer"
                 title="Sair do painel e voltar ao Portal"
               >
                 <LogOut className="w-3.5 h-3.5 text-slate-400" />
@@ -378,7 +452,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-base font-bold text-slate-100 leading-tight">
-                  {motorista?.nome || "Tio David Santos"}
+                  {motorista?.nome || "Motorista"}
                 </h1>
                 <span className="bg-amber-400/10 text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-400/20">
                   MOTORISTA
@@ -386,10 +460,10 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
               </div>
               <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5">
                 <Bus className="w-3.5 h-3.5 text-amber-400" />
-                <span>Renault Master</span>
+                <span>{motorista?.veiculo_modelo || "Van Escolar"}</span>
                 <span className="text-slate-600">•</span>
                 <span className="font-mono font-semibold text-slate-300 bg-slate-800 px-1 rounded text-[11px]">
-                  RIO-2024
+                  {motorista?.veiculo_placa || "RIO-2026"}
                 </span>
               </p>
             </div>
@@ -469,6 +543,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
               coordenadas={coordenadas}
               isRotaAtiva={isRotaAtiva}
               compact={true}
+              motoristaNome={motorista?.nome}
             />
           )}
         </div>
@@ -487,21 +562,61 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
               </span>
             </div>
 
-            {/* Alternador de Modo Zero-Cache Sob Demanda */}
-            <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800 text-[11px] self-start sm:self-auto">
+            {/* Ações do Diário de Bordo: Toggle Endereços Dinâmicos, Botão Novo Aluno e Alternador Zero-Cache */}
+            <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+              {/* TOGGLE SWITCH: Aceitar Endereços Dinâmicos (Regra de Ouro - Controle do Motorista) */}
               <button
-                onClick={() => setApenasProximaParada(false)}
-                className={`px-2 py-0.5 rounded-lg font-medium transition-all ${!apenasProximaParada ? 'bg-amber-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
+                onClick={async () => {
+                  try {
+                    const novoVal = !aceitaDinamicos;
+                    setAceitaDinamicos(novoVal);
+                    await TransportRepository.toggleEnderecosDinamicos(viagemZeroCache?.motorista?.id || 1, novoVal);
+                    setMensagemSucesso(`Endereços dinâmicos ${novoVal ? 'ativados' : 'desativados'} para sua van.`);
+                    setTimeout(() => setMensagemSucesso(null), 3500);
+                    carregarDadosZeroCache();
+                  } catch {
+                    setMensagemSucesso('Erro ao alterar permissão de endereços dinâmicos.');
+                    setTimeout(() => setMensagemSucesso(null), 3000);
+                  }
+                }}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                  aceitaDinamicos
+                    ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 shadow-sm shadow-emerald-950/50'
+                    : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200'
+                }`}
+                title="Ligar/Desligar permissão para que pais configurem endereços diferentes por dia da semana"
               >
-                Bloco Rota
+                <span className={`w-3 h-3 rounded-full transition-all ${aceitaDinamicos ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+                <span>End. Dinâmicos: {aceitaDinamicos ? 'LIGADO' : 'DESLIGADO'}</span>
               </button>
+
               <button
-                onClick={() => setApenasProximaParada(true)}
-                className={`px-2 py-0.5 rounded-lg font-medium transition-all ${apenasProximaParada ? 'bg-cyan-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
-                title="Zero-Cache: Exibe estritamente a próxima parada pendente"
+                onClick={() => {
+                  setCodigoGeradoSucesso(null);
+                  setModalNovoAlunoAberto(true);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs transition-all shadow-sm active:scale-95 cursor-pointer"
+                title="Cadastrar novo aluno na van e gerar código de vínculo"
               >
-                Sob Demanda (1x1)
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>+ Aluno</span>
               </button>
+
+              <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800 text-[11px]">
+                <button
+                  onClick={() => setApenasProximaParada(false)}
+                  className={`px-2 py-0.5 rounded-lg font-medium transition-all ${!apenasProximaParada ? 'bg-amber-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
+                >
+                  Bloco Rota
+                </button>
+                <button
+                  onClick={() => setApenasProximaParada(true)}
+                  className={`px-2 py-0.5 rounded-lg font-medium transition-all ${apenasProximaParada ? 'bg-cyan-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
+                  title="Zero-Cache: Exibe estritamente a próxima parada pendente"
+                >
+                  1x1
+                </button>
+              </div>
             </div>
           </div>
 
@@ -509,6 +624,31 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             <div className="text-center py-10 text-slate-400 flex flex-col items-center gap-2">
               <RefreshCw className="w-6 h-6 animate-spin text-amber-400" />
               <span className="text-xs">Sincronizando dados efêmeros da rota...</span>
+            </div>
+          )}
+
+          {/* ESTADO VAZIO: NENHUM ALUNO NA VAN */}
+          {!carregando && paradasFiltradas.length === 0 && (
+            <div className="bg-slate-900/80 rounded-2xl border border-slate-800 p-8 text-center space-y-4 shadow-lg animate-fadeIn">
+              <div className="w-14 h-14 rounded-2xl bg-amber-400/10 border border-amber-400/30 flex items-center justify-center mx-auto text-amber-400">
+                <GraduationCap className="w-7 h-7" />
+              </div>
+              <div className="space-y-1.5">
+                <h3 className="text-base font-bold text-slate-100">Van Vazia (0 Passageiros)</h3>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
+                  Este novo motorista ainda não possui alunos vinculados. Cadastre o primeiro aluno da sua rota para gerar o código de vínculo (ex: <strong>VAN-XXXX</strong>) para os pais.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setCodigoGeradoSucesso(null);
+                  setModalNovoAlunoAberto(true);
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs transition-all shadow-md shadow-amber-400/20 active:scale-95 cursor-pointer"
+              >
+                <UserPlus className="w-4 h-4" />
+                <span>Cadastrar Primeiro Aluno</span>
+              </button>
             </div>
           )}
 
@@ -552,11 +692,13 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                         )}
                       </div>
 
-                      {/* ENDEREÇO MASCARADO: "Rua F... - Próximo à Praça" */}
+                      {/* ENDEREÇO MASCARADO (LGPD) */}
                       <div className="mt-1 space-y-0.5">
                         <p className="text-xs font-semibold text-cyan-300 flex items-center gap-1">
                           <MapPin className="w-3 h-3 text-cyan-400 shrink-0" />
-                          <span className="font-mono">{item.endereco_mascarado}</span>
+                          <span className="font-mono">
+                            {item.endereco_mascarado ? item.endereco_mascarado.replace(/\d+/g, '').replace(/(\.\.\.)\./g, '$1') : 'Endereço Restrito (LGPD)'}
+                          </span>
                         </p>
                         <p className="text-[11px] text-slate-400">
                           Ref: <strong className="text-slate-300">{item.ponto_referencia_generico}</strong>
@@ -691,7 +833,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                       <Phone className="w-3.5 h-3.5" />
                     </a>
                     <a
-                      href={`https://wa.me/55${item.telefone_para_chamada.replace(/\D/g, '')}?text=Ol%C3%A1,%20aqui%20%C3%A9%20o%20Tio%20David%20do%20transporte%20escolar.`}
+                      href={`https://wa.me/55${item.telefone_para_chamada.replace(/\D/g, '')}?text=Ol%C3%A1,%20aqui%20%C3%A9%20${encodeURIComponent(motorista?.nome || 'o motorista')}%20do%20transporte%20escolar.`}
                       target="_blank"
                       rel="noreferrer"
                       className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-400 transition-colors"
@@ -745,6 +887,186 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                 Ativar Kill-Switch
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CADASTRO DE NOVO ALUNO / GERADOR DE CÓDIGO DE VÍNCULO */}
+      {modalNovoAlunoAberto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-5 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-amber-400/20 text-amber-400">
+                  <UserPlus className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-100">Cadastrar Novo Aluno</h3>
+                  <p className="text-[11px] text-slate-400">Adicione uma nova parada e gere o código para os pais</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setModalNovoAlunoAberto(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {codigoGeradoSucesso ? (
+              <div className="space-y-4 text-center py-2 animate-fadeIn">
+                <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center mx-auto">
+                  <CheckCircle2 className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-slate-100">Aluno Cadastrado com Sucesso!</h4>
+                  <p className="text-xs text-slate-400">
+                    Envie o código de vínculo abaixo para o responsável conectar o aplicativo dos pais:
+                  </p>
+                </div>
+
+                <div className="p-3 bg-slate-950 border-2 border-dashed border-amber-400/40 rounded-2xl flex items-center justify-between gap-2 max-w-xs mx-auto">
+                  <span className="font-mono text-xl font-black text-amber-300 tracking-wider">
+                    {codigoGeradoSucesso}
+                  </span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(codigoGeradoSucesso);
+                      setCopiado(true);
+                      setTimeout(() => setCopiado(false), 2000);
+                    }}
+                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 text-xs font-bold flex items-center gap-1 transition-all"
+                    title="Copiar código de vínculo"
+                  >
+                    <Copy className="w-4 h-4" />
+                    <span>{copiado ? 'Copiado!' : 'Copiar'}</span>
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <a
+                    href={`https://wa.me/?text=${encodeURIComponent(
+                      `Olá! Sou ${motorista?.nome || 'o motorista'} do transporte escolar. Seu código exclusivo de vínculo do aluno no aplicativo é: ${codigoGeradoSucesso}. Este código é de uso único.`
+                    )}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  >
+                    <MessageCircle className="w-4 h-4" />
+                    <span>Enviar Código via WhatsApp</span>
+                  </a>
+
+                  <button
+                    onClick={() => setModalNovoAlunoAberto(false)}
+                    className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs transition-all cursor-pointer"
+                  >
+                    Concluir e Ver no Diário de Bordo
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleCadastrarAluno} className="space-y-3">
+                <div>
+                  <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                    Nome Completo do Aluno *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Pedro Henrique Silva"
+                    value={novoAlunoNome}
+                    onChange={(e) => setNovoAlunoNome(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                    Endereço de Embarque *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: Rua Tirol, 412 - Freguesia"
+                    value={novoAlunoEndereco}
+                    onChange={(e) => setNovoAlunoEndereco(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                      Ponto de Referência
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: Ao lado da padaria"
+                      value={novoAlunoPontoRef}
+                      onChange={(e) => setNovoAlunoPontoRef(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                      Escola de Destino
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: Colégio Santa Mônica"
+                      value={novoAlunoEscola}
+                      onChange={(e) => setNovoAlunoEscola(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                      Nome do Responsável
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: Marcos Silva"
+                      value={novoAlunoResponsavel}
+                      onChange={(e) => setNovoAlunoResponsavel(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
+                      Telefone / WhatsApp
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: (21) 98765-4321"
+                      value={novoAlunoTelefone}
+                      onChange={(e) => setNovoAlunoTelefone(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setModalNovoAlunoAberto(false)}
+                    className="py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={cadastrandoAluno}
+                    className="py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                  >
+                    {cadastrandoAluno ? <RefreshCw className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
+                    <span>Salvar e Gerar Código</span>
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

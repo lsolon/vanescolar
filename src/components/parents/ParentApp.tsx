@@ -119,11 +119,11 @@ export const ParentApp: React.FC<ParentAppProps> = ({
         ? `${motivoSelecionado} - ${observacaoTexto.trim()}`
         : motivoSelecionado;
 
-      await TransportRepository.avisarAusencia(dados.aluno.id, motivoFinal);
+      await TransportRepository.avisarAusencia(Number(dados.aluno.id), motivoFinal);
       await carregarDados();
 
       setModalAusenciaAberto(false);
-      setSucessoFeedback('Ausência comunicada ao Tio David com sucesso!');
+      setSucessoFeedback(`Ausência comunicada ao motorista (${dados.motorista.nome}) com sucesso!`);
       setTimeout(() => setSucessoFeedback(null), 4000);
     } catch (err) {
       console.error('Erro ao avisar ausência:', err);
@@ -136,7 +136,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
   const handleCancelarAusencia = async () => {
     if (!dados) return;
     try {
-      await TransportRepository.cancelarAvisoAusencia(dados.aluno.id);
+      await TransportRepository.cancelarAvisoAusencia(Number(dados.aluno.id));
       await carregarDados();
       setSucessoFeedback('Aviso de ausência cancelado! Maria Clara aguarda a van.');
       setTimeout(() => setSucessoFeedback(null), 4000);
@@ -180,10 +180,16 @@ export const ParentApp: React.FC<ParentAppProps> = ({
       subtitulo: parada.motivo_ausencia || "A van não passará no ponto hoje",
       corBadge: "bg-rose-500/15 text-rose-400 border-rose-500/30",
       progressoPct: 0
+    },
+    Aguardando: {
+      titulo: "Van Aguardando Partida",
+      subtitulo: "A rota inicia às 06:40 na Freguesia",
+      corBadge: "bg-amber-500/10 text-amber-400 border-amber-500/30",
+      progressoPct: 10
     }
   };
 
-  const statusConfig = statusLabels[parada.status_embarque];
+  const statusConfig = statusLabels[parada.status_embarque as keyof typeof statusLabels] || statusLabels.PENDENTE;
 
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-100 font-sans">
@@ -370,7 +376,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
           {/* Barra de Progresso Visual da Viagem */}
           <div className="mt-3 pt-2">
             <div className="flex justify-between text-[11px] text-slate-400 mb-1 font-medium">
-              <span>{aluno.endereco_embarque_real.split(',')[0]} (Casa)</span>
+              <span>{aluno.endereco_embarque_real ? aluno.endereco_embarque_real.split(',')[0] : 'Endereço'} (Casa)</span>
               <span>Colégio Santa Mônica</span>
             </div>
             <div className="h-2 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800">
@@ -400,10 +406,11 @@ export const ParentApp: React.FC<ParentAppProps> = ({
             paradas={[parada]}
             highlightAlunoId={201}
             ocultarOutrasParadas={true}
+            motoristaNome={motorista.nome}
           />
         </div>
 
-        {/* CARD DO MOTORISTA DAVID & VEÍCULO */}
+        {/* CARD DO MOTORISTA & VEÍCULO */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md">
           <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">
             Motorista Responsável
@@ -427,7 +434,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
               </div>
             </div>
 
-            {/* Ações de contato com o David */}
+            {/* Ações de contato com o Motorista */}
             <div className="flex items-center gap-2">
               <a
                 href={`tel:${motorista.telefone.replace(/\D/g, '')}`}
@@ -437,7 +444,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
                 <Phone className="w-4 h-4" />
               </a>
               <a
-                href={`https://wa.me/55${motorista.telefone.replace(/\D/g, '')}?text=Ol%C3%A1%20Tio%20David,%20aqui%20%C3%A9%20o%20Leandro,%20pai%20da%20Maria%20Clara.`}
+                href={`https://wa.me/55${motorista.telefone.replace(/\D/g, '')}?text=Ol%C3%A1%20${encodeURIComponent(motorista.nome)},%20aqui%20%C3%A9%20o%20respons%C3%A1vel%20pelo%20transporte%20escolar.`}
                 target="_blank"
                 rel="noreferrer"
                 className="p-2.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 transition-all border border-emerald-500/30"
@@ -456,9 +463,9 @@ export const ParentApp: React.FC<ParentAppProps> = ({
               <School className="w-5 h-5" />
             </div>
             <div>
-              <h4 className="text-sm font-bold text-slate-100">{aluno.escola_destino}</h4>
+              <h4 className="text-sm font-bold text-slate-100">{aluno.escola_destino || 'Colégio Santa Mônica'}</h4>
               <p className="text-xs text-slate-400 mt-0.5">
-                Turma: {aluno.turma} • Turno {aluno.turno === 'MANHA' ? 'Matutino' : 'Vespertino'}
+                Turma: {aluno.turma || '4º Ano'} • Turno {aluno.turno === 'MANHA' ? 'Matutino' : 'Vespertino'}
               </p>
             </div>
           </div>
