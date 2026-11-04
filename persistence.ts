@@ -113,7 +113,17 @@ export class Persistence {
   private saving: Promise<void> = Promise.resolve();
   private getSnapshot: (() => Snapshot) | null = null;
 
+  /** Motivo (código curto, sem dados sensíveis) pelo qual o armazenamento durável não está ativo. */
+  reason = '';
+
   constructor(private store: DocStore | null, private delayMs = 2000) {}
+
+  /** Desativa a gravação (ex.: falha ao ler o estado salvo). Evita sobrescrever dados reais com estado vazio. */
+  disable(reason: string) {
+    this.store = null;
+    this.reason = reason;
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+  }
 
   get kind() {
     return this.store ? this.store.kind : 'memory';
@@ -170,6 +180,8 @@ export class Persistence {
 /** Monta a persistência escolhida pelo ambiente. Em caso de falha ao iniciar o Firestore, cai para memória. */
 export async function createPersistence(env: NodeJS.ProcessEnv = process.env): Promise<Persistence> {
   const kind = chooseStoreKind(env);
+  let reason = '';
+  if (kind === 'memory') reason = env.PERSISTENCE === 'memory' ? 'PERSISTENCE=memory' : 'sem_FIREBASE_SERVICE_ACCOUNT_nem_DATA_DIR';
   try {
     if (kind === 'firestore') {
       return new Persistence(new FirestoreStore(await createFirestoreFromEnv()));
@@ -179,6 +191,9 @@ export async function createPersistence(env: NodeJS.ProcessEnv = process.env): P
     }
   } catch (err: any) {
     console.error('[Persistência] Não foi possível iniciar o armazenamento, usando memória:', err?.message || err);
+    reason = err instanceof SyntaxError ? 'FIREBASE_SERVICE_ACCOUNT_nao_e_json_valido' : 'falha_ao_iniciar_firestore';
   }
-  return new Persistence(null);
+  const p = new Persistence(null);
+  p.reason = reason;
+  return p;
 }

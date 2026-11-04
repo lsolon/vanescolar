@@ -85,3 +85,15 @@ test('Persistence em memória: não grava nada e não quebra', async () => {
   assert.deepEqual(await p.load(), {});
   assert.equal(p.kind, 'memory');
 });
+
+test('Persistence.disable: para de gravar e informa o motivo (não sobrescreve dados reais)', async () => {
+  const { db, writes } = fakeFirestore();
+  const p = new Persistence(new FirestoreStore(db), 10);
+  p.attach(() => snap(1) as any);
+  p.disable('falha_ao_ler_firestore');
+  p.scheduleSave();
+  await p.flush();
+  assert.equal(writes.length, 0);
+  assert.equal(p.kind, 'memory');
+  assert.equal(p.reason, 'falha_ao_ler_firestore');
+});
