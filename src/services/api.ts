@@ -1347,7 +1347,9 @@ export const TransportRepository = {
     const mot = motoristasDB.find(m => String(m.id) === String(id_motorista) || m.uuid === String(id_motorista));
     const aceitaDinamicos = mot ? mot.aceita_enderecos_dinamicos : false;
 
-    const dataObj = dataStr ? new Date(dataStr) : new Date();
+    // 'YYYY-MM-DD' deve ser lido como data LOCAL; new Date('2026-11-02') é meia-noite UTC e, no Brasil (UTC-3), cairia no dia anterior.
+    const m = dataStr ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(dataStr) : null;
+    const dataObj = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : dataStr ? new Date(dataStr) : new Date();
     const diasSemanaMap: Record<number, 'DOMINGO' | 'SEGUNDA' | 'TERCA' | 'QUARTA' | 'QUINTA' | 'SEXTA' | 'SABADO'> = {
       0: 'DOMINGO',
       1: 'SEGUNDA',

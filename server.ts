@@ -35,6 +35,28 @@ function safeEqual(a: string, b: string): boolean {
   return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
 }
 
+// ---------------------------------------------------------------------------
+// SENHAS: scrypt com salt aleatório por usuário, formato "s1$<salt>$<hash>".
+// Hashes antigos (salt fixo, sem "$") ainda são aceitos e migrados no próximo login.
+// ---------------------------------------------------------------------------
+const LEGACY_SALT = 'salt-van-escolar';
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return `s1$${salt}$${crypto.scryptSync(password, salt, 64).toString('hex')}`;
+}
+function verifyPassword(password: unknown, stored: string): boolean {
+  if (typeof password !== 'string' || !password || !stored) return false;
+  if (stored.startsWith('s1$')) {
+    const [, salt, hash] = stored.split('$');
+    return !!salt && !!hash && safeEqual(hash, crypto.scryptSync(password, salt, 64).toString('hex'));
+  }
+  return safeEqual(stored, crypto.scryptSync(password, LEGACY_SALT, 64).toString('hex'));
+}
+/** Se o hash ainda é do formato antigo, regrava no formato novo (chamar após senha correta). */
+function upgradePasswordHash(user: { passwordHash: string }, password: string) {
+  if (user.passwordHash && !user.passwordHash.startsWith('s1$')) user.passwordHash = hashPassword(password);
+}
+
 // Verifica um ID Token do Firebase (assinatura Google, emissor e audiência). Retorna e-mail verificado ou null.
 const firebaseJwks = FIREBASE_PROJECT_ID
   ? createRemoteJWKSet(new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'))
@@ -144,7 +166,7 @@ let usersDB: UserRecord[] = [
     id: 1,
     fullName: 'Tio David Santos',
     email: 'david.santos@vanescolar.com.br',
-    passwordHash: SEED_LOGIN_ENABLED ? crypto.scryptSync('password123', 'salt-van-escolar', 64).toString('hex') : '',
+    passwordHash: SEED_LOGIN_ENABLED ? hashPassword('password123') : '',
     role: 'motorista',
     emailVerified: true,
     totpEnabled: false,
@@ -159,7 +181,7 @@ let usersDB: UserRecord[] = [
     id: 2,
     fullName: 'Tio Carlos Souza',
     email: 'carlos.souza@vanescolar.com.br',
-    passwordHash: SEED_LOGIN_ENABLED ? crypto.scryptSync('password123', 'salt-van-escolar', 64).toString('hex') : '',
+    passwordHash: SEED_LOGIN_ENABLED ? hashPassword('password123') : '',
     role: 'motorista',
     emailVerified: true,
     totpEnabled: false,
@@ -174,7 +196,7 @@ let usersDB: UserRecord[] = [
     id: 101,
     fullName: 'Leandro Solon',
     email: 'leandrosolon@gmail.com',
-    passwordHash: SEED_LOGIN_ENABLED ? crypto.scryptSync('123456abcd', 'salt-van-escolar', 64).toString('hex') : '',
+    passwordHash: SEED_LOGIN_ENABLED ? hashPassword('123456abcd') : '',
     role: 'motorista',
     emailVerified: true,
     phone: '(21) 99123-4567',
@@ -674,7 +696,7 @@ async function startServer() {
       id: newDriverId,
       fullName: fullName.trim(),
       email: email.trim().toLowerCase(),
-      passwordHash: password ? crypto.scryptSync(password, 'salt-van-escolar', 64).toString('hex') : '',
+      passwordHash: password ? hashPassword(password) : '',
       role: 'motorista',
       emailVerified: true,
       phone: phone || '(21) 98765-4321',
@@ -726,10 +748,10 @@ async function startServer() {
 
     // Sem token Google/Firebase verificado, a senha é OBRIGATÓRIA.
     if (!verified) {
-      const passHash = crypto.scryptSync(String(password || ''), 'salt-van-escolar', 64).toString('hex');
-      if (!password || !user.passwordHash || !safeEqual(user.passwordHash, passHash)) {
+      if (!verifyPassword(password, user.passwordHash)) {
         return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
       }
+      upgradePasswordHash(user, password);
     }
 
     const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
@@ -768,10 +790,10 @@ async function startServer() {
 
     // Sem token Google/Firebase verificado, a senha é OBRIGATÓRIA.
     if (!verified) {
-      const passHash = crypto.scryptSync(String(password || ''), 'salt-van-escolar', 64).toString('hex');
-      if (!password || !user.passwordHash || !safeEqual(user.passwordHash, passHash)) {
+      if (!verifyPassword(password, user.passwordHash)) {
         return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
       }
+      upgradePasswordHash(user, password);
     }
 
     const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
@@ -906,7 +928,7 @@ async function startServer() {
     if (existing) {
       return res.status(400).json({ error: 'E-mail de motorista já cadastrado.' });
     }
-    const passwordHash = crypto.scryptSync(password, 'salt-van-escolar', 64).toString('hex');
+    const passwordHash = hashPassword(password);
     const newDriver: UserRecord = {
       id: usersDB.length + 200,
       fullName: fullName.trim(),
@@ -1024,7 +1046,7 @@ async function startServer() {
       return res.status(400).json({ error: 'Não foi possível completar o cadastro com este e-mail.' });
     }
 
-    const passwordHash = crypto.scryptSync(password, 'salt-van-escolar', 64).toString('hex');
+    const passwordHash = hashPassword(password);
     const newUser: UserRecord = {
       id: 200 + usersDB.length + 1,
       fullName: fullName.trim(),
