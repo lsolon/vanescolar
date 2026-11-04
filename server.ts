@@ -10,12 +10,53 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const DEMO_MODE = process.env.DEMO_MODE === 'true';
-const SESSION_SECRET = process.env.SESSION_SECRET || 'van-escolar-fixed-secret-key-2026';
+// SEGURANÇA: o segredo de sessão NUNCA pode ser um valor público (o repositório é público).
+// Em produção é obrigatório definir SESSION_SECRET; em desenvolvimento gera um segredo aleatório por execução.
+const SESSION_SECRET = (() => {
+  const fromEnv = process.env.SESSION_SECRET;
+  if (fromEnv && fromEnv.length >= 32) return fromEnv;
+  if (process.env.NODE_ENV === 'production') {
+    console.error('[VanEscolar Server] ERRO: defina SESSION_SECRET (mín. 32 caracteres) no ambiente de produção.');
+    process.exit(1);
+  }
+  console.warn('[VanEscolar Server] SESSION_SECRET ausente/curto: usando segredo aleatório (sessões caem ao reiniciar).');
+  return crypto.randomBytes(48).toString('hex');
+})();
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+// Contas de demonstração (senhas conhecidas) só existem fora de produção ou com DEMO_MODE=true.
+const SEED_LOGIN_ENABLED = DEMO_MODE || process.env.NODE_ENV !== 'production';
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || '';
+
+function safeEqual(a: string, b: string): boolean {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+}
+
+// Verifica um ID Token do Firebase (assinatura Google, emissor e audiência). Retorna e-mail verificado ou null.
+const firebaseJwks = FIREBASE_PROJECT_ID
+  ? createRemoteJWKSet(new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com'))
+  : null;
+async function verifyFirebaseIdToken(idToken: unknown): Promise<{ email: string } | null> {
+  if (!firebaseJwks || typeof idToken !== 'string' || idToken.length < 20) return null;
+  try {
+    const { payload } = await jwtVerify(idToken, firebaseJwks, {
+      issuer: `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`,
+      audience: FIREBASE_PROJECT_ID
+    });
+    const email = typeof payload.email === 'string' ? payload.email.trim().toLowerCase() : '';
+    if (!email || payload.email_verified === false) return null;
+    return { email };
+  } catch {
+    return null;
+  }
+}
 
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'leandrosolon@gmail.com,admin@vanescolar.com.br')
   .split(',')
@@ -47,7 +88,7 @@ function verifyToken(token: string): SessionPayload | null {
     const [dataStr, signature] = token.split('.');
     if (!dataStr || !signature) return null;
     const expectedSig = crypto.createHmac('sha256', SESSION_SECRET).update(dataStr).digest('base64url');
-    if (signature !== expectedSig) return null;
+    if (!safeEqual(signature, expectedSig)) return null;
     const payload: SessionPayload = JSON.parse(Buffer.from(dataStr, 'base64url').toString());
     if (payload.exp < Date.now()) return null;
     return payload;
@@ -106,7 +147,7 @@ let usersDB: UserRecord[] = [
     id: 1,
     fullName: 'Tio David Santos',
     email: 'david.santos@vanescolar.com.br',
-    passwordHash: crypto.scryptSync('password123', 'salt-van-escolar', 64).toString('hex'),
+    passwordHash: SEED_LOGIN_ENABLED ? crypto.scryptSync('password123', 'salt-van-escolar', 64).toString('hex') : '',
     role: 'motorista',
     emailVerified: true,
     totpEnabled: false,
@@ -121,7 +162,7 @@ let usersDB: UserRecord[] = [
     id: 2,
     fullName: 'Tio Carlos Souza',
     email: 'carlos.souza@vanescolar.com.br',
-    passwordHash: crypto.scryptSync('password123', 'salt-van-escolar', 64).toString('hex'),
+    passwordHash: SEED_LOGIN_ENABLED ? crypto.scryptSync('password123', 'salt-van-escolar', 64).toString('hex') : '',
     role: 'motorista',
     emailVerified: true,
     totpEnabled: false,
@@ -136,7 +177,7 @@ let usersDB: UserRecord[] = [
     id: 101,
     fullName: 'Leandro Solon',
     email: 'leandrosolon@gmail.com',
-    passwordHash: crypto.scryptSync('123456abcd', 'salt-van-escolar', 64).toString('hex'),
+    passwordHash: SEED_LOGIN_ENABLED ? crypto.scryptSync('123456abcd', 'salt-van-escolar', 64).toString('hex') : '',
     role: 'motorista',
     emailVerified: true,
     phone: '(21) 99123-4567',
@@ -540,8 +581,13 @@ async function startServer() {
   });
 
   // LOGIN DO MOTORISTA (E-MAIL OU GOOGLE VIA ID TOKEN)
-  app.post('/api/auth/login-motorista', rateLimiter(10, 60000), (req: Request, res: Response) => {
+  app.post('/api/auth/login-motorista', rateLimiter(10, 60000), async (req: Request, res: Response) => {
     const { email, idToken, password } = req.body;
+    const verified = idToken ? await verifyFirebaseIdToken(idToken) : null;
+    // Token verificado de OUTRO e-mail nunca vale; token não verificável cai na checagem de senha abaixo.
+    if (verified && verified.email !== String(email || '').trim().toLowerCase()) {
+      return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
+    }
     
     // Em um sistema real, aqui verificaríamos o idToken com firebase-admin
     // Aqui simulamos a busca pelo usuário via e-mail
@@ -550,14 +596,14 @@ async function startServer() {
     );
 
     if (!user) {
-      return res.status(401).json({ error: 'Conta de motorista não encontrada.' });
+      return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
     }
 
-    // Se houver password (login direto legado/teste), valida hash
-    if (password) {
-      const passHash = crypto.scryptSync(password, 'salt-van-escolar', 64).toString('hex');
-      if (user.passwordHash !== passHash) {
-        return res.status(401).json({ error: 'Senha incorreta.' });
+    // Sem token Google/Firebase verificado, a senha é OBRIGATÓRIA.
+    if (!verified) {
+      const passHash = crypto.scryptSync(String(password || ''), 'salt-van-escolar', 64).toString('hex');
+      if (!password || !user.passwordHash || !safeEqual(user.passwordHash, passHash)) {
+        return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
       }
     }
 
@@ -581,19 +627,25 @@ async function startServer() {
   });
 
   // LOGIN DO RESPONSÁVEL (E-MAIL OU GOOGLE VIA ID TOKEN)
-  app.post('/api/auth/login-email', rateLimiter(10, 60000), (req: Request, res: Response) => {
+  app.post('/api/auth/login-email', rateLimiter(10, 60000), async (req: Request, res: Response) => {
     const { email, password, idToken } = req.body;
+    const verified = idToken ? await verifyFirebaseIdToken(idToken) : null;
+    // Token verificado de OUTRO e-mail nunca vale; token não verificável cai na checagem de senha abaixo.
+    if (verified && verified.email !== String(email || '').trim().toLowerCase()) {
+      return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
+    }
 
     const user = usersDB.find((u) => u.email.toLowerCase() === email?.toLowerCase());
 
     if (!user) {
-      return res.status(401).json({ error: 'E-mail não cadastrado.' });
+      return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
     }
 
-    if (password && !idToken) {
-      const passHash = crypto.scryptSync(password, 'salt-van-escolar', 64).toString('hex');
-      if (user.passwordHash !== passHash) {
-        return res.status(401).json({ error: 'Senha incorreta.' });
+    // Sem token Google/Firebase verificado, a senha é OBRIGATÓRIA.
+    if (!verified) {
+      const passHash = crypto.scryptSync(String(password || ''), 'salt-van-escolar', 64).toString('hex');
+      if (!password || !user.passwordHash || !safeEqual(user.passwordHash, passHash)) {
+        return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
       }
     }
 
@@ -604,11 +656,14 @@ async function startServer() {
     res.json({ sucesso: true, token, role, emailVerified: user.emailVerified, studentId: user.studentId });
   });
 
-  app.post('/api/auth/google', rateLimiter(10, 60000), (req: Request, res: Response) => {
-    const { email, fullName, idToken } = req.body;
-    if (!email) {
-      return res.status(400).json({ error: 'E-mail Google obrigatório.' });
+  app.post('/api/auth/google', rateLimiter(10, 60000), async (req: Request, res: Response) => {
+    const { fullName, idToken } = req.body;
+    // O e-mail vem SOMENTE do token verificado, nunca do corpo da requisição.
+    const verified = await verifyFirebaseIdToken(idToken);
+    if (!verified) {
+      return res.status(401).json({ error: 'Não foi possível validar o login com Google.' });
     }
+    const email = verified.email;
 
     let user = usersDB.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
     if (!user) {
@@ -790,20 +845,23 @@ async function startServer() {
     res.status(400).json({ error: 'Formato de e-mails inválido' });
   });
 
-  app.post('/api/admin/auth', (req: Request, res: Response) => {
-    const { email, idToken } = req.body;
-    const sanitizedEmail = email?.trim().toLowerCase();
-    
-    console.log(`[ADMIN_AUTH] Tentativa de login: "${sanitizedEmail}"`);
-    console.log(`[ADMIN_AUTH] Admins Permitidos: ${JSON.stringify(ADMIN_EMAILS)}`);
+  app.post('/api/admin/auth', rateLimiter(10, 60000), async (req: Request, res: Response) => {
+    const { email, idToken, password } = req.body;
+    // Prova de identidade obrigatória: token Google/Firebase verificado OU senha de admin (ADMIN_PASSWORD).
+    const verified = idToken ? await verifyFirebaseIdToken(idToken) : null;
+    const passwordOk = !!ADMIN_PASSWORD && typeof password === 'string' && safeEqual(password, ADMIN_PASSWORD);
+    const sanitizedEmail = (verified ? verified.email : String(email || '')).trim().toLowerCase();
+
+    if (!verified && !passwordOk) {
+      auditLog('TENTATIVA_LOGIN_ADMIN_NEGADA', sanitizedEmail || 'desconhecido', 'Prova de identidade ausente ou inválida');
+      return res.status(401).json({ error: 'Credenciais de administrador inválidas.' });
+    }
 
     if (!sanitizedEmail || !ADMIN_EMAILS.includes(sanitizedEmail)) {
-      console.error(`[ADMIN_AUTH] ACESSO NEGADO: ${sanitizedEmail}`);
       auditLog('TENTATIVA_LOGIN_ADMIN_NEGADA', sanitizedEmail || 'desconhecido', 'E-mail não está na lista de administradores');
       return res.status(403).json({ error: 'Acesso não autorizado. Você não possui privilégios de administrador.' });
     }
 
-    console.log(`[ADMIN_AUTH] ACESSO CONCEDIDO: ${sanitizedEmail}`);
 
     let user = usersDB.find((u) => u.email.toLowerCase() === sanitizedEmail);
     if (!user) {

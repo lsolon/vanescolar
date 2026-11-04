@@ -13,6 +13,7 @@ import { RealTestModal } from './components/shared/RealTestModal';
 import { LandingPage } from './components/auth/LandingPage';
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { TransportRepository, subscribeToDatabaseChanges } from './services/api';
+import { AuthService } from './services/auth';
 import {
   Bus,
   Users,
@@ -40,13 +41,18 @@ export default function App() {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const role = params.get('role')?.toLowerCase() || params.get('view')?.toLowerCase();
-      if (role === 'motorista' || role === 'driver') {
+      const temSessao = !!AuthService.getSessionToken();
+      const rolePrecisaLogin = ['motorista', 'driver', 'pais', 'parent', 'pai'].includes(role || '');
+      if (rolePrecisaLogin && !temSessao && !isDemoMode) {
+        // Sem login (e fora do modo demonstração): volta para a tela de entrada
+        setViewMode('LANDING');
+      } else if (role === 'motorista' || role === 'driver') {
         setViewMode('DRIVER');
         setIsStandaloneMobile(true);
       } else if (role === 'pais' || role === 'parent' || role === 'pai') {
         setViewMode('PARENT');
         setIsStandaloneMobile(true);
-      } else if (role === 'dupla' || role === 'dual' || role === 'simulador') {
+      } else if ((role === 'dupla' || role === 'dual' || role === 'simulador') && isDemoMode) {
         setViewMode('DUAL');
       } else if (window.location.pathname === '/admin' || role === 'admin') {
         setViewMode('ADMIN');
@@ -167,7 +173,7 @@ export default function App() {
                   title="Voltar à tela inicial de login"
                 >
                   <ArrowLeft className="w-3.5 h-3.5" />
-                  <span>Portal / Trocar Login</span>
+                  <span>{isDemoMode ? 'Portal / Trocar Login' : 'Voltar'}</span>
                 </button>
 
                 <div className="flex items-center gap-2">
@@ -185,7 +191,8 @@ export default function App() {
                 </div>
               </div>
 
-              {/* SELETOR RÁPIDO DE INTERFACES */}
+              {/* SELETOR RÁPIDO DE INTERFACES (apenas no modo demonstração) */}
+              {isDemoMode && (
               <div className="flex items-center gap-1 bg-slate-950 p-1.5 rounded-2xl border border-slate-800 text-xs">
                 <button
                   onClick={() => navigateTo('DUAL')}
@@ -224,20 +231,21 @@ export default function App() {
                   <span>App dos Pais</span>
                 </button>
               </div>
+              )}
 
               {/* CONTROLES DE SIMULAÇÃO DE GPS & QR CODE */}
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setIsFastGPS(!isFastGPS)}
-                  title="Alternar velocidade de simulação do GPS"
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono border border-slate-700 transition-all"
-                >
-                  <Gauge className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>GPS: {isFastGPS ? '3s' : '10s'}</span>
-                </button>
-
                 {isDemoMode && (
                   <>
+                    <button
+                      onClick={() => setIsFastGPS(!isFastGPS)}
+                      title="Alternar velocidade de simulação do GPS"
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono border border-slate-700 transition-all"
+                    >
+                      <Gauge className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>GPS: {isFastGPS ? '3s' : '10s'}</span>
+                    </button>
+
                     <button
                       onClick={handleLimparDados}
                       title="Limpar dados e sair do ambiente de teste"
