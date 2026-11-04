@@ -492,11 +492,10 @@ export const TransportRepository = {
 
   async loginMotoristaEmail(email: string, password: string) {
     await sleep();
-    // 1. Firebase Login
-    const userCredential = await AuthService.loginWithEmail(email, password);
-    const idToken = await userCredential.user.getIdToken();
+    // E-mail + senha são validados pelo próprio servidor (o Firebase é usado só no login com Google).
+    const idToken: string | undefined = undefined;
 
-    // 2. Server Exchange
+    // Server Exchange
     const res = await fetch(`${getBaseUrl()}/api/auth/login-motorista`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -557,11 +556,10 @@ export const TransportRepository = {
   }) {
     await sleep();
     
-    // 1. Firebase Register
-    const userCredential = await AuthService.registerWithEmail(params.email, params.password);
-    const firebaseUid = userCredential.user.uid;
+    // Cadastro com e-mail + senha é feito só no servidor (o Firebase é usado só no login com Google).
+    const firebaseUid: string | undefined = undefined;
 
-    // 2. Server Sync
+    // Server Sync
     const res = await fetch(`${getBaseUrl()}/api/auth/register-motorista`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -748,11 +746,10 @@ export const TransportRepository = {
   async registrarResponsavel(params: { fullName: string; email: string; password: string; lgpdConsent: boolean }) {
     await sleep();
     
-    // 1. Firebase Register
-    const userCredential = await AuthService.registerWithEmail(params.email, params.password);
-    const firebaseUid = userCredential.user.uid;
+    // Cadastro com e-mail + senha é feito só no servidor (o Firebase é usado só no login com Google).
+    const firebaseUid: string | undefined = undefined;
 
-    // 2. Server Sync
+    // Server Sync
     const res = await fetch(`${getBaseUrl()}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -774,11 +771,10 @@ export const TransportRepository = {
   async loginEmail(email: string, password: string) {
     await sleep();
     
-    // 1. Firebase Login
-    const userCredential = await AuthService.loginWithEmail(email, password);
-    const idToken = await userCredential.user.getIdToken();
+    // E-mail + senha são validados pelo próprio servidor (o Firebase é usado só no login com Google).
+    const idToken: string | undefined = undefined;
 
-    // 2. Server Exchange
+    // Server Exchange
     const res = await fetch(`${getBaseUrl()}/api/auth/login-email`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
