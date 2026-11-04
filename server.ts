@@ -102,6 +102,7 @@ interface UserRecord {
   emailVerified: boolean;
   totpEnabled?: boolean;
   totpSecret?: string;
+  prefs?: { estilo: 'A' | 'B' | 'C'; avisoMin: number };
   phone?: string;
   whatsapp?: string;
   veiculoModelo?: string;
@@ -447,6 +448,75 @@ function perfilMotorista(driverId: number) {
   };
 }
 
+// ============================================================================
+// PROXIMIDADE DA VAN (privacidade): o responsável recebe só um resumo calculado no servidor
+// (estado, progresso, minutos). Coordenadas da van só saem quando a próxima parada é a do aluno.
+// ============================================================================
+const MIN_POR_PARADA = 4;
+const AVISOS_VALIDOS = [3, 5, 10, 15, 20, 30];
+const ESTILOS_VALIDOS = ['A', 'B', 'C'];
+const PREFS_PADRAO = { estilo: 'C' as 'A' | 'B' | 'C', avisoMin: 10 };
+function prefsDe(userId?: number) {
+  const u = usersDB.find((x) => x.id === userId);
+  return { ...PREFS_PADRAO, ...(u?.prefs || {}) };
+}
+function haversineKm(a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) {
+  const R = 6371, rad = Math.PI / 180;
+  const dLat = (b.latitude - a.latitude) * rad, dLng = (b.longitude - a.longitude) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.latitude * rad) * Math.cos(b.latitude * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+interface Proximidade {
+  estado: 'aguardando' | 'a_caminho' | 'proxima' | 'embarcou' | 'entregue' | 'ausente' | 'encerrada';
+  rotaAtiva: boolean;
+  progresso: number;
+  minutos: number | null;
+  mapaLiberado: boolean;
+  avisoAtivo: boolean;
+  posicao?: { latitude: number; longitude: number; heading: number };
+  atualizadoEm: string;
+}
+function computeProximity(driverId: number, studentId: number | undefined, avisoMin: number): Proximidade | null {
+  if (!studentId) return null;
+  const trip = getTrip(driverId);
+  const minhas = serverState.paradas
+    .filter((p: any) => donoDaParada(p) === driverId)
+    .sort((a: any, b: any) => (a.ordem_sequencia ?? 0) - (b.ordem_sequencia ?? 0));
+  const mine: any = minhas.find((p: any) => p.id_aluno === studentId);
+  if (!mine) return null;
+  const agora = new Date().toISOString();
+  const st = String(trip.viagem.status);
+  const rotaAtiva = st === 'EM_ANDAMENTO';
+  const base = { rotaAtiva, mapaLiberado: false, avisoAtivo: false, atualizadoEm: agora };
+  if (mine.status_embarque === 'AUSENTE') return { ...base, estado: 'ausente', progresso: 0, minutos: null };
+  if (mine.status_embarque === 'ENTREGUE') return { ...base, estado: 'entregue', progresso: 1, minutos: 0 };
+  if (mine.status_embarque === 'EMBARCOU') return { ...base, estado: 'embarcou', progresso: 1, minutos: 0 };
+  if (st === 'FINALIZADA' || st === 'CONCLUIDA') return { ...base, estado: 'encerrada', progresso: 0, minutos: null };
+  if (!rotaAtiva) return { ...base, estado: 'aguardando', progresso: 0, minutos: null };
+
+  const antes = minhas.filter((p: any) => (p.ordem_sequencia ?? 0) < (mine.ordem_sequencia ?? 0));
+  const faltam = antes.filter((p: any) => p.status_embarque === 'PENDENTE').length; // paradas antes da dele ainda não atendidas
+  let minutos = (faltam + 1) * MIN_POR_PARADA;
+  const gps = trip.gpsAtual;
+  if (gps.accuracyMeters > 0 && typeof mine.latitude === 'number' && typeof mine.longitude === 'number') {
+    const km = haversineKm(gps, mine);
+    const velocidade = Math.max(20, Math.min(50, gps.speedKmH || 0)); // km/h; evita estimativas absurdas com a van parada
+    minutos = Math.min(minutos, Math.max(1, Math.round((km / velocidade) * 60) + faltam));
+  }
+  const proxima = faltam === 0;
+  const progresso = Math.max(0, Math.min(0.97, (antes.length - faltam) / (antes.length + 1)));
+  const out: Proximidade = {
+    ...base,
+    estado: proxima ? 'proxima' : 'a_caminho',
+    progresso,
+    minutos,
+    mapaLiberado: proxima && gps.accuracyMeters > 0,
+    avisoAtivo: minutos <= avisoMin
+  };
+  if (out.mapaLiberado) out.posicao = { latitude: gps.latitude, longitude: gps.longitude, heading: gps.heading };
+  return out;
+}
+
 function getFilteredStateForUser(user: SessionPayload) {
   const driverId = driverIdFor(user);
   const trip = driverId !== null ? getTrip(driverId) : makeTrip(0);
@@ -487,6 +557,21 @@ function getFilteredStateForUser(user: SessionPayload) {
     } else {
       cloned.paradas = [];
     }
+    // PRIVACIDADE: responsável nunca recebe a posição bruta da van; só quando a próxima parada é a do aluno.
+    const prox = driverId !== null ? computeProximity(driverId, studentId, prefsDe(user.userId).avisoMin) : null;
+    cloned.gpsAtual = {
+      latitude: prox?.posicao?.latitude ?? 0,
+      longitude: prox?.posicao?.longitude ?? 0,
+      speedKmH: 0,
+      heading: prox?.posicao?.heading ?? 0,
+      timestamp: trip.gpsAtual.timestamp,
+      accuracyMeters: prox?.posicao ? trip.gpsAtual.accuracyMeters : 0,
+      currentAddress: '',
+      nextStopName: '',
+      etaNextStopMinutes: prox?.minutos ?? 0
+    };
+    cloned.proximidade = prox;
+    cloned.prefs = prefsDe(user.userId);
   }
 
   return cloned;
@@ -500,8 +585,16 @@ function broadcast(event: string, data: any, driverId?: number | null) {
     }
     try {
       const filteredData = getFilteredStateForUser({ role: client.role, userId: client.userId || 1, email: '', studentId: client.studentId, exp: Date.now() + 99999 });
+      if (client.role === 'responsavel' && event === 'GPS_ATUALIZADO') {
+        // Responsável não recebe coordenadas: só o resumo de proximidade calculado no servidor.
+        client.res.write(`event: PROXIMIDADE_ATUALIZADA\ndata: ${JSON.stringify({ proximidade: filteredData.proximidade, estado: filteredData })}\n\n`);
+        return;
+      }
       const payload = `event: ${event}\ndata: ${JSON.stringify({ ...data, estado: filteredData })}\n\n`;
       client.res.write(payload);
+      if (client.role === 'responsavel' && (event === 'STATUS_EMBARQUE_ATUALIZADO' || event === 'ROTA_STATUS_ALTERADO' || event === 'AUSENCIA_NOTIFICADA' || event === 'AUSENCIA_CANCELADA')) {
+        client.res.write(`event: PROXIMIDADE_ATUALIZADA\ndata: ${JSON.stringify({ proximidade: filteredData.proximidade, estado: filteredData })}\n\n`);
+      }
     } catch {
       // Ignore disconnect
     }
@@ -1060,6 +1153,32 @@ async function startServer() {
     }
     const token = signToken({ role: userPayload.role, userId: userPayload.userId, email: userPayload.email, studentId: userPayload.studentId, emailVerified: true });
     res.json({ sucesso: true, token, emailVerified: true });
+  });
+
+  // PREFERÊNCIAS DO RESPONSÁVEL: estilo da barra de proximidade e antecedência do aviso.
+  app.get('/api/preferencias', authenticate, (req: Request, res: Response) => {
+    const u = (req as any).user as SessionPayload;
+    res.json({ ...prefsDe(u.userId), avisosValidos: AVISOS_VALIDOS });
+  });
+  app.put('/api/preferencias', authenticate, (req: Request, res: Response) => {
+    const u = (req as any).user as SessionPayload;
+    const rec = usersDB.find((x) => x.id === u.userId);
+    if (!rec || u.role !== 'responsavel') return res.status(403).json({ error: 'Apenas responsáveis têm estas preferências.' });
+    const { estilo, avisoMin } = req.body || {};
+    if (!ESTILOS_VALIDOS.includes(estilo) || !AVISOS_VALIDOS.includes(avisoMin)) {
+      return res.status(400).json({ error: 'Preferências inválidas.' });
+    }
+    rec.prefs = { estilo, avisoMin };
+    res.json({ sucesso: true, ...rec.prefs });
+  });
+
+  // PROXIMIDADE: resumo seguro (sem coordenadas, exceto quando a próxima parada é a do aluno).
+  app.get('/api/proximidade', authenticate, (req: Request, res: Response) => {
+    const u = (req as any).user as SessionPayload;
+    if (u.role !== 'responsavel') return res.status(403).json({ error: 'Disponível apenas para responsáveis.' });
+    const driverId = driverIdFor(u);
+    const prox = driverId !== null ? computeProximity(driverId, u.studentId, prefsDe(u.userId).avisoMin) : null;
+    res.json({ proximidade: prox, prefs: prefsDe(u.userId) });
   });
 
   app.post('/api/vincular', authenticate, rateLimiter(10, 60000), (req: Request, res: Response) => {
