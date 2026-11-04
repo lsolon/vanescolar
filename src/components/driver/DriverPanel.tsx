@@ -64,13 +64,15 @@ interface DriverPanelProps {
   onToggleRota: () => void;
   onSelectAluno?: (alunoId: number) => void;
   onLogout?: () => void;
+  erroGps?: 'permissao_negada' | 'indisponivel' | 'sem_suporte' | null;
 }
 
 export const DriverPanel: React.FC<DriverPanelProps> = ({
   coordenadas,
   isRotaAtiva,
   onToggleRota,
-  onLogout
+  onLogout,
+  erroGps
 }) => {
   const [viagemZeroCache, setViagemZeroCache] = useState<ViagemMotoristaZeroCache | null>(null);
   const [aceitaDinamicos, setAceitaDinamicos] = useState<boolean>(false);
@@ -549,6 +551,15 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             </button>
           </div>
 
+          {erroGps && (
+            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+              {erroGps === 'permissao_negada'
+                ? 'O GPS está bloqueado. Permita a localização deste site nas configurações do navegador para que os pais acompanhem a van.'
+                : erroGps === 'sem_suporte'
+                ? 'Este navegador não oferece GPS. Abra o app no Chrome ou Safari do celular.'
+                : 'Não foi possível obter sua localização agora. Verifique se o GPS do celular está ligado.'}
+            </div>
+          )}
           {mostrarMapa && (
             <LiveMap
               coordenadas={coordenadas}

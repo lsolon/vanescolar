@@ -110,7 +110,7 @@ export default function App() {
   // O aplicativo dos pais opera puramente como RECEPTOR das coordenadas transmitidas pelo motorista
   const isDriverRole = viewMode === 'DRIVER' || viewMode === 'DUAL';
   const intervalMs = isFastGPS ? 3000 : 10000;
-  const { coordenadas, resetRota } = useGPS(isRotaAtiva && isDriverRole, { intervalMs });
+  const { coordenadas, resetRota, erroGps } = useGPS(isRotaAtiva && isDriverRole, { intervalMs });
 
   // Iniciar ou encerrar rota
   const handleToggleRota = async () => {
@@ -295,6 +295,7 @@ export default function App() {
                   isRotaAtiva={isRotaAtiva}
                   onToggleRota={handleToggleRota}
                   onLogout={() => navigateTo('LANDING')}
+                  erroGps={erroGps}
                 />
               </div>
             )}

@@ -362,3 +362,19 @@ test('Segurança: transmissão ao vivo (SSE) exige sessão válida', async () =>
   assert.equal((await fetch(`${BASE}/api/events`)).status, 401);
   assert.equal((await fetch(`${BASE}/api/events?token=falso`)).status, 401);
 });
+
+test('GPS real: servidor valida coordenadas e entrega só ao motorista dono', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const tokenA = await novoMotorista(adm.data.token, 'Gabi');
+  const tokenB = await novoMotorista(adm.data.token, 'Hugo');
+  assert.equal((await jsonReq('POST', '/api/gps', tokenA, { latitude: 'x', longitude: 1 })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/gps', tokenA, { latitude: 123, longitude: 1 })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/gps', undefined, { latitude: 1, longitude: 1 })).status, 401);
+  const ok = await jsonReq('POST', '/api/gps', tokenA, { latitude: -22.95, longitude: -43.2, speedKmH: 40, accuracyMeters: 12 });
+  assert.equal(ok.status, 200);
+  const a = await jsonReq('GET', '/api/estado', tokenA);
+  const b = await jsonReq('GET', '/api/estado', tokenB);
+  assert.equal(a.data.gpsAtual.latitude, -22.95);
+  assert.equal(a.data.gpsAtual.accuracyMeters, 12);
+  assert.equal(b.data.gpsAtual.accuracyMeters, 0, 'B continua sem posição');
+});

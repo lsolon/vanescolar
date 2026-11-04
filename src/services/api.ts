@@ -1327,7 +1327,7 @@ export const TransportRepository = {
     emitEvent('ROTA_STATUS_ALTERADO', { status: 'FINALIZADA' });
   },
 
-  async atualizarGPS(coords: { latitude: number; longitude: number; speedKmH: number; heading: number }) {
+  async atualizarGPS(coords: { latitude: number; longitude: number; speedKmH: number; heading: number; accuracyMeters?: number }) {
     if (typeof window !== 'undefined' || true) {
       fetch(`${getBaseUrl()}/api/gps`, {
         method: 'POST',

@@ -32,7 +32,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { GPSCoordinate } from '../types/database';
-import { subscribeToDatabaseChanges } from '../services/api';
+import { subscribeToDatabaseChanges, TransportRepository } from '../services/api';
+import { isDemoMode } from '../services/demo';
 
 export interface WaypointRota {
   nome: string;
@@ -98,8 +99,12 @@ export interface UseGPSOptions {
   stepIncrement?: number;
 }
 
+export type ErroGPS = 'permissao_negada' | 'indisponivel' | 'sem_suporte' | null;
+
 export function useGPS(isAtivo: boolean, options: UseGPSOptions = {}) {
   const { intervalMs = 10000, stepIncrement = 0.08 } = options;
+  const real = !isDemoMode();
+  const [erroGps, setErroGps] = useState<ErroGPS>(null);
 
   // Progresso decimal ao longo do vetor de waypoints (0 a ROTA_FREGUESIA_PONTOS.length - 1)
   const [progresso, setProgresso] = useState<number>(0);
@@ -111,7 +116,7 @@ export function useGPS(isAtivo: boolean, options: UseGPSOptions = {}) {
       speedKmH: 0,
       heading: 42,
       timestamp: new Date().toLocaleTimeString('pt-BR'),
-      accuracyMeters: 5,
+      accuracyMeters: isDemoMode() ? 5 : 0, // 0 = ainda sem posição real
       currentAddress: inicio.endereco,
       nextStopName: ROTA_FREGUESIA_PONTOS[1].nome,
       etaNextStopMinutes: 4
@@ -124,10 +129,16 @@ export function useGPS(isAtivo: boolean, options: UseGPSOptions = {}) {
   // Escuta telemetria do motorista se este dispositivo for o receptor (ex: celular dos pais)
   useEffect(() => {
     const unsubscribe = subscribeToDatabaseChanges((event, payload) => {
+      if (event === 'INIT_STATE' && !isAtivo && (payload as any)?.gpsAtual?.accuracyMeters) {
+        const g = (payload as any).gpsAtual as GPSCoordinate;
+        const t = new Date(g.timestamp);
+        setCoordenadas({ ...g, timestamp: isNaN(t.getTime()) ? g.timestamp : t.toLocaleTimeString('pt-BR') });
+      }
       if (event === 'GPS_ATUALIZADO' && payload) {
         const gps = payload as GPSCoordinate;
         if (!isAtivo) {
-          setCoordenadas(gps);
+          const t = new Date(gps.timestamp);
+          setCoordenadas({ ...gps, timestamp: isNaN(t.getTime()) ? gps.timestamp : t.toLocaleTimeString('pt-BR') });
         }
       }
     });
@@ -143,6 +154,46 @@ export function useGPS(isAtivo: boolean, options: UseGPSOptions = {}) {
         timestamp: new Date().toLocaleTimeString('pt-BR')
       }));
       return;
+    }
+
+    // MODO REAL: usa o GPS do celular do motorista e envia ao servidor (no máximo 1 envio a cada `intervalMs`).
+    if (real) {
+      if (typeof navigator === 'undefined' || !navigator.geolocation) {
+        setErroGps('sem_suporte');
+        return;
+      }
+      setErroGps(null);
+      let ultimoEnvio = 0;
+      let wakeLock: any = null;
+      try { (navigator as any).wakeLock?.request('screen').then((w: any) => { wakeLock = w; }).catch(() => {}); } catch {}
+      const watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const c = pos.coords;
+          const telemetria: GPSCoordinate = {
+            latitude: c.latitude,
+            longitude: c.longitude,
+            speedKmH: c.speed != null && c.speed >= 0 ? Math.round(c.speed * 3.6) : 0,
+            heading: c.heading != null && !isNaN(c.heading) ? Math.round(c.heading) : 0,
+            timestamp: new Date().toLocaleTimeString('pt-BR'),
+            accuracyMeters: Math.max(1, Math.round(c.accuracy || 1)),
+            currentAddress: '',
+            nextStopName: '',
+            etaNextStopMinutes: 0
+          };
+          setCoordenadas((prev) => ({ ...prev, ...telemetria }));
+          const agora = Date.now();
+          if (agora - ultimoEnvio >= intervalMs) {
+            ultimoEnvio = agora;
+            TransportRepository.atualizarGPS(telemetria);
+          }
+        },
+        (err) => setErroGps(err.code === err.PERMISSION_DENIED ? 'permissao_negada' : 'indisponivel'),
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
+      );
+      return () => {
+        navigator.geolocation.clearWatch(watchId);
+        try { wakeLock?.release?.(); } catch {}
+      };
     }
 
     /**
@@ -209,7 +260,7 @@ export function useGPS(isAtivo: boolean, options: UseGPSOptions = {}) {
     }, intervalMs);
 
     return () => clearInterval(intervalId);
-  }, [isAtivo, intervalMs, stepIncrement]);
+  }, [isAtivo, intervalMs, stepIncrement, real]);
 
   // Permite avançar ou reiniciar manualmente a rota
   const resetRota = () => {
@@ -249,6 +300,7 @@ export function useGPS(isAtivo: boolean, options: UseGPSOptions = {}) {
 
   return {
     coordenadas,
+    erroGps,
     progresso,
     resetRota,
     setWaypointManual,
