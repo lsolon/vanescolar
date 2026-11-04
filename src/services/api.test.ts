@@ -10,6 +10,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TransportRepository } from './api';
 
+// O servidor de teste deve subir com ADMIN_PASSWORD igual a este valor.
+const ADMIN_TEST_PASSWORD = process.env.ADMIN_PASSWORD || 'senha-de-teste-admin';
+
 test('Segurança: Cadastro público cria APENAS o papel responsavel (forçado no servidor)', async () => {
   const emailTest = `resp_${Date.now()}@exemplo.com`;
   try {
@@ -156,7 +159,7 @@ test('Autorização: Kill-switch revoga tokens de sessão no servidor', async ()
 
 test('Isolamento de Motorista: Novo motorista cadastrado possui seu próprio perfil e veículo sem herdar dados do Tio David', async () => {
   // 1. Gera convite legítimo via Admin
-  await TransportRepository.loginAdminDirect('leandrosolon@gmail.com');
+  await TransportRepository.loginAdminDirect('leandrosolon@gmail.com', ADMIN_TEST_PASSWORD);
   const conviteRes = await TransportRepository.gerarConviteMotorista('Convite Teste Novo Motorista');
   const conviteCode = conviteRes.invitation.code;
 
@@ -187,7 +190,7 @@ test('Isolamento de Motorista: Novo motorista cadastrado possui seu próprio per
 
 test('Novo Motorista: Inicia totalmente vazio e cadastra seu próprio primeiro aluno com código de vínculo', async () => {
   // 1. Gera convite legítimo via Admin
-  await TransportRepository.loginAdminDirect('leandrosolon@gmail.com');
+  await TransportRepository.loginAdminDirect('leandrosolon@gmail.com', ADMIN_TEST_PASSWORD);
   const conviteRes = await TransportRepository.gerarConviteMotorista('Convite Van Vazia');
   const conviteCode = conviteRes.invitation.code;
 
@@ -261,3 +264,41 @@ test('Estado Global: toggleEnderecosDinamicos altera permissão do motorista', a
 
 
 
+
+
+// ---------------------------------------------------------------------------
+// REGRESSÃO DE SEGURANÇA: login sem prova de identidade deve ser sempre recusado
+// ---------------------------------------------------------------------------
+async function postJson(path: string, body: unknown) {
+  return fetch(`http://localhost:3000${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+}
+
+test('Segurança: admin NÃO entra só com e-mail ou token falso', async () => {
+  const r1 = await postJson('/api/admin/auth', { email: 'leandrosolon@gmail.com' });
+  assert.equal(r1.status, 401);
+  const r2 = await postJson('/api/admin/auth', { email: 'leandrosolon@gmail.com', idToken: 'mock-direct-token' });
+  assert.equal(r2.status, 401);
+  const r3 = await postJson('/api/admin/auth', { email: 'leandrosolon@gmail.com', password: 'senha-errada' });
+  assert.equal(r3.status, 401);
+});
+
+test('Segurança: login de responsável/admin NÃO aceita idToken falso sem senha', async () => {
+  const r = await postJson('/api/auth/login-email', { email: 'leandrosolon@gmail.com', idToken: 'token-falso-qualquer-coisa-123' });
+  assert.equal(r.status, 401);
+});
+
+test('Segurança: login de motorista exige senha', async () => {
+  const r1 = await postJson('/api/auth/login-motorista', { email: 'david.santos@vanescolar.com.br' });
+  assert.equal(r1.status, 401);
+  const r2 = await postJson('/api/auth/login-motorista', { email: 'david.santos@vanescolar.com.br', idToken: 'falso-falso-falso-falso' });
+  assert.equal(r2.status, 401);
+});
+
+test('Segurança: /api/auth/google recusa token não verificável', async () => {
+  const r = await postJson('/api/auth/google', { email: 'leandrosolon@gmail.com', idToken: 'falso-falso-falso-falso' });
+  assert.equal(r.status, 401);
+});

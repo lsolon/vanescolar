@@ -4,7 +4,7 @@
  * ============================================================================
  * 
  * Interface para os pais acompanharem o transporte escolar em tempo real.
- * Usuário mockado: Leandro Solon (Pai) e Maria Clara Solon (Filha/Aluna).
+ * Mostra o aluno vinculado ao responsável logado (modo ?demo=true usa um aluno de exemplo).
  * 
  * DESTAQUES:
  * - Mapa e telemetria GPS da van ao vivo pelo bairro Freguesia (Jacarepaguá, RJ).
@@ -67,14 +67,25 @@ export const ParentApp: React.FC<ParentAppProps> = ({
   const [observacaoTexto, setObservacaoTexto] = useState<string>('');
   const [enviandoAusencia, setEnviandoAusencia] = useState<boolean>(false);
   const [sucessoFeedback, setSucessoFeedback] = useState<string | null>(null);
+  const [carregando, setCarregando] = useState<boolean>(true);
+  const [erroCarga, setErroCarga] = useState<boolean>(false);
 
-  // Carrega dados da Maria Clara (ID: 201) via Repository
+  // No modo demonstração (?demo=true) usa o aluno de exemplo; em uso real, o aluno vinculado ao responsável.
+  const isDemo = (typeof window !== 'undefined' && window.location.search.includes('demo=true'))
+    || import.meta.env.VITE_DEMO_MODE === 'true';
+  const alunoDemoId = isDemo ? 201 : undefined;
+
+  // Carrega os dados do aluno vinculado via Repository
   const carregarDados = async () => {
     try {
-      const info = await TransportRepository.getDadosAlunoParaPais(201);
+      const info = await TransportRepository.getDadosAlunoParaPais(alunoDemoId);
       setDados(info);
+      setErroCarga(false);
     } catch (err) {
       console.error('Erro ao carregar dados do aluno para os pais:', err);
+      setErroCarga(true);
+    } finally {
+      setCarregando(false);
     }
   };
 
@@ -88,9 +99,9 @@ export const ParentApp: React.FC<ParentAppProps> = ({
         return;
       }
 
-      TransportRepository.getDadosAlunoParaPais(201).then((res) => {
+      TransportRepository.getDadosAlunoParaPais(alunoDemoId).then((res) => {
         if (res) setDados(res);
-      });
+      }).catch(() => {});
 
       if (event === 'aluno:status_alterado' || event === 'STATUS_EMBARQUE_ATUALIZADO') {
         setSucessoFeedback('Status de transporte atualizado em tempo real pelo motorista!');
@@ -102,7 +113,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
         setSucessoFeedback('Ausência confirmada e transmitida ao motorista.');
         setTimeout(() => setSucessoFeedback(null), 4000);
       } else if (event === 'ROTA_STATUS_ALTERADO' || event === 'viagem:iniciada') {
-        setSucessoFeedback('Tio David iniciou a rota da van pela Freguesia!');
+        setSucessoFeedback('O motorista iniciou a rota da van!');
         setTimeout(() => setSucessoFeedback(null), 4000);
       }
     });
@@ -138,14 +149,14 @@ export const ParentApp: React.FC<ParentAppProps> = ({
     try {
       await TransportRepository.cancelarAvisoAusencia(Number(dados.aluno.id));
       await carregarDados();
-      setSucessoFeedback('Aviso de ausência cancelado! Maria Clara aguarda a van.');
+      setSucessoFeedback(`Aviso de ausência cancelado! ${dados?.aluno.nome?.split(' ')[0] || 'O aluno'} aguarda a van.`);
       setTimeout(() => setSucessoFeedback(null), 4000);
     } catch (err) {
       console.error('Erro ao cancelar ausência:', err);
     }
   };
 
-  if (!dados) {
+  if (carregando) {
     return (
       <div className="flex items-center justify-center h-full bg-slate-950 text-slate-400">
         <p className="text-xs">Carregando dados da van escolar...</p>
@@ -153,25 +164,58 @@ export const ParentApp: React.FC<ParentAppProps> = ({
     );
   }
 
+  // Sem aluno vinculado (primeiro acesso) ou falha de carga: tela amigável em vez de tela em branco
+  if (!dados || !dados.parada || !dados.aluno) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-4 bg-slate-950 text-slate-200 p-6 text-center">
+        <div className="text-4xl" aria-hidden="true">🚐</div>
+        <h2 className="text-lg font-bold">
+          {erroCarga ? 'Não foi possível carregar os dados' : 'Nenhum aluno vinculado ainda'}
+        </h2>
+        <p className="text-sm text-slate-400 max-w-xs">
+          {erroCarga
+            ? 'Verifique sua conexão e tente novamente.'
+            : 'Peça ao motorista o código de vínculo do seu filho(a) e use a opção de vincular para acompanhar a van.'}
+        </p>
+        <div className="flex gap-2">
+          <button
+            onClick={() => { setCarregando(true); carregarDados(); }}
+            className="px-4 py-2 rounded-xl bg-cyan-500 text-slate-950 text-sm font-bold"
+          >
+            Atualizar
+          </button>
+          {onLogout && (
+            <button onClick={onLogout} className="px-4 py-2 rounded-xl border border-slate-700 text-sm">
+              Sair
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   const { aluno, responsavel, motorista, parada } = dados;
+  const primeiroNomeAluno = aluno.nome?.split(' ')[0] || 'O aluno';
+  const primeiroNomeMotorista = motorista?.nome?.split(' ')[0] || 'O motorista';
+  const nomeEscola = aluno.escola_destino || 'a escola';
 
   // Status humanizado
   const statusLabels = {
     PENDENTE: {
       titulo: isRotaAtiva ? "Van em Rota de Coleta" : "Van Aguardando Partida",
-      subtitulo: isRotaAtiva ? "A van está a caminho pelo bairro Freguesia" : "A rota inicia às 06:40 na Freguesia",
+      subtitulo: isRotaAtiva ? "A van está a caminho para buscar o aluno" : "A rota ainda não começou. Você será avisado quando a van sair.",
       corBadge: "bg-amber-500/10 text-amber-400 border-amber-500/30",
       progressoPct: isRotaAtiva ? 35 : 10
     },
     EMBARCOU: {
-      titulo: "Maria Clara a Bordo!",
-      subtitulo: `Embarcou às ${parada.hora_embarque || '06:46'} • A caminho da escola`,
+      titulo: `${primeiroNomeAluno} a Bordo!`,
+      subtitulo: `Embarcou${parada.hora_embarque ? ` às ${parada.hora_embarque}` : ''} • A caminho da escola`,
       corBadge: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
       progressoPct: 75
     },
     ENTREGUE: {
-      titulo: "Entregue no Colégio Santa Mônica",
-      subtitulo: `Desembarcou em segurança às ${parada.hora_desembarque || '07:25'}`,
+      titulo: `Entregue: ${nomeEscola}`,
+      subtitulo: `Desembarcou em segurança${parada.hora_desembarque ? ` às ${parada.hora_desembarque}` : ''}`,
       corBadge: "bg-indigo-500/15 text-indigo-400 border-indigo-500/30",
       progressoPct: 100
     },
@@ -183,7 +227,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
     },
     Aguardando: {
       titulo: "Van Aguardando Partida",
-      subtitulo: "A rota inicia às 06:40 na Freguesia",
+      subtitulo: "A rota ainda não começou. Você será avisado quando a van sair.",
       corBadge: "bg-amber-500/10 text-amber-400 border-amber-500/30",
       progressoPct: 10
     }
@@ -326,18 +370,11 @@ export const ParentApp: React.FC<ParentAppProps> = ({
               {parada.status_embarque === 'EMBARCOU' && (
                 <>
                   <div className="flex items-baseline gap-2">
-                    <span className="text-2xl font-black text-emerald-400 tracking-tight font-mono">
-                      ~12 min
+                    <span className="text-lg font-black text-emerald-400 tracking-tight">
+                      A bordo
                     </span>
                     <span className="text-xs text-slate-400 font-medium">
-                      até o Colégio
-                    </span>
-                  </div>
-
-                  <div className="text-right">
-                    <span className="text-[10px] text-slate-400 block">Chegada prevista</span>
-                    <span className="text-base font-bold text-slate-100 font-mono">
-                      07:20
+                      a caminho da escola
                     </span>
                   </div>
                 </>
@@ -347,10 +384,10 @@ export const ParentApp: React.FC<ParentAppProps> = ({
                 <div className="w-full flex items-center justify-between">
                   <div>
                     <span className="text-lg font-bold text-indigo-400">Entregue com Sucesso</span>
-                    <p className="text-[11px] text-slate-400">Recepção do Colégio Santa Mônica</p>
+                    <p className="text-[11px] text-slate-400">Recepção: {nomeEscola}</p>
                   </div>
                   <span className="text-xl font-bold font-mono text-slate-100">
-                    {parada.hora_desembarque || '07:25'}
+                    {parada.hora_desembarque || '--:--'}
                   </span>
                 </div>
               )}
@@ -369,7 +406,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
                 <MapPin className="w-3 h-3 text-cyan-400 shrink-0" />
                 <span className="truncate">Endereço de Embarque: <strong className="text-slate-200">{aluno.endereco_embarque_real}</strong></span>
               </span>
-              <span className="text-slate-500 shrink-0 ml-2">Freguesia</span>
+              <span className="text-slate-500 shrink-0 ml-2">{aluno.bairro || ""}</span>
             </div>
           </div>
 
@@ -377,7 +414,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
           <div className="mt-3 pt-2">
             <div className="flex justify-between text-[11px] text-slate-400 mb-1 font-medium">
               <span>{aluno.endereco_embarque_real ? aluno.endereco_embarque_real.split(',')[0] : 'Endereço'} (Casa)</span>
-              <span>Colégio Santa Mônica</span>
+              <span>{nomeEscola}</span>
             </div>
             <div className="h-2 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800">
               <div
@@ -463,7 +500,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
               <School className="w-5 h-5" />
             </div>
             <div>
-              <h4 className="text-sm font-bold text-slate-100">{aluno.escola_destino || 'Colégio Santa Mônica'}</h4>
+              <h4 className="text-sm font-bold text-slate-100">{nomeEscola}</h4>
               <p className="text-xs text-slate-400 mt-0.5">
                 Turma: {aluno.turma || '4º Ano'} • Turno {aluno.turno === 'MANHA' ? 'Matutino' : 'Vespertino'}
               </p>
@@ -495,7 +532,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
             </div>
 
             <p className="text-xs text-slate-300">
-              Ao confirmar, o <strong>Tio David</strong> será notificado imediatamente no Diário de Bordo da van e ajustará a rota.
+              Ao confirmar, <strong>{primeiroNomeMotorista}</strong> será notificado imediatamente no Diário de Bordo da van e ajustará a rota.
             </p>
 
             {/* SELEÇÃO DO MOTIVO */}

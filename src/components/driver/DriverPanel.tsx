@@ -74,6 +74,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 }) => {
   const [viagemZeroCache, setViagemZeroCache] = useState<ViagemMotoristaZeroCache | null>(null);
   const [aceitaDinamicos, setAceitaDinamicos] = useState<boolean>(false);
+  const [fotoFalhou, setFotoFalhou] = useState<boolean>(false);
   const [carregando, setCarregando] = useState<boolean>(true);
   const [processandoAcaoId, setProcessandoAcaoId] = useState<number | null>(null);
   const [filtroStatus, setFiltroStatus] = useState<string>('TODOS');
@@ -441,11 +442,21 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="relative">
-              <img
-                src={motorista?.foto_url || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=128&q=80"}
-                alt={motorista?.nome || "Motorista"}
-                className="w-12 h-12 rounded-xl object-cover ring-2 ring-amber-400 shadow-md"
-              />
+              {motorista?.foto_url && !fotoFalhou ? (
+                <img
+                  src={motorista.foto_url}
+                  alt={motorista?.nome || "Motorista"}
+                  onError={() => setFotoFalhou(true)}
+                  className="w-12 h-12 rounded-xl object-cover ring-2 ring-amber-400 shadow-md"
+                />
+              ) : (
+                <div
+                  aria-label={motorista?.nome || "Motorista"}
+                  className="w-12 h-12 rounded-xl ring-2 ring-amber-400 shadow-md bg-slate-800 text-amber-300 font-black text-base flex items-center justify-center"
+                >
+                  {(motorista?.nome || 'M').trim().split(/\s+/).slice(0, 2).map((p: string) => p[0]?.toUpperCase()).join('')}
+                </div>
+              )}
               <span className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-slate-900 ${isRotaAtiva ? 'bg-emerald-500 animate-pulse' : 'bg-slate-500'}`} />
             </div>
 

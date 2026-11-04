@@ -500,7 +500,7 @@ export const TransportRepository = {
     const res = await fetch(`${getBaseUrl()}/api/auth/login-motorista`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, idToken })
+      body: JSON.stringify({ email, idToken, password })
     });
     
     if (!res.ok) {
@@ -683,12 +683,12 @@ export const TransportRepository = {
     return data;
   },
 
-  async loginAdminDirect(email: string = 'leandrosolon@gmail.com') {
+  async loginAdminDirect(email: string, password: string) {
     await sleep();
     const res = await fetch(`${getBaseUrl()}/api/admin/auth`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, idToken: 'mock-direct-token' })
+      body: JSON.stringify({ email, password })
     });
 
     const data = await handleAdminResponse(res);
@@ -782,7 +782,7 @@ export const TransportRepository = {
     const res = await fetch(`${getBaseUrl()}/api/auth/login-email`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, idToken })
+      body: JSON.stringify({ email, idToken, password })
     });
 
     if (!res.ok) {
@@ -1052,14 +1052,23 @@ export const TransportRepository = {
     return parada || paradasDB[0];
   },
 
-  async getDadosAlunoParaPais(alunoId: number = 201) {
+  /**
+   * Dados do aluno para o App dos Pais.
+   * - Sem `alunoId`: usa a primeira parada que o servidor devolveu para o responsável logado
+   *   e retorna `null` quando não há aluno vinculado (nunca cai em dados de demonstração).
+   * - Com `alunoId`: modo demonstração/testes, com fallback nos dados locais.
+   */
+  async getDadosAlunoParaPais(alunoId?: number) {
     await sleep();
     if (typeof window !== 'undefined' || true) {
       try {
         const res = await fetch(`${getBaseUrl()}/api/estado`, { headers: getAuthHeaders() });
         if (res.ok) {
           const serverState = await res.json();
-          const paradaServidor = (serverState.paradas || []).find((p: any) => p.id_aluno === alunoId) || serverState.paradas[0];
+          const paradasServidor: any[] = serverState.paradas || [];
+          const paradaServidor = alunoId !== undefined
+            ? (paradasServidor.find((p: any) => p.id_aluno === alunoId) || paradasServidor[0])
+            : paradasServidor[0];
           if (paradaServidor) {
             const aluno: Aluno = {
               id: paradaServidor.id_aluno,
@@ -1125,11 +1134,15 @@ export const TransportRepository = {
       }
     }
 
+    // Sem aluno vinculado (ou sem sessão): não exibe dados de demonstração para usuário real.
+    if (alunoId === undefined) return null;
+
     const aluno = alunosDB.find((a) => a.id === alunoId) || alunosDB[0];
     const responsavel = responsaveisDB.find((r) => r.id === aluno.id_responsavel) || responsaveisDB[0];
     const motorista = motoristasDB[0];
     const viagem = viagensDB[0];
     const parada = paradasDB.find((p) => p.id_aluno === alunoId) || paradasDB[0];
+    if (!aluno || !parada) return null;
     return { aluno, responsavel, motorista, viagem, parada };
   },
 

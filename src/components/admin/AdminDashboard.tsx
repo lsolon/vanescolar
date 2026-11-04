@@ -34,6 +34,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
   const [invitationNota, setInvitationNota] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [adminLoginEmail, setAdminLoginEmail] = useState('');
+  const [adminLoginSenha, setAdminLoginSenha] = useState('');
 
   // Modal Novo Motorista Admin
   const [modalNovoMotoristaAberto, setModalNovoMotoristaAberto] = useState(false);
@@ -191,7 +193,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
     setLoading(true);
     setAuthError(null);
     try {
-      await TransportRepository.loginAdminDirect('leandrosolon@gmail.com');
+      await TransportRepository.loginAdminDirect(adminLoginEmail.trim(), adminLoginSenha);
       setIsAuthenticated(true);
       loadData();
     } catch (err: any) {
@@ -236,13 +238,37 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
               )}
             </button>
 
-            <button
-              onClick={handleAdminDirectLogin}
-              disabled={loading}
-              className="w-full py-3 px-4 bg-slate-800 hover:bg-slate-700 text-indigo-300 font-bold rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer border border-indigo-500/30 text-xs"
+            <form
+              onSubmit={(e) => { e.preventDefault(); handleAdminDirectLogin(); }}
+              className="space-y-2 pt-2 border-t border-slate-800 text-left"
             >
-              <span>Acesso Rápido Admin (leandrosolon@gmail.com)</span>
-            </button>
+              <p className="text-[11px] text-slate-500 text-center">ou entre com e-mail e senha de administrador</p>
+              <input
+                type="email"
+                autoComplete="username"
+                value={adminLoginEmail}
+                onChange={(e) => setAdminLoginEmail(e.target.value)}
+                placeholder="E-mail do administrador"
+                required
+                className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white placeholder-slate-500"
+              />
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={adminLoginSenha}
+                onChange={(e) => setAdminLoginSenha(e.target.value)}
+                placeholder="Senha de administrador"
+                required
+                className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white placeholder-slate-500"
+              />
+              <button
+                type="submit"
+                disabled={loading}
+                className="w-full py-3 px-4 bg-slate-800 hover:bg-slate-700 text-indigo-300 font-bold rounded-xl transition-all cursor-pointer border border-indigo-500/30 text-xs disabled:opacity-50"
+              >
+                Entrar como administrador
+              </button>
+            </form>
           </div>
 
           <button
