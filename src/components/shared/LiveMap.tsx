@@ -2,6 +2,8 @@ import React from 'react';
 import { GPSCoordinate, ParadaViagem, StatusEmbarque } from '../../types/database';
 import { ROTA_FREGUESIA_PONTOS, WaypointRota } from '../../hooks/useGPS';
 import { Bus, MapPin, School, Navigation, Sparkles } from 'lucide-react';
+import { RealMap } from './RealMap';
+import { isDemoMode } from '../../services/demo';
 
 interface LiveMapProps {
   coordenadas: GPSCoordinate;
@@ -24,6 +26,10 @@ export const LiveMap: React.FC<LiveMapProps> = ({
   compact = false,
   motoristaNome
 }) => {
+  // Fora do modo demonstração, usa mapa real com a posição enviada pelo celular do motorista.
+  if (!isDemoMode()) {
+    return <RealMap coordenadas={coordenadas} isRotaAtiva={isRotaAtiva} compact={compact} motoristaNome={motoristaNome} />;
+  }
   // Conversão de Coordenadas Lat/Lng da Freguesia para coordenadas SVG locais (0..800 x 0..520)
   // Bounding box da Freguesia (Jacarepaguá):
   // Lat: -22.9230 (Norte) a -22.9390 (Sul)

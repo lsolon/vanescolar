@@ -1195,16 +1195,22 @@ async function startServer() {
   });
 
   app.post('/api/gps', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
-    const { latitude, longitude, speedKmH, heading, currentAddress, nextStopName, etaNextStopMinutes } = req.body;
+    const { latitude, longitude, speedKmH, heading, accuracyMeters, currentAddress, nextStopName, etaNextStopMinutes } = req.body;
+    // Valida coordenadas: precisam ser números dentro da faixa geográfica válida.
+    if (typeof latitude !== 'number' || typeof longitude !== 'number' || !Number.isFinite(latitude) || !Number.isFinite(longitude) ||
+        Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+      return res.status(400).json({ error: 'Coordenadas inválidas.' });
+    }
+    const num = (v: any, def: number, max: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(max, v)) : def);
     const driverId = driverIdFor((req as any).user) as number;
     const trip = getTrip(driverId);
     trip.gpsAtual = {
-      latitude: latitude ?? trip.gpsAtual.latitude,
-      longitude: longitude ?? trip.gpsAtual.longitude,
-      speedKmH: speedKmH ?? trip.gpsAtual.speedKmH,
-      heading: heading ?? trip.gpsAtual.heading,
+      latitude,
+      longitude,
+      speedKmH: num(speedKmH, 0, 200),
+      heading: num(heading, trip.gpsAtual.heading, 360),
       timestamp: new Date().toISOString(),
-      accuracyMeters: 5,
+      accuracyMeters: Math.max(1, num(accuracyMeters, 5, 10000)),
       currentAddress: currentAddress ?? trip.gpsAtual.currentAddress,
       nextStopName: nextStopName ?? trip.gpsAtual.nextStopName,
       etaNextStopMinutes: etaNextStopMinutes ?? trip.gpsAtual.etaNextStopMinutes
