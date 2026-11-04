@@ -1206,14 +1206,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
 
           <button
-            onClick={async () => {
-              try {
-                await TransportRepository.loginAdminGoogle();
-                onLoginAdmin();
-              } catch (err: any) {
-                alert(err.message || 'Acesso administrativo negado.');
-              }
-            }}
+            onClick={() => onLoginAdmin()}
             className="flex items-center gap-2 px-3 py-2 rounded-lg text-slate-600 hover:text-slate-400 transition-all text-[10px] uppercase tracking-widest font-bold"
           >
             <Settings className="w-3.5 h-3.5" />
