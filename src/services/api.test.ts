@@ -378,3 +378,109 @@ test('GPS real: servidor valida coordenadas e entrega só ao motorista dono', as
   assert.equal(a.data.gpsAtual.accuracyMeters, 12);
   assert.equal(b.data.gpsAtual.accuracyMeters, 0, 'B continua sem posição');
 });
+
+// ---------------------------------------------------------------------------
+// PROXIMIDADE DA VAN: responsável recebe só um resumo; coordenadas apenas na próxima parada
+// ---------------------------------------------------------------------------
+async function novoResponsavel(codigo: string) {
+  const email = `resp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}@teste.com`;
+  const reg = await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Resp Teste', email, password: 'senhaSegura123!', lgpdConsent: true });
+  // Confirma o e-mail: pelo atalho de simulação (versões antigas) ou pelo link enviado (versão com e-mails reais).
+  let token: string = reg.data.token;
+  const sim = await jsonReq('POST', '/api/auth/verify-email-sim', token);
+  if (sim.status === 200) {
+    token = sim.data.token;
+  } else {
+    await new Promise((x) => setTimeout(x, 200));
+    const lista: any[] = await (await fetch(`${BASE}/api/_dev/emails`)).json();
+    const msg = [...lista].reverse().find((m) => m.to === email);
+    await fetch(msg.text.match(/https?:\/\/\S+/)[0], { redirect: 'manual' });
+    token = (await jsonReq('POST', '/api/auth/refresh-session', token)).data.token;
+  }
+  const v = await jsonReq('POST', '/api/vincular', token, { codigoVinculo: codigo });
+  assert.equal(v.status, 200, JSON.stringify(v.data));
+  return v.data.token as string;
+}
+
+test('Proximidade: sem coordenadas para o responsável até a próxima parada ser a do aluno', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const mot = await novoMotorista(adm.data.token, 'Prox');
+  const nova = async (n: string) => (await jsonReq('POST', '/api/paradas/nova', mot, {
+    nomeAluno: n, endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777'
+  })).data;
+  const a = await nova('Aluno A'), b = await nova('Aluno B'), c = await nova('Aluno C');
+  const resp = await novoResponsavel(c.codigoVinculo);
+
+  let p = (await jsonReq('GET', '/api/proximidade', resp)).data.proximidade;
+  assert.equal(p.estado, 'aguardando');
+  assert.equal(p.posicao, undefined);
+
+  await jsonReq('POST', '/api/rotas/iniciar', mot);
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.95, longitude: -43.2, speedKmH: 30, accuracyMeters: 8 });
+  p = (await jsonReq('GET', '/api/proximidade', resp)).data.proximidade;
+  assert.equal(p.estado, 'a_caminho');
+  assert.equal(p.mapaLiberado, false);
+  assert.equal(p.posicao, undefined, 'sem coordenadas quando faltam paradas');
+  assert.ok(p.minutos > 0);
+  assert.equal(JSON.stringify(p).includes('-22.95'), false);
+
+  const est = (await jsonReq('GET', '/api/estado', resp)).data;
+  assert.equal(est.gpsAtual.latitude, 0, 'estado do responsável não traz a posição real');
+  assert.equal(est.gpsAtual.longitude, 0);
+
+  await jsonReq('POST', `/api/paradas/${a.novaParada.id}/status`, mot, { status: 'EMBARCOU' });
+  await jsonReq('POST', `/api/paradas/${b.novaParada.id}/status`, mot, { status: 'EMBARCOU' });
+  p = (await jsonReq('GET', '/api/proximidade', resp)).data.proximidade;
+  assert.equal(p.estado, 'proxima');
+  assert.equal(p.mapaLiberado, true);
+  assert.equal(p.posicao.latitude, -22.95);
+  assert.ok(p.avisoAtivo, 'com 1 parada e aviso padrão de 10 min, o aviso deve estar ativo');
+});
+
+test('Preferências: responsável escolhe estilo e antecedência do aviso (valores validados)', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const mot = await novoMotorista(adm.data.token, 'Pref');
+  const al = (await jsonReq('POST', '/api/paradas/nova', mot, {
+    nomeAluno: 'Aluno P', endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777'
+  })).data;
+  const resp = await novoResponsavel(al.codigoVinculo);
+
+  assert.deepEqual({ estilo: (await jsonReq('GET', '/api/preferencias', resp)).data.estilo }, { estilo: 'C' });
+  assert.equal((await jsonReq('PUT', '/api/preferencias', resp, { estilo: 'Z', avisoMin: 10 })).status, 400);
+  assert.equal((await jsonReq('PUT', '/api/preferencias', resp, { estilo: 'B', avisoMin: 7 })).status, 400);
+  assert.equal((await jsonReq('PUT', '/api/preferencias', resp, { estilo: 'B', avisoMin: 5 })).status, 200);
+  const g = (await jsonReq('GET', '/api/preferencias', resp)).data;
+  assert.equal(g.estilo, 'B');
+  assert.equal(g.avisoMin, 5);
+  assert.equal((await jsonReq('PUT', '/api/preferencias', mot, { estilo: 'A', avisoMin: 5 })).status, 403, 'motorista não usa estas preferências');
+  assert.equal((await jsonReq('GET', '/api/proximidade', mot)).status, 403);
+});
+
+test('Proximidade: transmissão ao vivo do responsável nunca contém GPS bruto', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const mot = await novoMotorista(adm.data.token, 'Sse');
+  const nova = async (n: string) => (await jsonReq('POST', '/api/paradas/nova', mot, {
+    nomeAluno: n, endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777'
+  })).data;
+  await nova('Aluno 1');
+  const c2 = await nova('Aluno 2');
+  const resp = await novoResponsavel(c2.codigoVinculo);
+
+  const ctrl = new AbortController();
+  const r = await fetch(`${BASE}/api/events?token=${resp}`, { signal: ctrl.signal });
+  const reader = r.body!.getReader();
+  let texto = '';
+  const leitura = (async () => {
+    const dec = new TextDecoder();
+    try { for (;;) { const { value, done } = await reader.read(); if (done) break; texto += dec.decode(value); } } catch {}
+  })();
+  await new Promise((x) => setTimeout(x, 300));
+  await jsonReq('POST', '/api/rotas/iniciar', mot);
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.777777, longitude: -43.333333, accuracyMeters: 5 });
+  await new Promise((x) => setTimeout(x, 400));
+  ctrl.abort();
+  await leitura;
+  assert.ok(texto.includes('PROXIMIDADE_ATUALIZADA'));
+  assert.equal(texto.includes('GPS_ATUALIZADO'), false);
+  assert.equal(texto.includes('-22.777777'), false, 'coordenada bruta não pode chegar ao responsável');
+});

@@ -358,31 +358,50 @@ let alunosDB: Aluno[] = JSON.parse(JSON.stringify(INITIAL_ALUNOS));
 let viagensDB: ViagemDiario[] = JSON.parse(JSON.stringify(INITIAL_VIAGENS));
 let paradasDB: ParadaViagem[] = JSON.parse(JSON.stringify(INITIAL_PARADAS));
 
+export interface ProximidadeVan {
+  estado: 'aguardando' | 'a_caminho' | 'proxima' | 'embarcou' | 'entregue' | 'ausente' | 'encerrada';
+  rotaAtiva: boolean;
+  progresso: number;
+  minutos: number | null;
+  mapaLiberado: boolean;
+  avisoAtivo: boolean;
+  posicao?: { latitude: number; longitude: number; heading: number };
+  atualizadoEm: string;
+}
+export interface PrefsProximidade { estilo: 'A' | 'B' | 'C'; avisoMin: number }
+
 type EventCallback = (eventType: string, payload: unknown) => void;
 const listeners = new Set<EventCallback>();
 
-if (typeof window !== 'undefined' && 'EventSource' in window) {
-  try {
-    const token = localStorage.getItem('van_token') || '';
-    const sse = new EventSource(`/api/events?token=${token}`);
-    const eventosMapeados = [
-      'INIT_STATE',
-      'STATUS_EMBARQUE_ATUALIZADO',
-      'AUSENCIA_NOTIFICADA',
-      'AUSENCIA_CANCELADA',
-      'ROTA_STATUS_ALTERADO',
-      'NOVA_PARADA_CADASTRADA',
-      'KILL_SWITCH_ATIVADO',
-      'DISPOSITIVO_DESBLOQUEADO',
-      'DATABASE_RESET',
-      'DADOS_LIMPOS',
-      'GPS_ATUALIZADO'
-    ];
+// Transmissão ao vivo (SSE): exige sessão. Reconecta sempre que o token muda (login/logout).
+let sse: EventSource | null = null;
+const eventosMapeados = [
+  'INIT_STATE',
+  'STATUS_EMBARQUE_ATUALIZADO',
+  'AUSENCIA_NOTIFICADA',
+  'AUSENCIA_CANCELADA',
+  'ROTA_STATUS_ALTERADO',
+  'NOVA_PARADA_CADASTRADA',
+  'KILL_SWITCH_ATIVADO',
+  'DISPOSITIVO_DESBLOQUEADO',
+  'DATABASE_RESET',
+  'DADOS_LIMPOS',
+  'GPS_ATUALIZADO',
+  'PROXIMIDADE_ATUALIZADA'
+];
 
+function conectarSSE() {
+  if (typeof window === 'undefined' || !('EventSource' in window)) return;
+  try {
+    if (sse) { sse.close(); sse = null; }
+    const token = localStorage.getItem('van_token') || '';
+    if (!token) return;
+    const conexao = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
+    sse = conexao;
     eventosMapeados.forEach((nomeEvento) => {
-      sse.addEventListener(nomeEvento, (e) => {
+      conexao.addEventListener(nomeEvento, (e) => {
         try {
-          const payload = JSON.parse(e.data);
+          const payload = JSON.parse((e as MessageEvent).data);
           syncStateFromEvent(nomeEvento, payload);
           listeners.forEach((cb) => cb(nomeEvento, payload));
           if (nomeEvento === 'STATUS_EMBARQUE_ATUALIZADO') {
@@ -400,6 +419,10 @@ if (typeof window !== 'undefined' && 'EventSource' in window) {
   } catch (err) {
     console.warn('SSE indisponível:', err);
   }
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('van-token', conectarSSE);
+  conectarSSE();
 }
 
 function syncStateFromServer(serverState: any) {
@@ -837,6 +860,24 @@ export const TransportRepository = {
       return data;
     }
     throw new Error('Falha na verificação');
+  },
+
+  /** Resumo seguro da proximidade da van (sem coordenadas, exceto quando a próxima parada é a do aluno). */
+  async getProximidade(): Promise<{ proximidade: ProximidadeVan | null; prefs: PrefsProximidade } | null> {
+    const res = await fetch(`${getBaseUrl()}/api/proximidade`, { headers: getAuthHeaders() });
+    if (!res.ok) return null;
+    return res.json();
+  },
+
+  async salvarPreferenciasProximidade(prefs: PrefsProximidade): Promise<PrefsProximidade> {
+    const res = await fetch(`${getBaseUrl()}/api/preferencias`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(prefs)
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Não foi possível salvar agora.');
+    return { estilo: data.estilo, avisoMin: data.avisoMin };
   },
 
   async resetDatabase(): Promise<void> {

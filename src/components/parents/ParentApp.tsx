@@ -24,6 +24,11 @@ import {
   GPSCoordinate
 } from '../../types/database';
 import { TransportRepository, subscribeToDatabaseChanges } from '../../services/api';
+import type { ProximidadeVan, PrefsProximidade } from '../../services/api';
+import { isDemoMode } from '../../services/demo';
+import { ProximidadeBar } from '../shared/ProximidadeBar';
+import { RealMap } from '../shared/RealMap';
+import { PreferenciasProximidade } from './PreferenciasProximidade';
 import {
   MapPin,
   Clock,
@@ -68,6 +73,42 @@ export const ParentApp: React.FC<ParentAppProps> = ({
   const [enviandoAusencia, setEnviandoAusencia] = useState<boolean>(false);
   const [sucessoFeedback, setSucessoFeedback] = useState<string | null>(null);
   const [carregando, setCarregando] = useState<boolean>(true);
+
+  // Proximidade da van (modo real): resumo calculado no servidor, sem coordenadas até a próxima parada ser a do aluno.
+  const modoReal = !isDemoMode();
+  const [prox, setProx] = useState<ProximidadeVan | null>(null);
+  const [prefs, setPrefs] = useState<PrefsProximidade>({ estilo: 'C', avisoMin: 10 });
+  const [avisoProximidade, setAvisoProximidade] = useState<string | null>(null);
+  const avisoJaDisparado = React.useRef(false);
+
+  useEffect(() => {
+    if (!modoReal) return;
+    TransportRepository.getProximidade().then((r) => {
+      if (r) { setProx(r.proximidade); setPrefs(r.prefs); }
+    }).catch(() => {});
+    const unsub = subscribeToDatabaseChanges((event, payload: any) => {
+      if (event === 'PROXIMIDADE_ATUALIZADA' || event === 'INIT_STATE') {
+        const novo = payload?.proximidade ?? payload?.estado?.proximidade;
+        if (novo !== undefined) setProx(novo);
+        const pf = payload?.estado?.prefs ?? payload?.prefs;
+        if (pf) setPrefs(pf);
+      }
+    });
+    return () => unsub();
+  }, [modoReal]);
+
+  // Aviso quando a van chega ao tempo escolhido (uma vez por rota).
+  useEffect(() => {
+    if (!modoReal || !prox) return;
+    if (prox.estado === 'aguardando' || prox.estado === 'encerrada') { avisoJaDisparado.current = false; return; }
+    if (prox.avisoAtivo && !avisoJaDisparado.current && ['a_caminho', 'proxima'].includes(prox.estado)) {
+      avisoJaDisparado.current = true;
+      const msg = `A van chega em ~${prox.minutos} min. Prepare o aluno!`;
+      setAvisoProximidade(msg);
+      try { navigator.vibrate?.([200, 100, 200]); } catch {}
+      try { if ('Notification' in window && Notification.permission === 'granted') new Notification('VanEscolar', { body: msg }); } catch {}
+    }
+  }, [modoReal, prox]);
   const [erroCarga, setErroCarga] = useState<boolean>(false);
 
   // No modo demonstração (?demo=true) usa o aluno de exemplo; em uso real, o aluno vinculado ao responsável.
@@ -310,6 +351,51 @@ export const ParentApp: React.FC<ParentAppProps> = ({
 
       {/* CONTEÚDO PRINCIPAL (SCROLLABLE) */}
       <main className="flex-1 overflow-y-auto p-4 space-y-4">
+        {modoReal && (
+          <section aria-label="Acompanhe a van" className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-4 shadow-xl">
+            {avisoProximidade && (
+              <div role="status" className="mb-3 p-2.5 bg-amber-400/10 border border-amber-400/40 rounded-xl text-xs text-amber-200 flex items-center justify-between gap-2">
+                <span className="font-semibold">{avisoProximidade}</span>
+                <button type="button" onClick={() => setAvisoProximidade(null)} className="text-amber-300 underline cursor-pointer shrink-0">Ok</button>
+              </div>
+            )}
+            <ProximidadeBar proximidade={prox} estilo={prefs.estilo} />
+            {prox?.mapaLiberado && prox.posicao && (
+              <div className="mt-3">
+                <RealMap
+                  compact
+                  isRotaAtiva
+                  motoristaNome={motorista?.nome}
+                  coordenadas={{
+                    latitude: prox.posicao.latitude,
+                    longitude: prox.posicao.longitude,
+                    heading: prox.posicao.heading,
+                    speedKmH: 0,
+                    timestamp: '',
+                    accuracyMeters: 5,
+                    currentAddress: '',
+                    nextStopName: '',
+                    etaNextStopMinutes: prox.minutos ?? 0
+                  }}
+                />
+              </div>
+            )}
+            <PreferenciasProximidade prefs={prefs} onChange={setPrefs} />
+          </section>
+        )}
+
+        {modoReal && (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 text-xs text-slate-400 flex items-center justify-between gap-2">
+            <span className="flex items-center gap-1.5 truncate">
+              <MapPin className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+              <span className="truncate">Embarque: <strong className="text-slate-200">{aluno.endereco_embarque_real}</strong></span>
+            </span>
+            <span className="text-slate-500 shrink-0">{aluno.bairro || ''}</span>
+          </div>
+        )}
+
+        {!modoReal && (
+        <>
         {/* CARD PRINCIPAL DE STATUS & TEMPO DE CHEGADA EM DESTAQUE */}
         <div className="bg-gradient-to-br from-slate-900 via-slate-900 to-cyan-950/40 border border-cyan-500/30 rounded-2xl p-4 shadow-xl relative overflow-hidden ring-1 ring-cyan-500/20">
           {/* Cabeçalho do Card com Status */}
@@ -424,8 +510,12 @@ export const ParentApp: React.FC<ParentAppProps> = ({
             </div>
           </div>
         </div>
+        </>
+        )}
 
-        {/* MAPA DA VAN EM TEMPO REAL NA FREGUESIA */}
+        {!modoReal && (
+        <>
+        {/* MAPA DA VAN EM TEMPO REAL NA FREGUESIA (demonstração) */}
         <div className="space-y-2">
           <div className="flex items-center justify-between text-xs font-semibold text-slate-400 px-1">
             <span className="flex items-center gap-1.5">
@@ -446,6 +536,8 @@ export const ParentApp: React.FC<ParentAppProps> = ({
             motoristaNome={motorista.nome}
           />
         </div>
+        </>
+        )}
 
         {/* CARD DO MOTORISTA & VEÍCULO */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-md">

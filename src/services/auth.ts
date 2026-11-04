@@ -27,6 +27,7 @@ export const AuthService = {
     memoryToken = token;
     if (typeof window !== 'undefined') {
       localStorage.setItem(SESSION_TOKEN_KEY, token);
+      window.dispatchEvent(new Event('van-token')); // reconecta a transmissão ao vivo com o novo token
     }
   },
 
@@ -47,6 +48,7 @@ export const AuthService = {
     memoryToken = null;
     if (typeof window !== 'undefined') {
       localStorage.removeItem(SESSION_TOKEN_KEY);
+      window.dispatchEvent(new Event('van-token'));
     }
   },
 
