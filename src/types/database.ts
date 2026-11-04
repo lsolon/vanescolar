@@ -149,6 +149,12 @@ export interface ParadaViagem {
   ordem_sequencia: number;
   status_embarque: StatusEmbarque;
   hora_prevista: string;
+  /** Horários previstos da van (ida e volta) e horário da escola informado pelo responsável */
+  hora_ida?: string | null;
+  hora_volta?: string | null;
+  escola_entrada?: string;
+  escola_saida?: string;
+  ausencia_trecho?: 'IDA' | 'VOLTA' | 'AMBOS';
   hora_embarque?: string;
   hora_desembarque?: string;
   latitude: number;
@@ -176,6 +182,10 @@ export interface ParadaMotoristaSanitizada {
   escola_destino: string;
   status_embarque: StatusEmbarque;
   hora_prevista: string;
+  hora_ida?: string | null;
+  hora_volta?: string | null;
+  escola_entrada?: string;
+  escola_saida?: string;
   hora_embarque?: string;
   hora_desembarque?: string;
   motivo_ausencia?: string;

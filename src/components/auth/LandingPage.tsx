@@ -58,6 +58,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   // Estados Cadastro Motorista
   const [drvFullName, setDrvFullName] = useState('');
   const [drvEmail, setDrvEmail] = useState('');
+  const [drvLoginId, setDrvLoginId] = useState('');
   const [drvPassword, setDrvPassword] = useState('');
   const [drvConfirmPassword, setDrvConfirmPassword] = useState('');
   const [drvPhone, setDrvPhone] = useState('');
@@ -84,6 +85,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   // Estados Cadastro Responsável
   const [regFullName, setRegFullName] = useState('');
   const [regEmail, setRegEmail] = useState('');
+  const [regLoginId, setRegLoginId] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regConfirmPassword, setRegConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -180,6 +182,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       await TransportRepository.registrarMotorista({
         fullName: drvFullName,
         email: drvEmail,
+        ...(drvLoginId.trim() ? { loginId: drvLoginId.trim() } : {}),
         password: drvPassword,
         phone: drvPhone,
         vehicleModel: drvVehicleModel,
@@ -302,6 +305,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       await TransportRepository.registrarResponsavel({
         fullName: regFullName,
         email: regEmail,
+        ...(regLoginId.trim() ? { loginId: regLoginId.trim() } : {}),
         password: regPassword,
         lgpdConsent
       });
@@ -478,13 +482,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <form onSubmit={handleDriverSubmit} className="space-y-4">
               <div>
                 <label htmlFor="driver-email" className="block text-xs font-semibold text-slate-300 mb-1">
-                  E-mail do Motorista
+                  E-mail ou ID do Motorista
                 </label>
                 <input
                   id="driver-email"
                   name="email"
-                  type="email"
-                  autoComplete="email"
+                  type="text"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  autoComplete="username"
                   required
                   value={driverEmail}
                   onChange={(e) => setDriverEmail(e.target.value)}
@@ -598,6 +605,24 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   onChange={(e) => setDrvFullName(e.target.value)}
                   placeholder="ex: David Santos"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-400 min-h-[44px]"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="drv-loginid" className="block text-xs font-semibold text-slate-300 mb-1">
+                  ID de acesso (opcional)
+                </label>
+                <input
+                  id="drv-loginid"
+                  name="loginId"
+                  type="text"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  maxLength={30}
+                  placeholder="Ex.: tio.david — para entrar sem digitar o e-mail"
+                  value={drvLoginId}
+                  onChange={(e) => setDrvLoginId(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-cyan-400 placeholder-slate-600"
                 />
               </div>
 
@@ -871,13 +896,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <form onSubmit={handleParentLoginSubmit} className="space-y-4">
                 <div>
                   <label htmlFor="parent-email" className="block text-xs font-semibold text-slate-300 mb-1">
-                    E-mail
+                    E-mail ou ID
                   </label>
                   <input
                     id="parent-email"
                     name="email"
-                    type="email"
-                    autoComplete="email"
+                    type="text"
+                    inputMode="email"
+                    autoCapitalize="none"
+                    autoCorrect="off"
+                    autoComplete="username"
                     required
                     value={parentEmail}
                     onChange={(e) => setParentEmail(e.target.value)}
@@ -1017,6 +1045,24 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   onChange={(e) => setRegFullName(e.target.value)}
                   placeholder="ex: Leandro Solon"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-400 min-h-[44px]"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="reg-loginid" className="block text-xs font-semibold text-slate-300 mb-1">
+                  ID de acesso (opcional)
+                </label>
+                <input
+                  id="reg-loginid"
+                  name="loginId"
+                  type="text"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  maxLength={30}
+                  placeholder="Ex.: tio.david — para entrar sem digitar o e-mail"
+                  value={regLoginId}
+                  onChange={(e) => setRegLoginId(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-cyan-400 placeholder-slate-600"
                 />
               </div>
 

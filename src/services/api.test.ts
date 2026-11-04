@@ -522,3 +522,102 @@ test('Local da parada: validação, posse e uso real (sem coordenada inventada)'
   const porResp = await jsonReq('PUT', `/api/paradas/${sem.novaParada.id}/local`, resp, { latitude: -22.9, longitude: -43.2 });
   assert.ok(porResp.status === 403 || porResp.status === 401, `status ${porResp.status}`);
 });
+
+test('Login por ID: motorista e responsável entram com ID ou e-mail; ID validado e único', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const sufixo = Math.random().toString(36).slice(2, 7);
+
+  // motorista: registra com ID, entra com ID e com e-mail
+  const conv = await jsonReq('POST', '/api/admin/convites-motorista', adm.data.token, { nota: 'ID' });
+  const emailM = `idm_${sufixo}@teste.com`;
+  const idM = `tio.${sufixo}`;
+  const reg = await jsonReq('POST', '/api/auth/register-motorista', undefined, {
+    fullName: 'Tio ID', email: emailM, loginId: idM.toUpperCase(), password: 'senhaSegura123!', phone: '21999990000',
+    vehicleModel: 'Van', vehiclePlate: 'AAA-0000', invitationCode: conv.data.invitation.code, lgpdConsent: true
+  });
+  assert.ok(reg.data?.token, JSON.stringify(reg.data));
+  assert.ok((await jsonReq('POST', '/api/auth/login-motorista', undefined, { email: idM, password: 'senhaSegura123!' })).data.token, 'entra com o ID');
+  assert.ok((await jsonReq('POST', '/api/auth/login-motorista', undefined, { email: emailM, password: 'senhaSegura123!' })).data.token, 'entra com o e-mail');
+  assert.equal((await jsonReq('POST', '/api/auth/login-motorista', undefined, { email: idM, password: 'errada-errada' })).status, 401);
+  assert.equal((await jsonReq('POST', '/api/auth/login-motorista', undefined, { email: 'nao.existe.id', password: 'senhaSegura123!' })).status, 401);
+
+  // responsável: registra sem ID, define depois, entra pelo ID
+  const emailR = `idr_${sufixo}@teste.com`;
+  const r = await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Resp ID', email: emailR, password: 'senhaSegura123!', lgpdConsent: true });
+  const tokR = r.data.token;
+  for (const ruim of ['ab', 'tem espaço', 'com@arroba', '-comeca', 'x'.repeat(31)]) {
+    assert.equal((await jsonReq('PUT', '/api/conta/id', tokR, { loginId: ruim })).status, 400, ruim);
+  }
+  assert.equal((await jsonReq('PUT', '/api/conta/id', tokR, { loginId: idM })).status, 400, 'ID do motorista já em uso');
+  const idR = `mae.${sufixo}`;
+  assert.equal((await jsonReq('PUT', '/api/conta/id', tokR, { loginId: idR })).status, 200);
+  assert.equal((await jsonReq('GET', '/api/conta', tokR)).data.loginId, idR);
+  const l = await jsonReq('POST', '/api/auth/login-email', undefined, { email: idR, password: 'senhaSegura123!' });
+  assert.ok(l.data.token, JSON.stringify(l.data));
+  // motorista não consegue entrar pelo portal... e responsável com ID de motorista no portal do motorista é recusado
+  assert.equal((await jsonReq('POST', '/api/auth/login-motorista', undefined, { email: idR, password: 'senhaSegura123!' })).status, 401);
+  // registro com ID duplicado é recusado
+  const dup = await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Outro', email: `dup_${sufixo}@teste.com`, loginId: idR, password: 'senhaSegura123!', lgpdConsent: true });
+  assert.equal(dup.status, 400);
+});
+
+test('Horários da escola: responsável informa, van calcula ida/volta, motorista ajusta, ausência por trecho', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const mot = await novoMotorista(adm.data.token, 'Hor');
+  const outro = await novoMotorista(adm.data.token, 'HorOutro');
+  const nova = async (n: string) => (await jsonReq('POST', '/api/paradas/nova', mot, {
+    nomeAluno: n, endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777'
+  })).data;
+  const a = await nova('Aluno A'), b = await nova('Aluno B');
+  const respB = await novoResponsavel(b.codigoVinculo);
+  const idB = b.novaParada.id_aluno;
+  const verB = async () => (await jsonReq('GET', '/api/estado', respB)).data.paradas[0];
+
+  assert.equal((await verB()).hora_ida, null, 'sem horário da escola, nada é inventado');
+
+  // validação
+  for (const corpo of [{}, { entrada: '25:00', saida: '12:00' }, { entrada: '07:30', saida: '7h' }, { entrada: '12:00', saida: '07:30' }]) {
+    assert.equal((await jsonReq('PUT', `/api/alunos/${idB}/escola-horarios`, respB, corpo)).status, 400, JSON.stringify(corpo));
+  }
+  // responsável não mexe em outro aluno
+  assert.equal((await jsonReq('PUT', `/api/alunos/${a.novaParada.id_aluno}/escola-horarios`, respB, { entrada: '07:30', saida: '12:00' })).status, 403);
+  // motorista de outra van também não
+  assert.equal((await jsonReq('PUT', `/api/alunos/${idB}/escola-horarios`, outro, { entrada: '07:30', saida: '12:00' })).status, 404);
+
+  const ok = await jsonReq('PUT', `/api/alunos/${idB}/escola-horarios`, respB, { entrada: '07:30', saida: '12:00' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  // B é a última parada (ordem 2): ida = 07:30 − 15 − 10 = 07:05; volta = 12:00 + 10 + 1×4 = 12:14
+  let p = await verB();
+  assert.equal(p.escola_entrada, '07:30');
+  assert.equal(p.hora_ida, '07:05');
+  assert.equal(p.hora_volta, '12:14');
+  assert.equal(p.hora_prevista, '07:05');
+
+  // A, ao informar o mesmo horário, vira a primeira parada: ida 4 min antes de B
+  await jsonReq('PUT', `/api/alunos/${a.novaParada.id_aluno}/escola-horarios`, mot, { entrada: '07:30', saida: '12:00' });
+  const ea = (await jsonReq('GET', '/api/estado', mot)).data.paradas.find((x: any) => x.id === a.novaParada.id);
+  assert.equal(ea.hora_ida, '07:01');
+  assert.equal(ea.hora_volta, '12:10');
+
+  // motorista ajusta à mão; responsável vê; outro motorista não pode; limpar volta ao automático
+  assert.equal((await jsonReq('PUT', `/api/paradas/${b.novaParada.id}/horarios`, outro, { horaIda: '06:00' })).status, 404);
+  assert.equal((await jsonReq('PUT', `/api/paradas/${b.novaParada.id}/horarios`, respB, { horaIda: '06:00' })).status, 403);
+  assert.equal((await jsonReq('PUT', `/api/paradas/${b.novaParada.id}/horarios`, mot, { horaIda: '99:99' })).status, 400);
+  assert.equal((await jsonReq('PUT', `/api/paradas/${b.novaParada.id}/horarios`, mot, { horaIda: '07:10' })).status, 200);
+  assert.equal((await verB()).hora_ida, '07:10');
+  assert.equal((await verB()).hora_volta, '12:14', 'volta continua automática');
+  await jsonReq('PUT', `/api/paradas/${b.novaParada.id}/horarios`, mot, { horaIda: null });
+  assert.equal((await verB()).hora_ida, '07:05');
+
+  // sentido da viagem e ausência por trecho
+  assert.equal((await jsonReq('POST', `/api/alunos/${idB}/ausencia`, respB, { motivo: 'Consulta', trecho: 'VOLTA' })).status, 200);
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
+  let est = (await jsonReq('GET', '/api/estado', respB)).data;
+  assert.equal(est.viagem.sentido, 'IDA');
+  assert.notEqual(est.paradas[0].status_embarque, 'AUSENTE', 'ausência só na volta não vale na ida');
+  await jsonReq('POST', '/api/rotas/encerrar', mot);
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'VOLTA' });
+  est = (await jsonReq('GET', '/api/estado', respB)).data;
+  assert.equal(est.viagem.sentido, 'VOLTA');
+  assert.equal(est.paradas[0].status_embarque, 'AUSENTE', 'ausência da volta vale na volta');
+});
