@@ -57,6 +57,7 @@ import {
   Copy
 } from 'lucide-react';
 import { LiveMap } from '../shared/LiveMap';
+import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 
 interface DriverPanelProps {
   coordenadas: GPSCoordinate;
@@ -102,6 +103,12 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const [novoAlunoEscola, setNovoAlunoEscola] = useState<string>('Colégio Santa Mônica');
   const [novoAlunoResponsavel, setNovoAlunoResponsavel] = useState<string>('');
   const [novoAlunoTelefone, setNovoAlunoTelefone] = useState<string>('');
+  const [novoAlunoLocal, setNovoAlunoLocal] = useState<LocalMarcado | null>(null);
+  // Marcar o local de um aluno já cadastrado
+  const [paradaMarcando, setParadaMarcando] = useState<{ id: number | string; nome: string } | null>(null);
+  const [localMarcando, setLocalMarcando] = useState<LocalMarcado | null>(null);
+  const [salvandoLocal, setSalvandoLocal] = useState(false);
+  const [erroLocal, setErroLocal] = useState<string | null>(null);
   const [cadastrandoAluno, setCadastrandoAluno] = useState<boolean>(false);
   const [codigoGeradoSucesso, setCodigoGeradoSucesso] = useState<string | null>(null);
   const [copiado, setCopiado] = useState<boolean>(false);
@@ -208,7 +215,8 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         pontoReferencia: novoAlunoPontoRef.trim(),
         escola: novoAlunoEscola.trim() || 'Colégio Santa Mônica',
         nomeResponsavel: novoAlunoResponsavel.trim() || 'Responsável',
-        telefoneResponsavel: novoAlunoTelefone.trim() || '(21) 99999-8888'
+        telefoneResponsavel: novoAlunoTelefone.trim() || '(21) 99999-8888',
+        ...(novoAlunoLocal ? { latitude: novoAlunoLocal.latitude, longitude: novoAlunoLocal.longitude } : {})
       });
       setCodigoGeradoSucesso(res.codigoVinculo);
       setNovoAlunoNome('');
@@ -217,12 +225,30 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
       setNovoAlunoEscola('Colégio Santa Mônica');
       setNovoAlunoResponsavel('');
       setNovoAlunoTelefone('');
+      setNovoAlunoLocal(null);
       await carregarDadosZeroCache();
       setMensagemSucesso(`Aluno cadastrado com sucesso! Código de vínculo: ${res.codigoVinculo}`);
     } catch (err: unknown) {
       console.error('Erro ao cadastrar aluno:', err);
     } finally {
       setCadastrandoAluno(false);
+    }
+  };
+
+  const handleSalvarLocal = async () => {
+    if (!paradaMarcando || !localMarcando) return;
+    setSalvandoLocal(true);
+    setErroLocal(null);
+    try {
+      await TransportRepository.definirLocalParada(paradaMarcando.id, localMarcando.latitude, localMarcando.longitude);
+      setParadaMarcando(null);
+      setLocalMarcando(null);
+      await carregarDadosZeroCache();
+      setMensagemSucesso('Local de embarque salvo.');
+    } catch (err: unknown) {
+      setErroLocal(err instanceof Error ? err.message : 'Não foi possível salvar o local.');
+    } finally {
+      setSalvandoLocal(false);
     }
   };
 
@@ -773,6 +799,15 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                     <span className="text-[11px] text-slate-300 font-medium">Navegação Protegida:</span>
                   </div>
 
+                  {item.tem_localizacao === false ? (
+                    <button
+                      type="button"
+                      onClick={() => { setLocalMarcando(null); setErroLocal(null); setParadaMarcando({ id: item.parada_id, nome: item.nome_aluno_sanitizado }); }}
+                      className="px-2.5 py-1.5 rounded-lg bg-amber-400/10 hover:bg-amber-400/20 text-amber-300 border border-amber-400/30 text-[11px] font-bold cursor-pointer min-h-[36px]"
+                    >
+                      Marcar local de embarque
+                    </button>
+                  ) : (
                   <div className="flex items-center gap-2">
                     <a
                       href={item.waze_nav_url}
@@ -796,6 +831,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                       <span>Maps</span>
                     </a>
                   </div>
+                  )}
                 </div>
 
                 {/* BOTÕES DE AÇÃO GRANDES E RESPONSIVOS (EMBARCOU / ENTREGUE / AUSENTE) */}
@@ -1070,6 +1106,11 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                   </div>
                 </div>
 
+                <div>
+                  <label className="text-[11px] font-bold text-slate-300 block mb-1">Local de embarque (opcional)</label>
+                  <SeletorLocal valor={novoAlunoLocal} onChange={setNovoAlunoLocal} />
+                </div>
+
                 <div className="grid grid-cols-2 gap-2 pt-2">
                   <button
                     type="button"
@@ -1089,6 +1130,22 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                 </div>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {paradaMarcando && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 flex items-end sm:items-center justify-center p-3" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 max-h-[92vh] overflow-y-auto">
+            <h3 className="text-sm font-bold text-slate-100">Marcar local de embarque — {paradaMarcando.nome}</h3>
+            <SeletorLocal valor={localMarcando} onChange={setLocalMarcando} />
+            {erroLocal && <p role="alert" className="text-[11px] text-rose-300">{erroLocal}</p>}
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" onClick={() => setParadaMarcando(null)} className="py-2.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold cursor-pointer">Cancelar</button>
+              <button type="button" onClick={handleSalvarLocal} disabled={!localMarcando || salvandoLocal} className="py-2.5 rounded-xl bg-amber-400 text-slate-950 text-xs font-bold disabled:opacity-50 cursor-pointer">
+                {salvandoLocal ? 'Salvando…' : 'Salvar local'}
+              </button>
+            </div>
           </div>
         </div>
       )}

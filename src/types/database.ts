@@ -182,8 +182,10 @@ export interface ParadaMotoristaSanitizada {
   responsavel_contato_mascarado: string; // Ex: "(21) 9****-4567"
   telefone_para_chamada: string;
   // Coordenadas protegidas para navegação externa pontual (Waze / Google Maps)
-  waze_nav_url: string;
-  google_maps_nav_url: string;
+  waze_nav_url?: string;
+  google_maps_nav_url?: string;
+  /** false = o motorista ainda não marcou o local de embarque deste aluno */
+  tem_localizacao?: boolean;
 }
 
 export interface ViagemMotoristaZeroCache {

@@ -517,6 +517,13 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
   return out;
 }
 
+/** Valida um par latitude/longitude; devolve null se inválido. Arredonda a ~1 m. */
+function lerLocal(lat: unknown, lng: unknown): { latitude: number; longitude: number } | null {
+  if (typeof lat !== 'number' || typeof lng !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) return null;
+  return { latitude: Number(lat.toFixed(5)), longitude: Number(lng.toFixed(5)) };
+}
+
 function getFilteredStateForUser(user: SessionPayload) {
   const driverId = driverIdFor(user);
   const trip = driverId !== null ? getTrip(driverId) : makeTrip(0);
@@ -1340,7 +1347,13 @@ async function startServer() {
 
   app.post('/api/paradas/nova', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
-    const { nomeAluno, endereco, pontoReferencia, escola, telefone, responsavelNome } = req.body;
+    const { nomeAluno, endereco, pontoReferencia, escola } = req.body;
+    const telefone = req.body.telefone ?? req.body.telefoneResponsavel;
+    const responsavelNome = req.body.responsavelNome ?? req.body.nomeResponsavel;
+    const local = lerLocal(req.body.latitude, req.body.longitude);
+    if (req.body.latitude !== undefined && req.body.latitude !== null && !local) {
+      return res.status(400).json({ error: 'Localização inválida.' });
+    }
     const novoId = serverState.paradas.reduce((m: number, p: any) => Math.max(m, p.id % 1000, (p.id_aluno ?? 0) - 210), 0) + 1;
     const codigoVinculo = `VAN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 
@@ -1352,8 +1365,9 @@ async function startServer() {
       ordem_sequencia: serverState.paradas.filter((p: any) => p.id_motorista === user.userId).length + 1,
       status_embarque: 'PENDENTE' as const,
       hora_prevista: '07:20',
-      latitude: -22.9310,
-      longitude: -43.3400,
+      // Sem localização marcada o aluno fica sem coordenadas (nunca um ponto inventado).
+      latitude: local ? local.latitude : null,
+      longitude: local ? local.longitude : null,
       nome_aluno: nomeAluno,
       nome_sanitizado: `${nomeAluno.split(' ')[0]} ${nomeAluno.split(' ')[1]?.[0] || ''}.`,
       endereco_real: endereco,
@@ -1369,6 +1383,20 @@ async function startServer() {
     serverState.paradas.push(novaParada as any);
     broadcast('NOVA_PARADA_CADASTRADA', { novaParada }, user.userId);
     res.json({ sucesso: true, novaParada, codigoVinculo });
+  });
+
+  // O motorista marca/atualiza o local de embarque de um aluno seu (navegação e estimativa de chegada).
+  app.put('/api/paradas/:id/local', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const id = parseInt(req.params.id, 10);
+    const parada: any = serverState.paradas.find((p: any) => p.id === id);
+    if (!parada || donoDaParada(parada) !== user.userId) return res.status(404).json({ error: 'Parada não encontrada' });
+    const local = lerLocal(req.body?.latitude, req.body?.longitude);
+    if (!local) return res.status(400).json({ error: 'Localização inválida.' });
+    parada.latitude = local.latitude;
+    parada.longitude = local.longitude;
+    auditLog('LOCAL_PARADA_DEFINIDO', user.email, `Local de embarque definido para a parada ${parada.id}`);
+    res.json({ sucesso: true });
   });
 
   app.post('/api/limpar-dados', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
