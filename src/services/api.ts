@@ -750,6 +750,11 @@ export const TransportRepository = {
     return handleAdminResponse(res);
   },
 
+  async confirmarEmailUsuario(id: number) {
+    const res = await fetch(`${getBaseUrl()}/api/admin/usuarios/${id}/confirmar-email`, { method: 'POST', headers: getAuthHeaders(true) });
+    return handleAdminResponse(res);
+  },
+
   async listarResponsaveisAdmin() {
     const res = await fetch(`${getBaseUrl()}/api/admin/responsaveis`, { headers: getAuthHeaders(true) });
     return handleAdminResponse(res);

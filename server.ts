@@ -1112,6 +1112,15 @@ async function startServer() {
     res.status(404).json({ error: 'Motorista não encontrado' });
   });
 
+  // Enquanto não há envio de e-mails, o admin confirma manualmente o e-mail de um responsável.
+  app.post('/api/admin/usuarios/:id/confirmar-email', authenticate, requireAdmin, (req: Request, res: Response) => {
+    const alvo = usersDB.find((u) => u.id === parseInt(req.params.id, 10));
+    if (!alvo) return res.status(404).json({ error: 'Usuário não encontrado.' });
+    alvo.emailVerified = true;
+    auditLog('EMAIL_CONFIRMADO_ADMIN', ((req as any).user as SessionPayload).email, `E-mail de ${alvo.email} confirmado manualmente`);
+    res.json({ sucesso: true });
+  });
+
   app.get('/api/admin/responsaveis', authenticate, requireAdmin, (req, res) => {
     const responsaveis = usersDB
       .filter(u => u.role === 'responsavel')

@@ -549,9 +549,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
                           </span>
                         </td>
                         <td className="py-4">
-                          <button className="p-2 rounded-lg bg-slate-800 text-slate-400 hover:text-white">
-                            <ChevronRight className="w-4 h-4" />
-                          </button>
+                          {!p.emailVerified && (
+                            <button
+                              type="button"
+                              onClick={async () => { try { await TransportRepository.confirmarEmailUsuario(p.id); loadData(); } catch { alert('Falha ao confirmar e-mail'); } }}
+                              className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold cursor-pointer"
+                            >
+                              Confirmar e-mail
+                            </button>
+                          )}
                         </td>
                       </tr>
                     ))}

@@ -633,3 +633,16 @@ test('Limpar tudo (admin): exige confirmação e admin; apaga dados e mantém o 
   const novo = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
   assert.ok(novo.data.token, 'admin continua entrando');
 });
+
+test('Admin confirma e-mail de responsável manualmente', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const email = `conf_${Date.now()}@teste.com`;
+  const r = await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Conf', email, password: 'senhaSegura123!', lgpdConsent: true });
+  const lista = (await jsonReq('GET', '/api/admin/responsaveis', adm.data.token)).data.responsaveis;
+  const u = lista.find((x: any) => x.email === email);
+  assert.equal(u.emailVerified, false);
+  assert.equal((await jsonReq('POST', `/api/admin/usuarios/${u.id}/confirmar-email`, r.data.token)).status, 403, 'só admin');
+  assert.equal((await jsonReq('POST', `/api/admin/usuarios/${u.id}/confirmar-email`, adm.data.token)).status, 200);
+  const l = await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'senhaSegura123!' });
+  assert.equal(l.data.emailVerified, true);
+});
