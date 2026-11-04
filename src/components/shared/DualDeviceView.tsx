@@ -7,7 +7,7 @@ import { Smartphone, Bus, Users, Sparkles, ArrowRightLeft, QrCode } from 'lucide
 interface DualDeviceViewProps {
   coordenadas: GPSCoordinate;
   isRotaAtiva: boolean;
-  onToggleRota: () => void;
+  onToggleRota: (sentido?: 'IDA' | 'VOLTA') => void;
   onOpenTestModal?: () => void;
 }
 

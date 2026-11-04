@@ -97,6 +97,8 @@ interface UserRecord {
   id: number;
   fullName: string;
   email: string;
+  /** ID de acesso escolhido pelo usuário (alternativa ao e-mail no login) */
+  loginId?: string;
   passwordHash: string;
   role: 'motorista' | 'responsavel';
   emailVerified: boolean;
@@ -517,6 +519,55 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
   return out;
 }
 
+/** ID de acesso: 3–30 caracteres (letras minúsculas, números, ponto, traço, sublinhado), sem @. */
+function lerLoginId(v: unknown): string | null {
+  const id = String(v ?? '').trim().toLowerCase();
+  return /^[a-z0-9][a-z0-9._-]{2,29}$/.test(id) ? id : null;
+}
+
+/** Acha o usuário pelo e-mail (contém @) ou pelo ID de acesso cadastrado. */
+function acharUsuarioPorLogin(identificador: unknown): UserRecord | undefined {
+  const ident = String(identificador ?? '').trim().toLowerCase();
+  if (!ident) return undefined;
+  return ident.includes('@')
+    ? usersDB.find((u) => u.email.toLowerCase() === ident)
+    : usersDB.find((u) => u.loginId === ident);
+}
+
+// ---- Horários da escola (informados pelo responsável) e horários previstos da van ----
+const FOLGA_CHEGADA_MIN = 15;   // a van chega à escola esta folga antes da entrada
+const TRAJETO_ESCOLA_MIN = 10;  // do último embarque até a escola
+const APOS_SAIDA_MIN = 10;      // da saída da escola até o primeiro desembarque
+
+function lerHorario(v: unknown): string | null {
+  const t = String(v ?? '').trim();
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(t) ? t : null;
+}
+const paraMin = (h: string) => parseInt(h.slice(0, 2), 10) * 60 + parseInt(h.slice(3), 10);
+const deMin = (m: number) => {
+  const x = ((Math.round(m) % 1440) + 1440) % 1440;
+  return `${String(Math.floor(x / 60)).padStart(2, '0')}:${String(x % 60).padStart(2, '0')}`;
+};
+
+/** Horários previstos de ida e volta: o motorista pode fixar à mão; senão vêm do horário da escola. */
+function horariosDaParada(p: any): { hora_ida: string | null; hora_volta: string | null } {
+  const dono = donoDaParada(p);
+  const grupo = serverState.paradas
+    .filter((x: any) => donoDaParada(x) === dono)
+    .sort((a: any, b: any) => a.ordem_sequencia - b.ordem_sequencia);
+  const idx = Math.max(0, grupo.findIndex((x: any) => x.id === p.id));
+  const ida = p.hora_ida_manual
+    ?? (p.escola_entrada ? deMin(paraMin(p.escola_entrada) - FOLGA_CHEGADA_MIN - TRAJETO_ESCOLA_MIN - (grupo.length - 1 - idx) * MIN_POR_PARADA) : null);
+  const volta = p.hora_volta_manual
+    ?? (p.escola_saida ? deMin(paraMin(p.escola_saida) + APOS_SAIDA_MIN + idx * MIN_POR_PARADA) : null);
+  return { hora_ida: ida, hora_volta: volta };
+}
+
+function comHorarios(p: any) {
+  const h = horariosDaParada(p);
+  return { ...p, ...h, hora_prevista: h.hora_ida ?? 'A definir' };
+}
+
 /** Valida um par latitude/longitude; devolve null se inválido. Arredonda a ~1 m. */
 function lerLocal(lat: unknown, lng: unknown): { latitude: number; longitude: number } | null {
   if (typeof lat !== 'number' || typeof lng !== 'number' || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
@@ -529,7 +580,7 @@ function getFilteredStateForUser(user: SessionPayload) {
   const trip = driverId !== null ? getTrip(driverId) : makeTrip(0);
   const cloned = JSON.parse(JSON.stringify({
     motorista: serverState.motorista,
-    paradas: serverState.paradas,
+    paradas: serverState.paradas.map(comHorarios),
     viagem: trip.viagem,
     gpsAtual: trip.gpsAtual,
     mensagens: trip.mensagens
@@ -748,6 +799,13 @@ async function startServer() {
   // REGISTRO DE MOTORISTA COM CÓDIGO DE CONVITE OBRIGATÓRIO
   app.post('/api/auth/register-motorista', rateLimiter(5, 60000), (req: Request, res: Response) => {
     const { fullName, email, password, phone, vehicleModel, vehiclePlate, invitationCode, lgpdConsent, firebaseUid } = req.body;
+    const loginId = req.body.loginId ? lerLoginId(req.body.loginId) : undefined;
+    if (req.body.loginId && !loginId) {
+      return res.status(400).json({ error: 'ID inválido. Use de 3 a 30 letras minúsculas, números, ponto, traço ou sublinhado.' });
+    }
+    if (loginId && usersDB.some((u) => u.loginId === loginId)) {
+      return res.status(400).json({ error: 'Este ID já está em uso. Escolha outro.' });
+    }
 
     if (!fullName || !email || !invitationCode || !lgpdConsent) {
       return res.status(400).json({ error: 'Todos os campos obrigatórios e o código de convite devem ser fornecidos.' });
@@ -774,6 +832,7 @@ async function startServer() {
       id: newDriverId,
       fullName: fullName.trim(),
       email: email.trim().toLowerCase(),
+      ...(loginId ? { loginId } : {}),
       passwordHash: password ? crypto.scryptSync(password, 'salt-van-escolar', 64).toString('hex') : '',
       role: 'motorista',
       emailVerified: true,
@@ -816,9 +875,8 @@ async function startServer() {
     
     // Em um sistema real, aqui verificaríamos o idToken com firebase-admin
     // Aqui simulamos a busca pelo usuário via e-mail
-    const user = usersDB.find(
-      (u) => u.email.toLowerCase() === email?.toLowerCase() && u.role === 'motorista'
-    );
+    const achado = acharUsuarioPorLogin(email);
+    const user = achado && achado.role === 'motorista' ? achado : undefined;
 
     if (!user) {
       return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
@@ -860,7 +918,7 @@ async function startServer() {
       return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
     }
 
-    const user = usersDB.find((u) => u.email.toLowerCase() === email?.toLowerCase());
+    const user = acharUsuarioPorLogin(email);
 
     if (!user) {
       return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
@@ -1110,6 +1168,13 @@ async function startServer() {
   // ENDPOINTS DE AUTENTICAÇÃO DO RESPONSÁVEL
   app.post('/api/auth/register', rateLimiter(5, 60000), (req: Request, res: Response) => {
     const { fullName, email, password, lgpdConsent } = req.body;
+    const loginId = req.body.loginId ? lerLoginId(req.body.loginId) : undefined;
+    if (req.body.loginId && !loginId) {
+      return res.status(400).json({ error: 'ID inválido. Use de 3 a 30 letras minúsculas, números, ponto, traço ou sublinhado.' });
+    }
+    if (loginId && usersDB.some((u) => u.loginId === loginId)) {
+      return res.status(400).json({ error: 'Este ID já está em uso. Escolha outro.' });
+    }
 
     if (!fullName || !email || !password || !lgpdConsent) {
       return res.status(400).json({ error: 'Todos os campos são obrigatórios, incluindo o aceite da LGPD.' });
@@ -1129,6 +1194,7 @@ async function startServer() {
       id: 200 + usersDB.length + 1,
       fullName: fullName.trim(),
       email: email.trim().toLowerCase(),
+      ...(loginId ? { loginId } : {}),
       passwordHash,
       role: 'responsavel',
       emailVerified: false,
@@ -1163,6 +1229,65 @@ async function startServer() {
   });
 
   // PREFERÊNCIAS DO RESPONSÁVEL: estilo da barra de proximidade e antecedência do aviso.
+  // ID de acesso (alternativa ao e-mail no login)
+  app.get('/api/conta', authenticate, (req: Request, res: Response) => {
+    const u = usersDB.find((x) => x.id === ((req as any).user as SessionPayload).userId);
+    res.json({ email: u?.email ?? null, loginId: u?.loginId ?? null });
+  });
+
+  app.put('/api/conta/id', authenticate, rateLimiter(10, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const rec = usersDB.find((x) => x.id === user.userId);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const id = lerLoginId(req.body?.loginId);
+    if (!id) return res.status(400).json({ error: 'ID inválido. Use de 3 a 30 letras minúsculas, números, ponto, traço ou sublinhado.' });
+    if (usersDB.some((u) => u.loginId === id && u.id !== rec.id)) {
+      return res.status(400).json({ error: 'Este ID já está em uso. Escolha outro.' });
+    }
+    rec.loginId = id;
+    auditLog('ID_ACESSO_DEFINIDO', rec.email, 'ID de acesso definido/alterado');
+    res.json({ sucesso: true, loginId: id });
+  });
+
+  // Responsável informa entrada e saída da escola (o motorista dono também pode ajustar).
+  app.put('/api/alunos/:id/escola-horarios', authenticate, (req: Request, res: Response) => {
+    const alunoId = parseInt(req.params.id, 10);
+    const user = (req as any).user as SessionPayload;
+    if (user.role === 'responsavel' && user.studentId !== alunoId) {
+      return res.status(403).json({ error: 'Acesso negado para este aluno.' });
+    }
+    if (user.role !== 'responsavel' && user.role !== 'motorista') return res.status(403).json({ error: 'Acesso negado.' });
+    const parada: any = serverState.paradas.find((p: any) => p.id_aluno === alunoId);
+    if (!parada || (user.role === 'motorista' && donoDaParada(parada) !== user.userId)) {
+      return res.status(404).json({ error: 'Aluno não encontrado.' });
+    }
+    const entrada = lerHorario(req.body?.entrada);
+    const saida = lerHorario(req.body?.saida);
+    if (!entrada || !saida) return res.status(400).json({ error: 'Informe entrada e saída no formato HH:MM.' });
+    if (paraMin(saida) <= paraMin(entrada)) return res.status(400).json({ error: 'A saída precisa ser depois da entrada.' });
+    parada.escola_entrada = entrada;
+    parada.escola_saida = saida;
+    broadcast('HORARIOS_ATUALIZADOS', { paradaId: parada.id }, donoDaParada(parada));
+    res.json({ sucesso: true, ...horariosDaParada(parada) });
+  });
+
+  // Motorista ajusta (ou limpa) o horário previsto de ida/volta de uma parada sua.
+  app.put('/api/paradas/:id/horarios', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const parada: any = serverState.paradas.find((p: any) => p.id === parseInt(req.params.id, 10));
+    if (!parada || donoDaParada(parada) !== user.userId) return res.status(404).json({ error: 'Parada não encontrada' });
+    const b = req.body || {};
+    for (const [campo, chave] of [['horaIda', 'hora_ida_manual'], ['horaVolta', 'hora_volta_manual']] as const) {
+      if (!(campo in b)) continue;
+      if (b[campo] === null || b[campo] === '') { delete parada[chave]; continue; }
+      const h = lerHorario(b[campo]);
+      if (!h) return res.status(400).json({ error: 'Horário inválido. Use HH:MM.' });
+      parada[chave] = h;
+    }
+    broadcast('HORARIOS_ATUALIZADOS', { paradaId: parada.id }, donoDaParada(parada));
+    res.json({ sucesso: true, ...horariosDaParada(parada) });
+  });
+
   app.get('/api/preferencias', authenticate, (req: Request, res: Response) => {
     const u = (req as any).user as SessionPayload;
     res.json({ ...prefsDe(u.userId), avisosValidos: AVISOS_VALIDOS });
@@ -1285,9 +1410,13 @@ async function startServer() {
       return res.status(403).json({ error: 'Acesso negado para este aluno.' });
     }
     const { motivo, observacao } = req.body;
+    const trecho = ['IDA', 'VOLTA'].includes(req.body?.trecho) ? req.body.trecho : 'AMBOS';
     const parada = serverState.paradas.find((p) => p.id_aluno === alunoId || p.id === alunoId);
     if (parada) {
-      parada.status_embarque = 'AUSENTE';
+      (parada as any).ausencia_trecho = trecho;
+      // Só vale já se a viagem em andamento for do mesmo sentido (ou a ausência for dos dois).
+      const trip = getTrip(donoDaParada(parada) as number);
+      if (trecho === 'AMBOS' || trecho === ((trip.viagem as any).sentido || 'IDA')) parada.status_embarque = 'AUSENTE';
       (parada as any).motivo_ausencia = motivo || 'Ausência informada pelo responsável';
       if (observacao) (parada as any).observacao = observacao;
     }
@@ -1305,6 +1434,7 @@ async function startServer() {
     if (parada) {
       parada.status_embarque = 'PENDENTE';
       delete (parada as any).motivo_ausencia;
+      delete (parada as any).ausencia_trecho;
     }
     broadcast('AUSENCIA_CANCELADA', { alunoId, paradaId: parada?.id }, parada ? donoDaParada(parada) : undefined);
     res.json({ sucesso: true });
@@ -1314,9 +1444,25 @@ async function startServer() {
     const { acao } = req.params;
     const driverId = driverIdFor((req as any).user) as number;
     const trip = getTrip(driverId);
-    if (acao === 'iniciar') trip.viagem.status = 'EM_ANDAMENTO';
-    else if (acao === 'encerrar') trip.viagem.status = 'CONCLUIDA';
-    broadcast('ROTA_STATUS_ALTERADO', { status: trip.viagem.status }, driverId);
+    if (acao === 'iniciar') {
+      // O motorista escolhe o sentido: IDA (casa → escola) ou VOLTA (escola → casa).
+      const sentido = req.body?.sentido === 'VOLTA' ? 'VOLTA' : 'IDA';
+      const mudou = (trip.viagem as any).sentido !== sentido;
+      (trip.viagem as any).sentido = sentido;
+      (trip.viagem as any).periodo = sentido === 'VOLTA' ? 'MANHA_VOLTA' : 'MANHA_IDA';
+      trip.viagem.status = 'EM_ANDAMENTO';
+      if (mudou) {
+        // Novo sentido: todos voltam a PENDENTE, exceto quem avisou ausência para este sentido.
+        for (const p of serverState.paradas as any[]) {
+          if (donoDaParada(p) !== driverId) continue;
+          const trechoAus = p.ausencia_trecho ?? (p.status_embarque === 'AUSENTE' ? 'AMBOS' : null);
+          const ausente = trechoAus === sentido || trechoAus === 'AMBOS';
+          p.status_embarque = ausente ? 'AUSENTE' : 'PENDENTE';
+        }
+      }
+    }
+    else if (acao === 'encerrar') { trip.viagem.status = 'CONCLUIDA'; delete (trip.viagem as any).sentido; }
+    broadcast('ROTA_STATUS_ALTERADO', { status: trip.viagem.status, sentido: (trip.viagem as any).sentido }, driverId);
     res.json({ sucesso: true, status: trip.viagem.status });
   });
 
@@ -1364,7 +1510,8 @@ async function startServer() {
       id_aluno: 210 + novoId,
       ordem_sequencia: serverState.paradas.filter((p: any) => p.id_motorista === user.userId).length + 1,
       status_embarque: 'PENDENTE' as const,
-      hora_prevista: '07:20',
+      ...(lerHorario(req.body.escolaEntrada) ? { escola_entrada: lerHorario(req.body.escolaEntrada)! } : {}),
+      ...(lerHorario(req.body.escolaSaida) ? { escola_saida: lerHorario(req.body.escolaSaida)! } : {}),
       // Sem localização marcada o aluno fica sem coordenadas (nunca um ponto inventado).
       latitude: local ? local.latitude : null,
       longitude: local ? local.longitude : null,

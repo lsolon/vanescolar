@@ -29,6 +29,8 @@ import { isDemoMode } from '../../services/demo';
 import { ProximidadeBar } from '../shared/ProximidadeBar';
 import { RealMap } from '../shared/RealMap';
 import { PreferenciasProximidade } from './PreferenciasProximidade';
+import { HorariosEscola } from './HorariosEscola';
+import { MeuIdAcesso } from '../shared/MeuIdAcesso';
 import {
   MapPin,
   Clock,
@@ -70,6 +72,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
   const [modalAusenciaAberto, setModalAusenciaAberto] = useState<boolean>(false);
   const [motivoSelecionado, setMotivoSelecionado] = useState<string>('Consulta médica / Dentista');
   const [observacaoTexto, setObservacaoTexto] = useState<string>('');
+  const [trechoAusencia, setTrechoAusencia] = useState<'AMBOS' | 'IDA' | 'VOLTA'>('AMBOS');
   const [enviandoAusencia, setEnviandoAusencia] = useState<boolean>(false);
   const [sucessoFeedback, setSucessoFeedback] = useState<string | null>(null);
   const [carregando, setCarregando] = useState<boolean>(true);
@@ -171,7 +174,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
         ? `${motivoSelecionado} - ${observacaoTexto.trim()}`
         : motivoSelecionado;
 
-      await TransportRepository.avisarAusencia(Number(dados.aluno.id), motivoFinal);
+      await TransportRepository.avisarAusencia(Number(dados.aluno.id), motivoFinal, undefined, trechoAusencia);
       await carregarDados();
 
       setModalAusenciaAberto(false);
@@ -352,6 +355,17 @@ export const ParentApp: React.FC<ParentAppProps> = ({
       {/* CONTEÚDO PRINCIPAL (SCROLLABLE) */}
       <main className="flex-1 overflow-y-auto p-4 space-y-4">
         {modoReal && (
+          <HorariosEscola
+            alunoId={dados.aluno.id}
+            entrada={dados.parada.escola_entrada}
+            saida={dados.parada.escola_saida}
+            horaIda={dados.parada.hora_ida}
+            horaVolta={dados.parada.hora_volta}
+            onSalvo={carregarDados}
+          />
+        )}
+
+        {modoReal && (
           <section aria-label="Acompanhe a van" className="bg-slate-900 border border-cyan-500/30 rounded-2xl p-4 shadow-xl">
             {avisoProximidade && (
               <div role="status" className="mb-3 p-2.5 bg-amber-400/10 border border-amber-400/40 rounded-xl text-xs text-amber-200 flex items-center justify-between gap-2">
@@ -383,6 +397,8 @@ export const ParentApp: React.FC<ParentAppProps> = ({
             <PreferenciasProximidade prefs={prefs} onChange={setPrefs} />
           </section>
         )}
+
+        {modoReal && <MeuIdAcesso />}
 
         {modoReal && (
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 text-xs text-slate-400 flex items-center justify-between gap-2">
@@ -652,6 +668,13 @@ export const ParentApp: React.FC<ParentAppProps> = ({
             </div>
 
             {/* OBSERVAÇÃO ADICIONAL OPCIONAL */}
+            <div role="group" aria-label="Qual trecho" className="flex rounded-xl overflow-hidden border border-slate-700 text-[11px] font-bold">
+              {([['AMBOS', 'Ida e volta'], ['IDA', 'Só ida'], ['VOLTA', 'Só volta']] as const).map(([v, rot]) => (
+                <button key={v} type="button" aria-pressed={trechoAusencia === v} onClick={() => setTrechoAusencia(v)}
+                  className={`flex-1 py-2 min-h-[40px] cursor-pointer ${trechoAusencia === v ? 'bg-rose-500/20 text-rose-300' : 'bg-slate-950 text-slate-400'}`}>{rot}</button>
+              ))}
+            </div>
+
             <div className="space-y-1">
               <label className="text-[11px] text-slate-400">Observação rápida para o motorista (opcional):</label>
               <input

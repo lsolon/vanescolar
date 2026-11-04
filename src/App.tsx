@@ -113,10 +113,10 @@ export default function App() {
   const { coordenadas, resetRota, erroGps } = useGPS(isRotaAtiva && isDriverRole, { intervalMs });
 
   // Iniciar ou encerrar rota
-  const handleToggleRota = async () => {
+  const handleToggleRota = async (sentido: 'IDA' | 'VOLTA' = 'IDA') => {
     try {
       if (!isRotaAtiva) {
-        await TransportRepository.iniciarRota(501);
+        await TransportRepository.iniciarRota(501, sentido);
         setIsRotaAtiva(true);
       } else {
         await TransportRepository.encerrarRota(501);

@@ -58,11 +58,12 @@ import {
 } from 'lucide-react';
 import { LiveMap } from '../shared/LiveMap';
 import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
+import { MeuIdAcesso } from '../shared/MeuIdAcesso';
 
 interface DriverPanelProps {
   coordenadas: GPSCoordinate;
   isRotaAtiva: boolean;
-  onToggleRota: () => void;
+  onToggleRota: (sentido?: 'IDA' | 'VOLTA') => void;
   onSelectAluno?: (alunoId: number) => void;
   onLogout?: () => void;
   erroGps?: 'permissao_negada' | 'indisponivel' | 'sem_suporte' | null;
@@ -103,6 +104,14 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const [novoAlunoEscola, setNovoAlunoEscola] = useState<string>('Colégio Santa Mônica');
   const [novoAlunoResponsavel, setNovoAlunoResponsavel] = useState<string>('');
   const [novoAlunoTelefone, setNovoAlunoTelefone] = useState<string>('');
+  const [novoAlunoEntrada, setNovoAlunoEntrada] = useState<string>('');
+  const [novoAlunoSaida, setNovoAlunoSaida] = useState<string>('');
+  const [sentidoRota, setSentidoRota] = useState<'IDA' | 'VOLTA'>('IDA');
+  // Ajuste manual dos horários previstos de uma parada
+  const [paradaHorarios, setParadaHorarios] = useState<{ id: number | string; nome: string } | null>(null);
+  const [horaIdaEdit, setHoraIdaEdit] = useState('');
+  const [horaVoltaEdit, setHoraVoltaEdit] = useState('');
+  const [erroHorarios, setErroHorarios] = useState<string | null>(null);
   const [novoAlunoLocal, setNovoAlunoLocal] = useState<LocalMarcado | null>(null);
   // Marcar o local de um aluno já cadastrado
   const [paradaMarcando, setParadaMarcando] = useState<{ id: number | string; nome: string } | null>(null);
@@ -216,6 +225,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         escola: novoAlunoEscola.trim() || 'Colégio Santa Mônica',
         nomeResponsavel: novoAlunoResponsavel.trim() || 'Responsável',
         telefoneResponsavel: novoAlunoTelefone.trim() || '(21) 99999-8888',
+        ...(novoAlunoEntrada && novoAlunoSaida ? { escolaEntrada: novoAlunoEntrada, escolaSaida: novoAlunoSaida } : {}),
         ...(novoAlunoLocal ? { latitude: novoAlunoLocal.latitude, longitude: novoAlunoLocal.longitude } : {})
       });
       setCodigoGeradoSucesso(res.codigoVinculo);
@@ -226,12 +236,30 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
       setNovoAlunoResponsavel('');
       setNovoAlunoTelefone('');
       setNovoAlunoLocal(null);
+      setNovoAlunoEntrada('');
+      setNovoAlunoSaida('');
       await carregarDadosZeroCache();
       setMensagemSucesso(`Aluno cadastrado com sucesso! Código de vínculo: ${res.codigoVinculo}`);
     } catch (err: unknown) {
       console.error('Erro ao cadastrar aluno:', err);
     } finally {
       setCadastrandoAluno(false);
+    }
+  };
+
+  const handleSalvarHorarios = async () => {
+    if (!paradaHorarios) return;
+    setErroHorarios(null);
+    try {
+      await TransportRepository.definirHorariosParada(paradaHorarios.id, {
+        horaIda: horaIdaEdit || null,
+        horaVolta: horaVoltaEdit || null
+      });
+      setParadaHorarios(null);
+      await carregarDadosZeroCache();
+      setMensagemSucesso('Horários salvos.');
+    } catch (err: unknown) {
+      setErroHorarios(err instanceof Error ? err.message : 'Não foi possível salvar.');
     }
   };
 
@@ -509,8 +537,23 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           </div>
 
           {/* BOTÃO PRINCIPAL: INICIAR / ENCERRAR ROTA */}
+          {!isRotaAtiva && (
+            <div role="group" aria-label="Sentido da viagem" className="flex rounded-xl overflow-hidden border border-slate-700 text-[11px] font-bold shrink-0">
+              {(['IDA', 'VOLTA'] as const).map((sv) => (
+                <button
+                  key={sv}
+                  type="button"
+                  aria-pressed={sentidoRota === sv}
+                  onClick={() => setSentidoRota(sv)}
+                  className={`px-2.5 py-2 min-h-[40px] cursor-pointer ${sentidoRota === sv ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-900 text-slate-400'}`}
+                >
+                  {sv === 'IDA' ? 'Ida' : 'Volta'}
+                </button>
+              ))}
+            </div>
+          )}
           <button
-            onClick={onToggleRota}
+            onClick={() => onToggleRota(sentidoRota)}
             className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-all shadow-lg active:scale-95 ${
               isRotaAtiva
                 ? 'bg-rose-600 hover:bg-rose-500 text-white ring-2 ring-rose-400/50 shadow-rose-950/50'
@@ -595,6 +638,8 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             />
           )}
         </div>
+
+        <MeuIdAcesso />
 
         {/* DIÁRIO DE BORDO COM MASCARAMENTO VISUAL RIGOROSO */}
         <div className="space-y-3">
@@ -791,6 +836,23 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                     <span><strong>Aviso da família:</strong> {item.motivo_ausencia}</span>
                   </div>
                 )}
+
+                {/* HORÁRIOS PREVISTOS (ida/volta) e horário da escola informado pelo responsável */}
+                <div className="mt-3 p-2 bg-slate-950/60 rounded-xl border border-slate-800 flex items-center justify-between gap-2 text-[11px]">
+                  <div className="text-slate-300 leading-relaxed">
+                    <div>Ida <strong className="font-mono text-slate-100">{item.hora_ida || '--:--'}</strong> · Volta <strong className="font-mono text-slate-100">{item.hora_volta || '--:--'}</strong></div>
+                    <div className="text-slate-500">
+                      {item.escola_entrada && item.escola_saida ? `Escola: entra ${item.escola_entrada}, sai ${item.escola_saida}` : 'Responsável ainda não informou o horário da escola'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setErroHorarios(null); setHoraIdaEdit(item.hora_ida || ''); setHoraVoltaEdit(item.hora_volta || ''); setParadaHorarios({ id: item.parada_id, nome: item.nome_aluno_sanitizado }); }}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold min-h-[36px] cursor-pointer shrink-0"
+                  >
+                    Ajustar
+                  </button>
+                </div>
 
                 {/* BOTÃO DE NAVEGAÇÃO EXTERNA COM COORDENADAS PROTEGIDAS (WAZE / GOOGLE MAPS) */}
                 <div className="mt-3 p-2 bg-slate-950/60 rounded-xl border border-slate-800 flex items-center justify-between text-xs">
@@ -1106,6 +1168,18 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                   </div>
                 </div>
 
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-300 block mb-1">Entrada na escola</label>
+                    <input type="time" value={novoAlunoEntrada} onChange={(e) => setNovoAlunoEntrada(e.target.value)} className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400" />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-300 block mb-1">Saída da escola</label>
+                    <input type="time" value={novoAlunoSaida} onChange={(e) => setNovoAlunoSaida(e.target.value)} className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400" />
+                  </div>
+                  <p className="col-span-2 text-[10px] text-slate-500">Opcional: o responsável também pode informar pelo app dele.</p>
+                </div>
+
                 <div>
                   <label className="text-[11px] font-bold text-slate-300 block mb-1">Local de embarque (opcional)</label>
                   <SeletorLocal valor={novoAlunoLocal} onChange={setNovoAlunoLocal} />
@@ -1130,6 +1204,30 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                 </div>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {paradaHorarios && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 flex items-end sm:items-center justify-center p-3" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+            <h3 className="text-sm font-bold text-slate-100">Ajustar horários — {paradaHorarios.nome}</h3>
+            <p className="text-[11px] text-slate-400">Os horários são calculados pela escola do aluno. Se mudar aqui, o seu valor passa a valer. Deixe vazio para voltar ao cálculo automático.</p>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[11px] font-bold text-slate-300 block mb-1">Horário de ida</label>
+                <input type="time" value={horaIdaEdit} onChange={(e) => setHoraIdaEdit(e.target.value)} className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100" />
+              </div>
+              <div>
+                <label className="text-[11px] font-bold text-slate-300 block mb-1">Horário de volta</label>
+                <input type="time" value={horaVoltaEdit} onChange={(e) => setHoraVoltaEdit(e.target.value)} className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100" />
+              </div>
+            </div>
+            {erroHorarios && <p role="alert" className="text-[11px] text-rose-300">{erroHorarios}</p>}
+            <div className="grid grid-cols-2 gap-2">
+              <button type="button" onClick={() => setParadaHorarios(null)} className="py-2.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold cursor-pointer">Cancelar</button>
+              <button type="button" onClick={handleSalvarHorarios} className="py-2.5 rounded-xl bg-amber-400 text-slate-950 text-xs font-bold cursor-pointer">Salvar</button>
+            </div>
           </div>
         </div>
       )}

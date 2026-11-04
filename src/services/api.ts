@@ -380,6 +380,7 @@ const eventosMapeados = [
   'STATUS_EMBARQUE_ATUALIZADO',
   'AUSENCIA_NOTIFICADA',
   'AUSENCIA_CANCELADA',
+  'HORARIOS_ATUALIZADOS',
   'ROTA_STATUS_ALTERADO',
   'NOVA_PARADA_CADASTRADA',
   'KILL_SWITCH_ATIVADO',
@@ -974,6 +975,10 @@ export const TransportRepository = {
             escola_destino: p.escola_destino || "Colégio Santa Mônica",
             status_embarque: p.status_embarque,
             hora_prevista: p.hora_prevista,
+            hora_ida: p.hora_ida,
+            hora_volta: p.hora_volta,
+            escola_entrada: p.escola_entrada,
+            escola_saida: p.escola_saida,
             hora_embarque: p.hora_embarque,
             hora_desembarque: p.hora_desembarque,
             motivo_ausencia: p.motivo_ausencia,
@@ -1158,6 +1163,11 @@ export const TransportRepository = {
               ordem_sequencia: paradaServidor.ordem_sequencia,
               status_embarque: paradaServidor.status_embarque,
               hora_prevista: paradaServidor.hora_prevista,
+              hora_ida: paradaServidor.hora_ida,
+              hora_volta: paradaServidor.hora_volta,
+              escola_entrada: paradaServidor.escola_entrada,
+              escola_saida: paradaServidor.escola_saida,
+              ausencia_trecho: paradaServidor.ausencia_trecho,
               latitude: paradaServidor.latitude,
               longitude: paradaServidor.longitude,
               observacao: paradaServidor.observacao,
@@ -1185,7 +1195,7 @@ export const TransportRepository = {
     return { aluno, responsavel, motorista, viagem, parada };
   },
 
-  async avisarAusencia(alunoId: number, motivo: string, observacao?: string) {
+  async avisarAusencia(alunoId: number, motivo: string, observacao?: string, trecho: 'IDA' | 'VOLTA' | 'AMBOS' = 'AMBOS') {
     await sleep();
     const parada = paradasDB.find((p) => p.id_aluno === alunoId || p.id === alunoId);
     if (parada) {
@@ -1198,7 +1208,7 @@ export const TransportRepository = {
       fetch(`${getBaseUrl()}/api/alunos/${alunoId}/ausencia`, {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({ motivo, observacao })
+        body: JSON.stringify({ motivo, observacao, trecho })
       }).catch(() => {});
     }
 
@@ -1318,6 +1328,8 @@ export const TransportRepository = {
     nomeResponsavel?: string;
     latitude?: number;
     longitude?: number;
+    escolaEntrada?: string;
+    escolaSaida?: string;
   }): Promise<{ novaParada: ParadaViagem; codigoVinculo: string }> {
     await sleep();
     if (typeof window !== 'undefined' || true) {
@@ -1332,6 +1344,49 @@ export const TransportRepository = {
     }
     const codigoVinculo = `VAN-${Math.floor(1000 + Math.random() * 9000)}`;
     return { novaParada: paradasDB[0], codigoVinculo };
+  },
+
+  /** Responsável (ou motorista) informa entrada e saída da escola do aluno. */
+  async salvarHorariosEscola(alunoId: number | string, entrada: string, saida: string): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/alunos/${alunoId}/escola-horarios`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ entrada, saida })
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || 'Não foi possível salvar os horários.');
+    }
+  },
+
+  /** Motorista ajusta (ou limpa com null) o horário previsto de ida/volta de uma parada. */
+  async definirHorariosParada(paradaId: number | string, h: { horaIda?: string | null; horaVolta?: string | null }): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/paradas/${paradaId}/horarios`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(h)
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || 'Não foi possível salvar o horário.');
+    }
+  },
+
+  async obterConta(): Promise<{ email: string | null; loginId: string | null }> {
+    const res = await fetch(`${getBaseUrl()}/api/conta`, { headers: getAuthHeaders() });
+    if (!res.ok) return { email: null, loginId: null };
+    return res.json();
+  },
+
+  async definirMeuId(loginId: string): Promise<string> {
+    const res = await fetch(`${getBaseUrl()}/api/conta/id`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ loginId })
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível salvar o ID.');
+    return d.loginId as string;
   },
 
   async definirLocalParada(paradaId: number | string, latitude: number, longitude: number): Promise<void> {
@@ -1362,13 +1417,13 @@ export const TransportRepository = {
     return { id: Math.random().toString(36), remetente, papel, texto, timestamp: '12:00' };
   },
 
-  async iniciarRota(viagemId: number) {
+  async iniciarRota(viagemId: number, sentido: 'IDA' | 'VOLTA' = 'IDA') {
     await sleep(60);
     viagensDB[0].status = 'EM_ANDAMENTO';
     if (typeof window !== 'undefined' || true) {
-      fetch(`${getBaseUrl()}/api/rotas/iniciar`, { method: 'POST', headers: getAuthHeaders() }).catch(() => {});
+      fetch(`${getBaseUrl()}/api/rotas/iniciar`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ sentido }) }).catch(() => {});
     }
-    emitEvent('ROTA_STATUS_ALTERADO', { status: 'EM_ANDAMENTO' });
+    emitEvent('ROTA_STATUS_ALTERADO', { status: 'EM_ANDAMENTO', sentido });
   },
 
   async encerrarRota(viagemId: number) {
