@@ -657,6 +657,15 @@ export const TransportRepository = {
     return handleAdminResponse(res);
   },
 
+  async limparTodosOsDados(confirmacao: string) {
+    const res = await fetch(`${getBaseUrl()}/api/admin/limpar-tudo`, {
+      method: 'POST',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify({ confirmacao })
+    });
+    return handleAdminResponse(res);
+  },
+
   async revogarConviteMotorista(code: string) {
     const res = await fetch(`${getBaseUrl()}/api/admin/convites-motorista/${code}`, {
       method: 'DELETE',
