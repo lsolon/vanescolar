@@ -6,7 +6,7 @@
  * ============================================================================
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { TransportRepository } from '../../services/api';
 import {
   Bus,
@@ -47,7 +47,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 }) => {
   const isDemoMode = (typeof window !== 'undefined' && window.location.search.includes('demo=true')) || import.meta.env.VITE_DEMO_MODE === 'true';
 
-  const [activePortal, setActivePortal] = useState<'SELECT' | 'DRIVER' | 'PARENT' | 'REGISTER' | 'FORGOT' | 'DRIVER_REGISTER' | 'DRIVER_FORGOT' | 'ADMIN_INVITES'>('SELECT');
+  const [activePortal, setActivePortal] = useState<'SELECT' | 'DRIVER' | 'PARENT' | 'REGISTER' | 'FORGOT' | 'DRIVER_REGISTER' | 'DRIVER_FORGOT' | 'ADMIN_INVITES' | 'RESET'>('SELECT');
 
   // Estados Motorista (Login)
   const [driverEmail, setDriverEmail] = useState(isDemoMode ? 'leandrosolon@gmail.com' : '');
@@ -97,6 +97,67 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   const [codigoVinculo, setCodigoVinculo] = useState('');
   const [loadingVinculo, setLoadingVinculo] = useState(false);
   const [erroVinculo, setErroVinculo] = useState<string | null>(null);
+
+  // Redefinir senha (link do e-mail) e confirmação de e-mail
+  const [resetToken, setResetToken] = useState('');
+  const [resetSenha, setResetSenha] = useState('');
+  const [resetMsg, setResetMsg] = useState<{ ok: boolean; texto: string } | null>(null);
+  const [loadingReset, setLoadingReset] = useState(false);
+  const [avisoEmail, setAvisoEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const reset = q.get('reset');
+    const verificado = q.get('verificado');
+    if (reset) {
+      setResetToken(reset);
+      setActivePortal('RESET');
+    } else if (verificado === '1') {
+      setActivePortal('PARENT');
+      setSucessoReg('E-mail confirmado! Entre com seu e-mail e senha.');
+    } else if (verificado === '0') {
+      setActivePortal('PARENT');
+      setErroParent('Link de confirmação inválido ou expirado. Entre e peça um novo link.');
+    }
+    if (reset || verificado) window.history.replaceState(null, '', window.location.pathname);
+  }, []);
+
+  const handleResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoadingReset(true);
+    setResetMsg(null);
+    try {
+      const msg = await TransportRepository.redefinirSenha(resetToken, resetSenha);
+      setResetMsg({ ok: true, texto: msg });
+      setResetSenha('');
+    } catch (err: any) {
+      setResetMsg({ ok: false, texto: err.message });
+    } finally {
+      setLoadingReset(false);
+    }
+  };
+
+  const handleReenviarVerificacao = async () => {
+    setAvisoEmail(null);
+    try {
+      await TransportRepository.reenviarVerificacaoEmail();
+      setAvisoEmail('Enviamos um novo link. Verifique também a caixa de spam.');
+    } catch (err: any) {
+      setAvisoEmail(err.message);
+    }
+  };
+
+  const handleJaConfirmei = async () => {
+    setAvisoEmail(null);
+    const ok = await TransportRepository.atualizarSessaoVerificacao();
+    if (ok) {
+      setIsEmailVerified(true);
+      setErroParent(null);
+      setSucessoReg('E-mail confirmado! Insira o código de vínculo abaixo.');
+    } else {
+      setAvisoEmail('Ainda não identificamos a confirmação. Abra o link que enviamos ao seu e-mail.');
+    }
+  };
 
   // Esqueci minha senha
   const [forgotEmail, setForgotEmail] = useState('');
@@ -917,6 +978,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     {erroParent}
                   </div>
                 )}
+                {(erroParent?.includes('não verificado') || sucessoReg?.includes('Verifique seu e-mail')) && (
+                  <div className="flex flex-wrap gap-3 text-xs">
+                    <button type="button" onClick={handleReenviarVerificacao} className="text-cyan-400 underline cursor-pointer">Reenviar link</button>
+                    <button type="button" onClick={handleJaConfirmei} className="text-emerald-400 underline cursor-pointer">Já confirmei</button>
+                  </div>
+                )}
+                {avisoEmail && <p className="text-xs text-slate-300">{avisoEmail}</p>}
 
                 <button
                   type="submit"
@@ -1173,6 +1241,40 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               >
                 {loadingForgot ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Enviar Instruções</span>}
               </button>
+            </form>
+          </div>
+        )}
+
+        {/* NOVA SENHA (link recebido por e-mail) */}
+        {activePortal === 'RESET' && (
+          <div className="w-full max-w-md bg-slate-900 border border-cyan-500/40 rounded-3xl p-6 sm:p-8 shadow-2xl relative">
+            <h2 className="text-lg font-bold text-white mb-1">Criar nova senha</h2>
+            <p className="text-xs text-slate-400 mb-5">Escolha uma senha com no mínimo 10 caracteres.</p>
+            <form onSubmit={handleResetSubmit} className="space-y-4">
+              <input
+                id="reset-senha"
+                name="new-password"
+                type="password"
+                autoComplete="new-password"
+                required
+                minLength={10}
+                value={resetSenha}
+                onChange={(e) => setResetSenha(e.target.value)}
+                placeholder="Nova senha"
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-400 min-h-[44px]"
+              />
+              {resetMsg && (
+                <div role="alert" className={`p-3 rounded-xl text-xs border ${resetMsg.ok ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-300' : 'bg-rose-950/60 border-rose-500/40 text-rose-300'}`}>
+                  {resetMsg.texto}
+                </div>
+              )}
+              {resetMsg?.ok ? (
+                <button type="button" onClick={() => setActivePortal('PARENT')} className="w-full py-3 px-4 bg-cyan-400 text-slate-950 font-black rounded-xl text-sm min-h-[44px] cursor-pointer">Ir para o login</button>
+              ) : (
+                <button type="submit" disabled={loadingReset} className="w-full py-3 px-4 bg-cyan-400 hover:bg-cyan-300 text-slate-950 font-black rounded-xl text-sm flex items-center justify-center gap-2 min-h-[44px] cursor-pointer disabled:opacity-50">
+                  {loadingReset ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Salvar nova senha</span>}
+                </button>
+              )}
             </form>
           </div>
         )}

@@ -378,3 +378,68 @@ test('GPS real: servidor valida coordenadas e entrega só ao motorista dono', as
   assert.equal(a.data.gpsAtual.accuracyMeters, 12);
   assert.equal(b.data.gpsAtual.accuracyMeters, 0, 'B continua sem posição');
 });
+
+// ---------------------------------------------------------------------------
+// E-MAILS REAIS: confirmação de e-mail e recuperação de senha com link de uso único
+// ---------------------------------------------------------------------------
+async function ultimoEmail(para: string) {
+  const r = await fetch(`${BASE}/api/_dev/emails`);
+  const lista: any[] = await r.json();
+  return [...lista].reverse().find((m) => m.to === para);
+}
+const linkDe = (txt: string) => txt.match(/https?:\/\/\S+/)![0];
+
+test('E-mail: cadastro envia link; confirmar libera a conta; link não pode ser reutilizado', async () => {
+  const email = `verif_${Date.now()}@teste.com`;
+  const reg = await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Maria Teste', email, password: 'senhaSegura123!', lgpdConsent: true });
+  assert.equal(reg.data.emailVerified, false);
+  await new Promise((r) => setTimeout(r, 200));
+  const msg = await ultimoEmail(email);
+  assert.ok(msg, 'e-mail de confirmação deve ser enviado');
+  const url = new URL(linkDe(msg.text));
+  assert.equal(url.pathname, '/api/auth/verify-email');
+
+  const antes = await jsonReq('POST', '/api/auth/refresh-session', reg.data.token);
+  assert.equal(antes.data.emailVerified, false);
+
+  const ok = await fetch(`${BASE}${url.pathname}${url.search}`, { redirect: 'manual' });
+  assert.match(ok.headers.get('location') || '', /verificado=1/);
+  const depois = await jsonReq('POST', '/api/auth/refresh-session', reg.data.token);
+  assert.equal(depois.data.emailVerified, true);
+
+  const reuso = await fetch(`${BASE}${url.pathname}${url.search}`, { redirect: 'manual' });
+  assert.match(reuso.headers.get('location') || '', /verificado=0/);
+  assert.equal((await fetch(`${BASE}/api/auth/verify-email?token=falso`, { redirect: 'manual' })).headers.get('location'), '/?verificado=0');
+});
+
+test('E-mail: ninguém consegue se auto-verificar (atalho de simulação removido)', async () => {
+  const email = `auto_${Date.now()}@teste.com`;
+  const reg = await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Sem Link', email, password: 'senhaSegura123!', lgpdConsent: true });
+  const r = await jsonReq('POST', '/api/auth/verify-email-sim', reg.data.token);
+  assert.notEqual(r.status, 200);
+  const st = await jsonReq('POST', '/api/auth/refresh-session', reg.data.token);
+  assert.equal(st.data.emailVerified, false);
+});
+
+test('E-mail: recuperação de senha com link de uso único', async () => {
+  const email = `reset_${Date.now()}@teste.com`;
+  await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Rita Reset', email, password: 'senhaAntiga123!', lgpdConsent: true });
+
+  const desconhecido = await jsonReq('POST', '/api/auth/forgot-password', undefined, { email: 'naoexiste@teste.com' });
+  const existente = await jsonReq('POST', '/api/auth/forgot-password', undefined, { email });
+  assert.deepEqual(desconhecido.data, existente.data, 'resposta idêntica (não revela se o e-mail existe)');
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(await ultimoEmail('naoexiste@teste.com'), undefined);
+
+  const msg = await ultimoEmail(email);
+  assert.ok(msg && /Redefinir/.test(msg.subject));
+  const token = new URL(linkDe(msg.text)).searchParams.get('reset')!;
+
+  assert.equal((await jsonReq('POST', '/api/auth/reset-password', undefined, { token, password: 'curta' })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/auth/reset-password', undefined, { token: 'x'.repeat(30), password: 'novaSenha1234!' })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/auth/reset-password', undefined, { token, password: 'novaSenha1234!' })).status, 200);
+  assert.equal((await jsonReq('POST', '/api/auth/reset-password', undefined, { token, password: 'outraSenha1234!' })).status, 400, 'link só vale uma vez');
+
+  assert.equal((await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'senhaAntiga123!' })).status, 401);
+  assert.equal((await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'novaSenha1234!' })).status, 200);
+});

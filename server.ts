@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { createPersistence } from './persistence';
+import { createMailer, outbox, issueToken, consumeToken, layout } from './mailer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -52,6 +53,19 @@ async function verifyFirebaseIdToken(idToken: unknown): Promise<{ email: string 
   } catch {
     return null;
   }
+}
+
+const mailer = createMailer(process.env, DEMO_MODE);
+function appBaseUrl(req: Request): string {
+  const fixo = (process.env.APP_URL || '').replace(/\/+$/, '');
+  if (fixo) return fixo;
+  return `${req.protocol}://${req.get('host')}`;
+}
+async function enviarVerificacao(req: Request, user: { id: number; fullName: string; email: string }) {
+  const token = issueToken(user.id, 'verify', 24 * 3600 * 1000);
+  const link = `${appBaseUrl(req)}/api/auth/verify-email?token=${encodeURIComponent(token)}`;
+  const m = layout(user.fullName.split(' ')[0], 'Confirme seu e-mail para ativar sua conta no VanEscolar.', 'Confirmar e-mail', link, 'O link vale por 24 horas. Se você não criou esta conta, ignore este e-mail.');
+  return mailer.send({ to: user.email, subject: 'Confirme seu e-mail - VanEscolar', text: m.text, html: m.html });
 }
 
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'leandrosolon@gmail.com,admin@vanescolar.com.br')
@@ -1043,24 +1057,69 @@ async function startServer() {
     auditLog('USUARIO_CADASTRADO', newUser.email, 'Novo responsável cadastrado com aceite LGPD Art. 14');
 
     const token = signToken({ role: 'responsavel', userId: newUser.id, email: newUser.email, emailVerified: false });
-    res.json({ sucesso: true, token, emailVerified: false, message: 'Cadastro realizado com sucesso. Verifique seu e-mail.' });
+    enviarVerificacao(req, newUser).catch(() => {});
+    res.json({ sucesso: true, token, emailVerified: false, message: 'Cadastro realizado com sucesso. Enviamos um link de confirmação para o seu e-mail.' });
   });
 
-  app.post('/api/auth/forgot-password', rateLimiter(5, 60000), (req: Request, res: Response) => {
-    const { email } = req.body;
+  // RECUPERAÇÃO DE SENHA: link de uso único (1 hora) enviado por e-mail. Resposta sempre igual (não revela se o e-mail existe).
+  app.post('/api/auth/forgot-password', rateLimiter(5, 60000), async (req: Request, res: Response) => {
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
     auditLog('FORGOT_PASSWORD', email || 'desconhecido', 'Solicitação de reset de senha');
+    const user = email ? usersDB.find((u) => u.email.toLowerCase() === email) : undefined;
+    if (user && user.passwordHash) {
+      const token = issueToken(user.id, 'reset', 3600 * 1000);
+      const link = `${appBaseUrl(req)}/?reset=${encodeURIComponent(token)}`;
+      const m = layout(user.fullName.split(' ')[0], 'Recebemos um pedido para redefinir sua senha no VanEscolar.', 'Criar nova senha', link, 'O link vale por 1 hora e só pode ser usado uma vez. Se você não pediu, ignore este e-mail: sua senha continua a mesma.');
+      mailer.send({ to: user.email, subject: 'Redefinir senha - VanEscolar', text: m.text, html: m.html }).catch(() => {});
+    }
     res.json({ sucesso: true, message: 'Se o e-mail estiver cadastrado, as instruções de redefinição foram enviadas.' });
   });
 
-  app.post('/api/auth/verify-email-sim', authenticate, (req: Request, res: Response) => {
-    const userPayload = (req as any).user as SessionPayload;
-    const user = usersDB.find((u) => u.id === userPayload.userId);
+  app.post('/api/auth/reset-password', rateLimiter(10, 60000), (req: Request, res: Response) => {
+    const { token, password } = req.body || {};
+    if (typeof password !== 'string' || password.length < 10) {
+      return res.status(400).json({ error: 'A senha deve ter no mínimo 10 caracteres.' });
+    }
+    const userId = consumeToken(token, 'reset');
+    const user = userId !== null ? usersDB.find((u) => u.id === userId) : undefined;
+    if (!user) return res.status(400).json({ error: 'Link inválido ou expirado. Peça uma nova redefinição.' });
+    user.passwordHash = crypto.scryptSync(password, 'salt-van-escolar', 64).toString('hex');
+    user.emailVerified = true; // quem recebeu o link no e-mail comprovou o acesso a ele
+    auditLog('SENHA_REDEFINIDA', user.email, 'Senha redefinida via link de e-mail');
+    res.json({ sucesso: true, message: 'Senha atualizada. Faça login com a nova senha.' });
+  });
+
+  // VERIFICAÇÃO DE E-MAIL: o usuário clica no link recebido (token de uso único, 24 h).
+  app.get('/api/auth/verify-email', (req: Request, res: Response) => {
+    const userId = consumeToken(req.query.token, 'verify');
+    const user = userId !== null ? usersDB.find((u) => u.id === userId) : undefined;
     if (user) {
       user.emailVerified = true;
+      auditLog('EMAIL_VERIFICADO', user.email, 'E-mail confirmado via link');
     }
-    const token = signToken({ role: userPayload.role, userId: userPayload.userId, email: userPayload.email, studentId: userPayload.studentId, emailVerified: true });
-    res.json({ sucesso: true, token, emailVerified: true });
+    res.redirect(`/?${user ? 'verificado=1' : 'verificado=0'}`);
   });
+
+  app.post('/api/auth/resend-verification', authenticate, rateLimiter(3, 60000), async (req: Request, res: Response) => {
+    const payload = (req as any).user as SessionPayload;
+    const user = usersDB.find((u) => u.id === payload.userId);
+    if (user && !user.emailVerified) await enviarVerificacao(req, user);
+    res.json({ sucesso: true, message: 'Se o e-mail ainda não foi confirmado, enviamos um novo link.' });
+  });
+
+  // Atualiza o token da sessão após o usuário confirmar o e-mail (consulta o estado real no servidor).
+  app.post('/api/auth/refresh-session', authenticate, (req: Request, res: Response) => {
+    const p = (req as any).user as SessionPayload;
+    const user = usersDB.find((u) => u.id === p.userId);
+    const verified = !!user?.emailVerified;
+    const token = signToken({ role: p.role, userId: p.userId, email: p.email, studentId: p.studentId, emailVerified: verified });
+    res.json({ sucesso: true, token, emailVerified: verified });
+  });
+
+  // Somente DEMO_MODE sem SMTP: permite aos testes ler os e-mails "enviados".
+  if (DEMO_MODE && !mailer.configured) {
+    app.get('/api/_dev/emails', (_req: Request, res: Response) => res.json(outbox));
+  }
 
   app.post('/api/vincular', authenticate, rateLimiter(10, 60000), (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;

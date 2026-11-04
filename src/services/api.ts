@@ -825,22 +825,39 @@ export const TransportRepository = {
   },
 
   async forgotPassword(email: string) {
-    await sleep();
-    await AuthService.recoverPassword(email);
-    return 'As instruções de redefinição foram enviadas para o seu e-mail.';
+    const res = await fetch(`${getBaseUrl()}/api/auth/forgot-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Não foi possível enviar o e-mail agora.');
+    return 'Se o e-mail estiver cadastrado, enviamos o link para criar uma nova senha. Verifique também a caixa de spam.';
   },
 
-  async simularVerificacaoEmail() {
-    const res = await fetch(`${getBaseUrl()}/api/auth/verify-email-sim`, {
+  async redefinirSenha(token: string, password: string) {
+    const res = await fetch(`${getBaseUrl()}/api/auth/reset-password`, {
       method: 'POST',
-      headers: getAuthHeaders()
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, password })
     });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.token) AuthService.setSessionToken(data.token);
-      return data;
-    }
-    throw new Error('Falha na verificação');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Link inválido ou expirado.');
+    return data.message as string;
+  },
+
+  async reenviarVerificacaoEmail() {
+    const res = await fetch(`${getBaseUrl()}/api/auth/resend-verification`, { method: 'POST', headers: getAuthHeaders() });
+    if (!res.ok) throw new Error('Não foi possível reenviar agora. Tente novamente em instantes.');
+  },
+
+  /** Consulta o servidor: o e-mail já foi confirmado? Atualiza o token da sessão. */
+  async atualizarSessaoVerificacao(): Promise<boolean> {
+    const res = await fetch(`${getBaseUrl()}/api/auth/refresh-session`, { method: 'POST', headers: getAuthHeaders() });
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (data.token) AuthService.setSessionToken(data.token);
+    return !!data.emailVerified;
   },
 
   async resetDatabase(): Promise<void> {
