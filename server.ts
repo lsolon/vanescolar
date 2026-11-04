@@ -27,7 +27,7 @@ const SESSION_SECRET = (() => {
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'senha-de-teste-admin';
 // Contas de demonstração (senhas conhecidas, públicas no repositório) só existem com DEMO_MODE=true explícito.
 const SEED_LOGIN_ENABLED = DEMO_MODE;
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || '';
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || 'vanescolar-9afde';
 
 function safeEqual(a: string, b: string): boolean {
   const ba = Buffer.from(a);
