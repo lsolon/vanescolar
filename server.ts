@@ -474,7 +474,8 @@ async function startServer() {
     }
     console.log(`[Persistência] Armazenamento: ${persistence.kind} | usuários: ${usersDB.length} | convites: ${driverInvitationsDB.length} | paradas: ${serverState.paradas.length}`);
   } catch (err: any) {
-    console.error('[Persistência] Falha ao carregar o estado salvo (seguindo com dados em memória):', err?.message || err);
+    console.error('[Persistência] Falha ao carregar o estado salvo (seguindo SEM gravar, para não sobrescrever dados):', err?.message || err);
+    persistence.disable(`falha_ao_ler_${persistence.kind}${err?.code !== undefined ? '_codigo_' + err.code : ''}`);
   }
   persistence.attach(() => ({
     users: usersDB,
@@ -504,7 +505,7 @@ async function startServer() {
 
   // Saúde do servidor (não expõe dados): útil para conferir se a persistência está ativa.
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ ok: true, persistence: persistence.kind });
+    res.json({ ok: true, persistence: persistence.kind, ...(persistence.reason ? { motivo: persistence.reason } : {}) });
   });
 
   app.use((_req: Request, res: Response, next: NextFunction) => {
