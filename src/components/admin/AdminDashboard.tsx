@@ -31,6 +31,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
   const [adminEmails, setAdminEmails] = useState<string[]>([]);
   const [newAdminEmail, setNewAdminEmail] = useState('');
   const [loading, setLoading] = useState(false);
+  const [confirmaLimpar, setConfirmaLimpar] = useState('');
+  const [msgLimpar, setMsgLimpar] = useState<{ ok: boolean; texto: string } | null>(null);
   const [invitationNota, setInvitationNota] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -565,6 +567,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
               <h2 className="text-xl font-bold text-white mb-6">Configurações de Acesso</h2>
               
               <div className="max-w-xl space-y-6">
+                <div className="p-6 bg-rose-950/30 border border-rose-500/40 rounded-3xl space-y-3">
+                  <h3 className="text-sm font-bold text-rose-300">Limpar todos os dados</h3>
+                  <p className="text-xs text-slate-400">Apaga alunos, paradas, motoristas, responsáveis e convites. Só os acessos de administrador são mantidos. Não tem volta.</p>
+                  <input
+                    value={confirmaLimpar}
+                    onChange={(e) => setConfirmaLimpar(e.target.value)}
+                    placeholder="Digite LIMPAR TUDO para liberar"
+                    aria-label="Confirmação"
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-100"
+                  />
+                  <button
+                    type="button"
+                    disabled={confirmaLimpar !== 'LIMPAR TUDO'}
+                    onClick={async () => {
+                      try {
+                        const r = await TransportRepository.limparTodosOsDados(confirmaLimpar);
+                        setConfirmaLimpar('');
+                        setMsgLimpar({ ok: true, texto: `Dados apagados: ${r.apagados?.usuarios ?? 0} usuários, ${r.apagados?.paradas ?? 0} paradas, ${r.apagados?.convites ?? 0} convites.` });
+                      } catch (err: any) {
+                        setMsgLimpar({ ok: false, texto: err?.message || 'Falha ao limpar.' });
+                      }
+                    }}
+                    className="px-4 py-2.5 rounded-xl bg-rose-600 text-white text-sm font-bold disabled:opacity-40 cursor-pointer"
+                  >
+                    Apagar tudo
+                  </button>
+                  {msgLimpar && <p role="status" className={`text-xs ${msgLimpar.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{msgLimpar.texto}</p>}
+                </div>
+
                 <div className="p-6 bg-slate-950 border border-slate-800 rounded-3xl space-y-4">
                   <h3 className="text-sm font-bold text-indigo-400 flex items-center gap-2">
                     <ShieldCheck className="w-4 h-4" />

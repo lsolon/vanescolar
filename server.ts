@@ -1085,6 +1085,22 @@ async function startServer() {
     res.json({ sucesso: true, motorista: newDriver });
   });
 
+  // Apaga TODOS os dados (alunos, paradas, motoristas, responsáveis, convites, mensagens). Mantém só os admins.
+  app.post('/api/admin/limpar-tudo', authenticate, requireAdmin, rateLimiter(3, 60000), (req: Request, res: Response) => {
+    if (req.body?.confirmacao !== 'LIMPAR TUDO') {
+      return res.status(400).json({ error: 'Confirmação ausente. Digite LIMPAR TUDO.' });
+    }
+    const admin = (req as any).user as SessionPayload;
+    const antes = { usuarios: usersDB.length, convites: driverInvitationsDB.length, paradas: serverState.paradas.length };
+    usersDB = usersDB.filter((u) => ADMIN_EMAILS.includes(u.email.toLowerCase()));
+    driverInvitationsDB = [];
+    serverState.paradas = [];
+    tripsDB.clear();
+    for (const c of sseClients) { try { c.res.write(`event: DADOS_LIMPOS\ndata: {}\n\n`); } catch {} }
+    auditLog('LIMPAR_TUDO', admin.email, `Dados apagados: ${JSON.stringify(antes)}`);
+    res.json({ sucesso: true, apagados: antes });
+  });
+
   app.post('/api/admin/motoristas/:id/toggle', authenticate, requireAdmin, (req, res) => {
     const id = parseInt(req.params.id, 10);
     const user = usersDB.find(u => u.id === id);

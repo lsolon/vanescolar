@@ -621,3 +621,15 @@ test('Horários da escola: responsável informa, van calcula ida/volta, motorist
   assert.equal(est.viagem.sentido, 'VOLTA');
   assert.equal(est.paradas[0].status_embarque, 'AUSENTE', 'ausência da volta vale na volta');
 });
+
+test('Limpar tudo (admin): exige confirmação e admin; apaga dados e mantém o admin', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const mot = await novoMotorista(adm.data.token, 'Limpa');
+  assert.equal((await jsonReq('POST', '/api/admin/limpar-tudo', mot, { confirmacao: 'LIMPAR TUDO' })).status, 403, 'motorista não pode');
+  assert.equal((await jsonReq('POST', '/api/admin/limpar-tudo', adm.data.token, {})).status, 400, 'sem confirmação');
+  const r = await jsonReq('POST', '/api/admin/limpar-tudo', adm.data.token, { confirmacao: 'LIMPAR TUDO' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal((await jsonReq('GET', '/api/admin/motoristas', adm.data.token)).data.length ?? 0, 0);
+  const novo = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  assert.ok(novo.data.token, 'admin continua entrando');
+});
