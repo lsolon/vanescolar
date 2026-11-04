@@ -29,8 +29,8 @@ const SESSION_SECRET = (() => {
   return crypto.randomBytes(48).toString('hex');
 })();
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
-// Contas de demonstração (senhas conhecidas) só existem fora de produção ou com DEMO_MODE=true.
-const SEED_LOGIN_ENABLED = DEMO_MODE || process.env.NODE_ENV !== 'production';
+// Contas de demonstração (senhas conhecidas, públicas no repositório) só existem com DEMO_MODE=true explícito.
+const SEED_LOGIN_ENABLED = DEMO_MODE;
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || '';
 
 function safeEqual(a: string, b: string): boolean {
