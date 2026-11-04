@@ -979,8 +979,9 @@ export const TransportRepository = {
             motivo_ausencia: p.motivo_ausencia,
             responsavel_contato_mascarado: p.responsavel_telefone_mascarado || "(21) 9****-4567",
             telefone_para_chamada: "",
-            google_maps_nav_url: `https://www.google.com/maps/dir/?api=1&destination=${p.latitude},${p.longitude}`,
-            waze_nav_url: `https://waze.com/ul?ll=${p.latitude},${p.longitude}&navigate=yes`
+            tem_localizacao: typeof p.latitude === 'number' && typeof p.longitude === 'number',
+            google_maps_nav_url: typeof p.latitude === 'number' ? `https://www.google.com/maps/dir/?api=1&destination=${p.latitude},${p.longitude}` : undefined,
+            waze_nav_url: typeof p.latitude === 'number' ? `https://waze.com/ul?ll=${p.latitude},${p.longitude}&navigate=yes` : undefined
           }));
 
           if (options.apenasProximaParada) {
@@ -1036,8 +1037,9 @@ export const TransportRepository = {
         hora_prevista: p.hora_prevista,
         responsavel_contato_mascarado: resp ? mascararTelefone(resp.telefone) : "",
         telefone_para_chamada: "",
-        google_maps_nav_url: `https://google.com/maps/dir/?api=1&destination=${p.latitude},${p.longitude}`,
-        waze_nav_url: `https://waze.com/ul?ll=${p.latitude},${p.longitude}&navigate=yes`
+        tem_localizacao: typeof p.latitude === 'number' && typeof p.longitude === 'number',
+        google_maps_nav_url: typeof p.latitude === 'number' ? `https://google.com/maps/dir/?api=1&destination=${p.latitude},${p.longitude}` : undefined,
+        waze_nav_url: typeof p.latitude === 'number' ? `https://waze.com/ul?ll=${p.latitude},${p.longitude}&navigate=yes` : undefined
       };
     });
 
@@ -1314,6 +1316,8 @@ export const TransportRepository = {
     escola?: string;
     telefoneResponsavel?: string;
     nomeResponsavel?: string;
+    latitude?: number;
+    longitude?: number;
   }): Promise<{ novaParada: ParadaViagem; codigoVinculo: string }> {
     await sleep();
     if (typeof window !== 'undefined' || true) {
@@ -1328,6 +1332,18 @@ export const TransportRepository = {
     }
     const codigoVinculo = `VAN-${Math.floor(1000 + Math.random() * 9000)}`;
     return { novaParada: paradasDB[0], codigoVinculo };
+  },
+
+  async definirLocalParada(paradaId: number | string, latitude: number, longitude: number): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/paradas/${paradaId}/local`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ latitude, longitude })
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || 'Não foi possível salvar o local.');
+    }
   },
 
   async enviarMensagemDireta(remetente: string, papel: 'MOTORISTA' | 'PAI', texto: string) {

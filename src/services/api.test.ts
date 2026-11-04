@@ -484,3 +484,41 @@ test('Proximidade: transmissão ao vivo do responsável nunca contém GPS bruto'
   assert.equal(texto.includes('GPS_ATUALIZADO'), false);
   assert.equal(texto.includes('-22.777777'), false, 'coordenada bruta não pode chegar ao responsável');
 });
+
+test('Local da parada: validação, posse e uso real (sem coordenada inventada)', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const mot = await novoMotorista(adm.data.token, 'Local');
+  const outro = await novoMotorista(adm.data.token, 'LocalOutro');
+  const base = { nomeAluno: 'Aluno L', endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+
+  // coordenadas inválidas no cadastro são recusadas
+  const ruim = await jsonReq('POST', '/api/paradas/nova', mot, { ...base, latitude: 999, longitude: 1 });
+  assert.equal(ruim.status, 400);
+
+  // sem local: nada de coordenada inventada
+  const sem = (await jsonReq('POST', '/api/paradas/nova', mot, base)).data;
+  const est1 = (await jsonReq('GET', '/api/estado', mot)).data;
+  const p1 = est1.paradas.find((p: any) => p.id === sem.novaParada.id);
+  assert.ok(p1.latitude == null && p1.longitude == null, 'aluno sem local não pode ter coordenada falsa');
+
+  // motorista de outra van não consegue marcar
+  const alheio = await jsonReq('PUT', `/api/paradas/${sem.novaParada.id}/local`, outro, { latitude: -22.9, longitude: -43.2 });
+  assert.equal(alheio.status, 404);
+
+  // valores inválidos
+  for (const corpo of [{}, { latitude: 'a', longitude: 1 }, { latitude: 91, longitude: 0 }, { latitude: 0, longitude: 0 }, { latitude: -22.9, longitude: 181 }]) {
+    const r = await jsonReq('PUT', `/api/paradas/${sem.novaParada.id}/local`, mot, corpo);
+    assert.equal(r.status, 400, JSON.stringify(corpo));
+  }
+
+  // marcação válida
+  const ok = await jsonReq('PUT', `/api/paradas/${sem.novaParada.id}/local`, mot, { latitude: -22.91234, longitude: -43.23456 });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  const p2 = (await jsonReq('GET', '/api/estado', mot)).data.paradas.find((p: any) => p.id === sem.novaParada.id);
+  assert.equal(p2.latitude, -22.91234);
+
+  // responsável sem sessão de motorista não pode marcar
+  const resp = await novoResponsavel(sem.codigoVinculo);
+  const porResp = await jsonReq('PUT', `/api/paradas/${sem.novaParada.id}/local`, resp, { latitude: -22.9, longitude: -43.2 });
+  assert.ok(porResp.status === 403 || porResp.status === 401, `status ${porResp.status}`);
+});
