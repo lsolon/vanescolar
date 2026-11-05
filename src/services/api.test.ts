@@ -870,6 +870,29 @@ test('Barra de deslocamento: a van avança pela distância até o embarque e dep
   assert.equal(JSON.stringify(e2).includes('-22.80'), false);
 });
 
+test('Tempo a bordo nunca sobe quando a van segue para a escola, mesmo passando por aluno ainda pendente; a barra não recua', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'SemVolta');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola SV', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  const A = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno A', latitude: -22.95, longitude: -43.20 })).data;
+  const B = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno B', latitude: -22.90, longitude: -43.20 })).data;
+  const C = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno C', latitude: -22.93, longitude: -43.20 })).data;
+  await jsonReq('PUT', '/api/motorista/escolas', mot, { nome: 'Escola SV', latitude: -22.85, longitude: -43.20 });
+  // ordem em zigue-zague de propósito: A, B (ao norte), C (volta ao sul)
+  await jsonReq('POST', '/api/rotas/ordem', mot, { ids: [A.novaParada.id, B.novaParada.id, C.novaParada.id], sentido: 'IDA' });
+  const resp = await novoResponsavel(A.codigoVinculo);
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
+  const gps = (la: number) => jsonReq('POST', '/api/gps', mot, { latitude: la, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  await gps(-22.95);
+  await jsonReq('POST', `/api/paradas/${A.novaParada.id}/status`, mot, { status: 'EMBARCOU' });
+  const serie: any[] = [];
+  for (const la of [-22.94, -22.93, -22.91, -22.88, -22.86]) { await gps(la); serie.push((await jsonReq('GET', '/api/proximidade', resp)).data.proximidade); }
+  for (let i = 1; i < serie.length; i++) {
+    assert.ok(serie[i].minutos <= serie[i - 1].minutos, `tempo não pode subir: ${serie.map((x) => x.minutos).join(' → ')}`);
+    assert.ok(serie[i].progresso >= serie[i - 1].progresso, `barra não pode recuar: ${serie.map((x) => x.progresso.toFixed(2)).join(' → ')}`);
+  }
+});
+
 test('Sugerir rota: ordena pelas distâncias, o motorista reordena à mão e aplica; ordem inválida é recusada', async () => {
   const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
   const mot = await novoMotorista(adm, 'Sug');

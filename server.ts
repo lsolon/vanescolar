@@ -571,7 +571,12 @@ function progressoPorDistancia(trip: Trip, chave: string, km: number): number | 
   trip.refKm = trip.refKm || {};
   const ref = Math.max(trip.refKm[chave] ?? 0, km);
   trip.refKm[chave] = ref;
-  return ref >= 0.3 ? Math.max(0, Math.min(0.97, 1 - km / ref)) : null;
+  if (ref < 0.3) return null;
+  // A barra nunca recua: se o caminho cresce (desvio, parada fora do trajeto), ela espera em vez de voltar.
+  const p = Math.max(0, Math.min(0.97, 1 - km / ref));
+  const maior = Math.max(trip.refKm[chave + ':p'] ?? 0, p);
+  trip.refKm[chave + ':p'] = maior;
+  return maior;
 }
 
 function minutosPorKm(km: number, speedKmH: number, paradas: number): number {
@@ -610,7 +615,8 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
     if (rotaAtiva && gpsOk && destino) {
       const paradasAteLa = sentido === 'VOLTA'
         ? minhas.filter((p: any) => ordemNo(p, sentido) < ordemNo(mine, sentido) && p.status_embarque === 'EMBARCOU' && temLocalP(p))
-        : minhas.filter((p: any) => p.status_embarque === 'PENDENTE' && temLocalP(p));
+        // Na ida só contam as paradas pendentes que ainda estão no caminho até a escola: as que a van já deixou para trás não esticam o tempo.
+        : minhas.filter((p: any) => p.status_embarque === 'PENDENTE' && temLocalP(p) && haversineKm(gps, p) + haversineKm(p, destino) <= haversineKm(gps, destino) * 1.5);
       const km = caminhoKm(gps, paradasAteLa, destino);
       const prog = progressoPorDistancia(trip, `e${studentId}`, km) ?? 0;
       const minutos = minutosPorKm(km, gps.speedKmH, paradasAteLa.length);
