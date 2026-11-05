@@ -72,6 +72,14 @@ interface DriverPanelProps {
   erroGps?: 'permissao_negada' | 'indisponivel' | 'sem_suporte' | null;
 }
 
+/** Ainda falta (até 2 h) para o horário combinado de passagem: o motorista não deve chegar antes. */
+const aguardarAte = (h?: string | null): boolean => {
+  if (!h || h.length < 5) return false;
+  const n = new Date();
+  const falta = parseInt(h.slice(0, 2), 10) * 60 + parseInt(h.slice(3, 5), 10) - (n.getHours() * 60 + n.getMinutes());
+  return falta > 0 && falta <= 120;
+};
+
 export const DriverPanel: React.FC<DriverPanelProps> = ({
   coordenadas,
   isRotaAtiva,
@@ -887,6 +895,9 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                 <div className="flex items-center justify-between mt-2.5 pt-2 text-xs text-slate-400">
                   <span className="text-[11px] text-slate-400">
                     Previsão de embarque: <strong className="text-slate-300 font-mono">{item.hora_prevista}</strong>
+                    {isRotaAtiva && sentidoRota === 'IDA' && item.status_embarque === 'PENDENTE' && aguardarAte(item.hora_ida) && (
+                      <span className="ml-2 text-amber-300 font-bold">Aguardar até {item.hora_ida}</span>
+                    )}
                   </span>
 
                   <div className="flex items-center gap-2">

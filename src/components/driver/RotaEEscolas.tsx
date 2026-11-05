@@ -10,11 +10,24 @@ export const EscolasDoMotorista: React.FC<{ versao?: number }> = ({ versao }) =>
   const [local, setLocal] = useState<LocalMarcado | null>(null);
   const [erro, setErro] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);
+  const [endereco, setEndereco] = useState('');
+  const [buscando, setBuscando] = useState(false);
+  const [achado, setAchado] = useState<string | null>(null);
 
   const carregar = () => TransportRepository.obterEscolas().then(setEscolas).catch(() => {});
   useEffect(() => { carregar(); }, [versao]);
 
   if (escolas.length === 0) return null;
+
+  const buscar = async () => {
+    if (endereco.trim().length < 5) { setErro('Digite o endereço da escola (rua, número, bairro).'); return; }
+    setBuscando(true); setErro(null); setAchado(null);
+    const g = await TransportRepository.buscarEnderecoEscola(endereco);
+    setBuscando(false);
+    if (!g) { setErro('Não encontrei esse endereço. Toque no mapa para marcar o local da escola.'); return; }
+    setLocal({ latitude: g.latitude, longitude: g.longitude });
+    setAchado(g.nome);
+  };
 
   const salvar = async (nome: string) => {
     if (!local) return;
@@ -27,7 +40,7 @@ export const EscolasDoMotorista: React.FC<{ versao?: number }> = ({ versao }) =>
   return (
     <section aria-label="Escolas" className="bg-slate-900 border border-indigo-400/30 rounded-2xl p-4 space-y-2">
       <h3 className="text-xs font-bold text-indigo-300">Local da escola</h3>
-      <p className="text-[11px] text-slate-400">Depois que o aluno embarca, o responsável acompanha a van até a escola pela barra (sem mapa). Marque onde a escola fica.</p>
+      <p className="text-[11px] text-slate-400">Depois que o aluno embarca, o responsável acompanha a van até a escola pela barra (sem mapa). Digite o endereço da escola ou marque no mapa.</p>
       <ul className="space-y-2">
         {escolas.map((e) => (
           <li key={e.nome} className="rounded-xl bg-slate-950 border border-slate-800 p-3 space-y-2">
@@ -35,13 +48,21 @@ export const EscolasDoMotorista: React.FC<{ versao?: number }> = ({ versao }) =>
               <span className="text-xs font-semibold text-slate-100">{e.nome}</span>
               <span className={`text-[10px] font-bold ${e.local ? 'text-emerald-400' : 'text-amber-300'}`}>{e.local ? 'Local marcado' : 'Local não marcado'}</span>
               {editando !== e.nome && (
-                <button type="button" onClick={() => { setEditando(e.nome); setLocal(e.local); setErro(null); }} className="px-3 py-2 rounded-xl bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 text-xs font-bold min-h-[44px] cursor-pointer">
+                <button type="button" onClick={() => { setEditando(e.nome); setLocal(e.local); setErro(null); setEndereco(''); setAchado(null); }} className="px-3 py-2 rounded-xl bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 text-xs font-bold min-h-[44px] cursor-pointer">
                   {e.local ? 'Alterar local' : 'Marcar local da escola'}
                 </button>
               )}
             </div>
             {editando === e.nome && (
               <div className="space-y-2">
+                <div className="flex gap-2">
+                  <input value={endereco} onChange={(ev) => setEndereco(ev.target.value)} onKeyDown={(ev) => { if (ev.key === 'Enter') { ev.preventDefault(); buscar(); } }}
+                    placeholder="Endereço da escola (rua, número, bairro)" maxLength={200} aria-label="Endereço da escola"
+                    className="flex-1 min-w-0 px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-cyan-400 min-h-[44px]" />
+                  <button type="button" onClick={buscar} disabled={buscando} className="px-3 py-2 rounded-xl bg-amber-400/10 border border-amber-400/40 text-amber-200 text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50">{buscando ? 'Buscando…' : 'Buscar no mapa'}</button>
+                </div>
+                {achado && <p className="text-[11px] text-emerald-300">Encontrado: {achado}. Confira no mapa e ajuste tocando, se precisar.</p>}
+                <p className="text-[11px] text-slate-500">Ou toque direto no mapa (ou use o GPS no local) para marcar a escola.</p>
                 <SeletorLocal valor={local} onChange={setLocal} />
                 {erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
                 <div className="flex gap-2">

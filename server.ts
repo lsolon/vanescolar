@@ -510,11 +510,43 @@ interface Proximidade {
   avisoAtivo: boolean;
   /** true quando a estimativa usa a distância real até o aluno (local de embarque marcado) */
   estimativaPrecisa?: boolean;
+  /** horário combinado de passagem (ida); o tempo mostrado nunca promete antes dele */
+  horarioPrevisto?: string;
+  /** a van está adiantada em relação ao horário combinado */
+  adiantada?: boolean;
   /** a bordo: para onde a van segue (escola na ida, casa na volta) */
   destino?: 'escola' | 'casa';
   posicao?: { latitude: number; longitude: number; heading: number };
   atualizadoEm: string;
 }
+// ---- Geocodificação do ENDEREÇO DA ESCOLA (feita pelo motorista) via OpenStreetMap/Nominatim. Nunca usada com endereços de alunos. ----
+const geoCache = new Map<string, { latitude: number; longitude: number; nome: string } | null>();
+async function geocodificar(consulta: string): Promise<{ latitude: number; longitude: number; nome: string } | null> {
+  const q = consulta.trim().replace(/\s+/g, ' ').slice(0, 200);
+  if (q.length < 5) return null;
+  const chave = q.toLowerCase();
+  if (geoCache.has(chave)) return geoCache.get(chave) ?? null;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 4000);
+  try {
+    // viewbox sobre o Rio de Janeiro apenas favorece resultados da região (bounded=0).
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&accept-language=pt-BR&viewbox=-43.9,-22.6,-42.7,-23.2&bounded=0&q=${encodeURIComponent(q)}`;
+    const r = await fetch(url, { signal: ctl.signal, headers: { 'User-Agent': 'VanEscolar/1.0 (contato@routinetech.com.br)' } });
+    if (!r.ok) return null;
+    const arr: any[] = await r.json();
+    const a = arr?.[0];
+    const lat = Number(a?.lat), lon = Number(a?.lon);
+    const out = Number.isFinite(lat) && Number.isFinite(lon) ? { latitude: Number(lat.toFixed(6)), longitude: Number(lon.toFixed(6)), nome: String(a.display_name || '').slice(0, 160) } : null;
+    if (geoCache.size > 500) geoCache.clear();
+    geoCache.set(chave, out);
+    return out;
+  } catch {
+    return null; // sem rede / tempo esgotado: o chamador segue sem coordenadas (não guarda no cache)
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const chaveEscola = (nome: unknown) => String(nome ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 function localDaEscola(driverId: number, nome: unknown): { latitude: number; longitude: number } | null {
   const rec = usersDB.find((u) => u.id === driverId);
@@ -541,6 +573,13 @@ function progressoPorDistancia(trip: Trip, chave: string, km: number): number | 
 function minutosPorKm(km: number, speedKmH: number, paradas: number): number {
   const v = (speedKmH || 0) >= 8 ? Math.max(15, Math.min(50, speedKmH)) : 25;
   return Math.max(1, Math.round((km * 1.3 / v) * 60 + paradas));
+}
+
+/** Minutos desde 00:00 no horário de Brasília (o servidor pode estar em UTC). */
+function agoraMinutosSP(): number {
+  const partes = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date());
+  const h = Number(partes.find((x) => x.type === 'hour')?.value) % 24, m = Number(partes.find((x) => x.type === 'minute')?.value);
+  return h * 60 + m;
 }
 
 function computeProximity(driverId: number, studentId: number | undefined, avisoMin: number): Proximidade | null {
@@ -596,8 +635,17 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
     const porDistancia = progressoPorDistancia(trip, `a${studentId}`, km);
     if (porDistancia !== null) progresso = porDistancia;
   }
+  // Horário combinado com o responsável: ele tem a sua programação. Se a van estiver adiantada (por exemplo, o aluno
+  // anterior faltou), o tempo mostrado e o aviso nunca prometem antes do horário combinado.
+  let horarioPrevisto: string | undefined, adiantada = false;
+  const prevista = horariosDaParada(mine).hora_ida;
+  if (prevista) {
+    horarioPrevisto = prevista;
+    const ate = paraMin(prevista) - agoraMinutosSP();
+    if (ate > minutos && ate <= 120) { minutos = ate; adiantada = true; progresso = Math.min(progresso, 0.9); }
+  }
   const proxima = faltam === 0;
-  return { ...base, estado: proxima ? 'proxima' : 'a_caminho', progresso, minutos, mapaLiberado: false, avisoAtivo: minutos <= avisoMin, estimativaPrecisa: precisa };
+  return { ...base, estado: proxima ? 'proxima' : 'a_caminho', progresso, minutos, mapaLiberado: false, avisoAtivo: minutos <= avisoMin, estimativaPrecisa: precisa, ...(horarioPrevisto ? { horarioPrevisto, adiantada } : {}) };
 }
 
 /**
@@ -1595,6 +1643,13 @@ async function startServer() {
   app.get('/api/motorista/escolas', authenticate, requireDriver, (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
     res.json({ escolas: escolasDoMotorista(driverIdFor(user) as number) });
+  });
+
+  // O motorista pode achar a escola pelo endereço (em vez de marcar no mapa). Só para escolas: endereços de alunos não saem do app.
+  app.get('/api/motorista/escolas/buscar', authenticate, requireDriver, rateLimiter(15, 60000), async (req: Request, res: Response) => {
+    const g = await geocodificar(String(req.query.q ?? ''));
+    if (!g) return res.status(404).json({ encontrado: false, error: 'Não encontrei esse endereço no mapa. Marque o local tocando no mapa.' });
+    res.json({ encontrado: true, ...g });
   });
 
   app.put('/api/motorista/escolas', authenticate, requireDriver, (req: Request, res: Response) => {

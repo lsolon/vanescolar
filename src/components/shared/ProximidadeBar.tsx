@@ -19,8 +19,12 @@ export function textoProximidade(p: ProximidadeVan | null): { titulo: string; su
   if (!p) return { titulo: 'Sem informações da van agora', sub: 'Assim que a rota começar, você acompanha por aqui.' };
   switch (p.estado) {
     case 'aguardando': return { titulo: 'Van aguardando partida', sub: 'Você será avisado quando ela estiver a caminho.' };
-    case 'a_caminho': return { titulo: `Van a caminho · ~${p.minutos} min`, sub: 'Acompanhe a van pela barra.' };
-    case 'proxima': return { titulo: `A próxima parada é a sua · ~${p.minutos} min`, sub: 'A van está chegando ao seu ponto.' };
+    case 'a_caminho':
+      if (p.adiantada && p.horarioPrevisto) return { titulo: `Passa às ${p.horarioPrevisto} · ~${p.minutos} min`, sub: 'A van segue o horário combinado.' };
+      return { titulo: `Van a caminho · ~${p.minutos} min`, sub: 'Acompanhe a van pela barra.' };
+    case 'proxima':
+      if (p.adiantada && p.horarioPrevisto) return { titulo: `Próxima parada é a sua · às ${p.horarioPrevisto} (~${p.minutos} min)`, sub: 'A van segue o horário combinado.' };
+      return { titulo: `A próxima parada é a sua · ~${p.minutos} min`, sub: 'A van está chegando ao seu ponto.' };
     case 'embarcou':
       if (p.destino) return { titulo: `Aluno a bordo · ~${p.minutos} min até ${p.destino === 'casa' ? 'sua casa' : 'a escola'}`, sub: p.destino === 'casa' ? 'A van está levando o aluno para casa.' : 'A van segue para a escola.' };
       return { titulo: 'Aluno a bordo', sub: 'A van segue para a escola.' };

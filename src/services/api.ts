@@ -387,6 +387,8 @@ export interface ProximidadeVan {
   avisoAtivo: boolean;
   estimativaPrecisa?: boolean;
   destino?: 'escola' | 'casa';
+  horarioPrevisto?: string;
+  adiantada?: boolean;
   posicao?: { latitude: number; longitude: number; heading: number };
   atualizadoEm: string;
 }
@@ -1493,6 +1495,16 @@ export const TransportRepository = {
     const res = await fetch(`${getBaseUrl()}/api/motorista/escolas`, { headers: getAuthHeaders() });
     if (!res.ok) throw new Error('Não foi possível carregar as escolas.');
     return (await res.json()).escolas || [];
+  },
+
+  /** Endereço da escola → coordenadas (OpenStreetMap, via servidor). null se não achar. */
+  async buscarEnderecoEscola(endereco: string): Promise<{ latitude: number; longitude: number; nome: string } | null> {
+    try {
+      const res = await fetch(`${getBaseUrl()}/api/motorista/escolas/buscar?q=${encodeURIComponent(endereco)}`, { headers: getAuthHeaders() });
+      if (!res.ok) return null;
+      const d = await res.json();
+      return d.encontrado ? { latitude: d.latitude, longitude: d.longitude, nome: d.nome } : null;
+    } catch { return null; }
   },
 
   async definirLocalEscola(nome: string, latitude: number, longitude: number): Promise<void> {
