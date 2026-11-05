@@ -495,7 +495,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         </div>
 
         {/* Linha do Motorista: Foto, Placa e Botão de Rota */}
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div className="relative">
               {motorista?.foto_url && !fotoFalhou ? (
@@ -537,6 +537,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           </div>
 
           {/* BOTÃO PRINCIPAL: INICIAR / ENCERRAR ROTA */}
+          <div className="flex items-center gap-2 ml-auto">
           {!isRotaAtiva && (
             <div role="group" aria-label="Sentido da viagem" className="flex rounded-xl overflow-hidden border border-slate-700 text-[11px] font-bold shrink-0">
               {(['IDA', 'VOLTA'] as const).map((sv) => (
@@ -572,6 +573,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
               </>
             )}
           </button>
+          </div>
         </div>
 
         {/* ALERTA DE SUCESSO / NOTIFICAÇÃO DOS PAIS */}
