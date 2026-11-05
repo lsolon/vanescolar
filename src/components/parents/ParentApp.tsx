@@ -30,7 +30,7 @@ import { ProximidadeBar } from '../shared/ProximidadeBar';
 import { RealMap } from '../shared/RealMap';
 import { PreferenciasProximidade } from './PreferenciasProximidade';
 import { HorariosEscola } from './HorariosEscola';
-import { AdicionarFilho, BarraFilhos, SituacaoVinculo, MarcarLocalFilho } from './FilhosParent';
+import { AdicionarFilho, BarraFilhos, SituacaoVinculo } from './FilhosParent';
 import { MeuIdAcesso } from '../shared/MeuIdAcesso';
 import {
   MapPin,
@@ -404,30 +404,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
                 <button type="button" onClick={() => setAvisoProximidade(null)} className="text-amber-300 underline cursor-pointer shrink-0">Ok</button>
               </div>
             )}
-            {prox && prox.rotaAtiva && prox.estimativaPrecisa === false && dados && (
-              <div className="mb-3"><MarcarLocalFilho alunoId={Number(dados.aluno.id)} onSalvo={carregarDados} /></div>
-            )}
             <ProximidadeBar proximidade={prox} estilo={prefs.estilo} />
-            {prox?.mapaLiberado && prox.posicao && (
-              <div className="mt-3">
-                <RealMap
-                  compact
-                  isRotaAtiva
-                  motoristaNome={motorista?.nome}
-                  coordenadas={{
-                    latitude: prox.posicao.latitude,
-                    longitude: prox.posicao.longitude,
-                    heading: prox.posicao.heading,
-                    speedKmH: 0,
-                    timestamp: '',
-                    accuracyMeters: 5,
-                    currentAddress: '',
-                    nextStopName: '',
-                    etaNextStopMinutes: prox.minutos ?? 0
-                  }}
-                />
-              </div>
-            )}
             <PreferenciasProximidade prefs={prefs} onChange={setPrefs} />
           </section>
         )}

@@ -1465,20 +1465,10 @@ export const TransportRepository = {
     window.dispatchEvent(new Event('van-token')); // reconecta a transmissão ao vivo com o filho escolhido
   },
 
-  /** Endereço → coordenadas (OpenStreetMap, via servidor). Retorna null se não achar. */
-  async geocodificar(endereco: string): Promise<{ latitude: number; longitude: number; nome: string } | null> {
-    try {
-      const res = await fetch(`${getBaseUrl()}/api/geocodificar?q=${encodeURIComponent(endereco)}`, { headers: getAuthHeaders() });
-      if (!res.ok) return null;
-      const d = await res.json();
-      return d.encontrado ? { latitude: d.latitude, longitude: d.longitude, nome: d.nome } : null;
-    } catch { return null; }
-  },
-
   async cadastrarFilho(params: {
     nomeAluno: string; escola: string; endereco: string; pontoReferencia?: string;
     escolaEntrada: string; escolaSaida: string; telefone?: string;
-    codigoMotorista?: string; motoristaId?: number; latitude?: number; longitude?: number;
+    codigoMotorista?: string; motoristaId?: number;
   }): Promise<number> {
     const res = await fetch(`${getBaseUrl()}/api/filhos`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(params) });
     const d = await res.json().catch(() => ({}));
@@ -1492,14 +1482,6 @@ export const TransportRepository = {
     const res = await fetch(`${getBaseUrl()}/api/filhos/${alunoId}/motorista`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(v) });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível trocar o motorista.');
-  },
-
-  async definirLocalFilho(alunoId: number, latitude: number, longitude: number): Promise<void> {
-    const res = await fetch(`${getBaseUrl()}/api/filhos/${alunoId}/local`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ latitude, longitude }) });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.error || 'Não foi possível salvar o local.');
-    }
   },
 
   async excluirFilho(alunoId: number): Promise<void> {

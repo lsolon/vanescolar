@@ -432,8 +432,9 @@ test('Proximidade: sem coordenadas para o responsável até a próxima parada se
   await jsonReq('POST', `/api/paradas/${b.novaParada.id}/status`, mot, { status: 'EMBARCOU' });
   p = (await jsonReq('GET', '/api/proximidade', resp)).data.proximidade;
   assert.equal(p.estado, 'proxima');
-  assert.equal(p.mapaLiberado, true);
-  assert.equal(p.posicao.latitude, -22.95);
+  assert.equal(p.mapaLiberado, false, 'o responsável nunca recebe o mapa');
+  assert.equal(p.posicao, undefined, 'nem a posição da van, mesmo quando é a próxima parada');
+  assert.equal(JSON.stringify(p).includes('-22.95'), false);
   assert.ok(p.avisoAtivo, 'com 1 parada e aviso padrão de 10 min, o aviso deve estar ativo');
 });
 
@@ -806,4 +807,19 @@ test('ETA: com o local do aluno marcado, os minutos acompanham a distância da v
   await jsonReq('POST', '/api/gps', mot2, { latitude: -22.95, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
   const aprox = (await jsonReq('GET', '/api/proximidade', respSem)).data.proximidade;
   assert.equal(aprox.estimativaPrecisa, false);
+});
+
+test('Privacidade: responsável não grava coordenadas do filho nem recebe mapa; só o motorista marca o ponto', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'SemMapa');
+  const codigo = (await jsonReq('GET', '/api/motorista/codigo', mot)).data.codigo;
+  const fam = await novoResponsavelVerificado(adm);
+  const f = (await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: 'Sem Mapa', codigoMotorista: codigo, latitude: -22.9, longitude: -43.2 })).data;
+  assert.ok(f.alunoId);
+  const parada = (await jsonReq('GET', '/api/estado', mot)).data.paradas.find((p: any) => p.id_aluno === f.alunoId);
+  assert.ok(parada.latitude == null && parada.longitude == null, 'coordenadas enviadas pelo responsável são ignoradas');
+  assert.equal((await jsonReq('PUT', `/api/filhos/${f.alunoId}/local`, fam, { latitude: -22.9, longitude: -43.2 })).status, 404);
+  assert.equal((await jsonReq('GET', '/api/geocodificar?q=Rua%20das%20Flores%2010', fam)).status, 404, 'sem consulta externa do endereço');
+  // o motorista marca o ponto
+  assert.equal((await jsonReq('PUT', `/api/paradas/${parada.id}/local`, mot, { latitude: -22.9, longitude: -43.2 })).status, 200);
 });
