@@ -29,6 +29,7 @@ import { InstalarApp } from '../shared/InstalarApp';
 import { Mensalidades } from './Mensalidades';
 import { Financeiro } from './Financeiro';
 import { TransportRepository, subscribeToDatabaseChanges } from '../../services/api';
+import { minutosAgoraBrasil, sentidoPorHorario } from '../../services/sentidoAuto';
 import {
   Play,
   Square,
@@ -114,6 +115,13 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   // Com a rota em andamento vale o sentido do servidor (sobrevive a recarregar a página); antes de iniciar, o escolhido no seletor.
   const sentidoServidor: 'IDA' | 'VOLTA' | null = isRotaAtiva ? (String((viagemZeroCache?.viagem as any)?.sentido) === 'VOLTA' ? 'VOLTA' : 'IDA') : null;
   useEffect(() => { if (sentidoServidor) setSentidoRota(sentidoServidor); }, [sentidoServidor]);
+  // Antes de iniciar, o sentido é sugerido pelo horário da escola (entrada = ida, saída = volta). Escolher à mão desliga o automático até tocar em "Auto".
+  const [sentidoAuto, setSentidoAuto] = useState(true);
+  const [agoraMin, setAgoraMin] = useState(() => minutosAgoraBrasil());
+  useEffect(() => { const t = setInterval(() => setAgoraMin(minutosAgoraBrasil()), 60_000); return () => clearInterval(t); }, []);
+  const alunosDoDia = (viagemZeroCache?.paradas || []).filter((p) => p.vinculo !== 'PENDENTE' && p.vinculo !== 'RECUSADO');
+  const sentidoSugerido = sentidoPorHorario(alunosDoDia, agoraMin);
+  useEffect(() => { if (sentidoAuto && !isRotaAtiva) setSentidoRota(sentidoSugerido); }, [sentidoAuto, isRotaAtiva, sentidoSugerido]);
   // Ajuste manual dos horários previstos de uma parada
   const [paradaHorarios, setParadaHorarios] = useState<{ id: number | string; nome: string } | null>(null);
   const [horaIdaEdit, setHoraIdaEdit] = useState('');
@@ -532,12 +540,21 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           <div className="flex items-center gap-2 ml-auto">
           {!isRotaAtiva && (
             <div role="group" aria-label="Sentido da viagem" className="flex rounded-xl overflow-hidden border border-slate-700 text-[11px] font-bold shrink-0">
+              <button
+                type="button"
+                aria-pressed={sentidoAuto}
+                title="Escolhe Ida ou Volta pelo horário de entrada e saída da escola"
+                onClick={() => { setSentidoAuto(true); setSentidoRota(sentidoSugerido); }}
+                className={`px-2.5 py-2 min-h-[40px] cursor-pointer border-r border-slate-700 ${sentidoAuto ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-900 text-slate-500'}`}
+              >
+                Auto
+              </button>
               {(['IDA', 'VOLTA'] as const).map((sv) => (
                 <button
                   key={sv}
                   type="button"
                   aria-pressed={sentidoRota === sv}
-                  onClick={() => setSentidoRota(sv)}
+                  onClick={() => { setSentidoAuto(false); setSentidoRota(sv); }}
                   className={`px-2.5 py-2 min-h-[40px] cursor-pointer ${sentidoRota === sv ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-900 text-slate-400'}`}
                 >
                   {sv === 'IDA' ? 'Ida' : 'Volta'}
