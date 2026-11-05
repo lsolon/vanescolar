@@ -1235,15 +1235,8 @@ async function startServer() {
     }
     const admin = (req as any).user as SessionPayload;
     const antes = { usuarios: usersDB.length, convites: driverInvitationsDB.length, paradas: serverState.paradas.length };
-    const adminUsers = usersDB.filter((u) => ADMIN_EMAILS.includes(u.email.toLowerCase()));
-    const seedUsers = SEED_LOGIN_ENABLED ? getSeedUsers() : [];
-    const mergedUsers = [...adminUsers];
-    for (const su of seedUsers) {
-      if (!mergedUsers.some((u) => u.email.toLowerCase() === su.email.toLowerCase())) {
-        mergedUsers.push(su);
-      }
-    }
-    usersDB = mergedUsers;
+    // Apaga tudo, menos o acesso de administrador. Os motoristas de exemplo NÃO são recriados.
+    usersDB = usersDB.filter((u) => ADMIN_EMAILS.includes(u.email.toLowerCase()));
     driverInvitationsDB = [];
     serverState.paradas = [];
     tripsDB.clear();
