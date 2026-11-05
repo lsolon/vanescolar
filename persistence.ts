@@ -8,50 +8,74 @@
  *
  * Armazenamentos disponíveis (variável PERSISTENCE):
  *  - firestore : Google Firestore (funciona no AI Studio / Cloud Run e no VPS)
- *  - file      : arquivo JSON em DATA_DIR (VPS ou testes locais)
+ *  - file      : arquivos JSON em DATA_DIR (VPS ou testes locais)
  *  - memory    : sem persistência (comportamento antigo)
  * Se PERSISTENCE não for informado: firestore quando FIREBASE_SERVICE_ACCOUNT
  * ou FIRESTORE=true estiver definido; file quando DATA_DIR estiver definido;
  * caso contrário memory.
  *
- * Cada "documento" é gravado como texto JSON (limite do Firestore: 1 MB por
- * documento, suficiente para o MVP).
+ * FORMATO (v2): um registro por entidade (um usuário, uma parada, um motorista
+ * com a sua viagem, um pagamento...). Cada registro tem no máximo alguns KB, então
+ * o limite de 1 MB por documento do Firestore deixa de ser um problema, e cada
+ * gravação envia só o que mudou. Em cada coleção há um registro "__meta" com uma
+ * revisão, que permite às outras instâncias saber (1 leitura) se precisam reler.
+ *
+ * MIGRAÇÃO: se a coleção nova ainda não existe, os dados são lidos do formato
+ * antigo (um documento grande por assunto) e gravados no novo. O formato antigo
+ * NÃO é apagado, então dá para voltar à versão anterior do app sem perder nada.
  * ============================================================================
  */
 
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 
 export type DocName = 'users' | 'invitations' | 'state' | 'settings' | 'mensalidades';
 export const DOC_NAMES: DocName[] = ['users', 'invitations', 'state', 'settings', 'mensalidades'];
 
-export interface DocStore {
+const META = '__meta';
+
+/** Armazenamento de registros: para cada assunto (DocName), um conjunto de chave → texto JSON. */
+export interface RecordStore {
   readonly kind: string;
-  read(name: DocName): Promise<string | null>;
-  write(name: DocName, json: string): Promise<void>;
+  /** Todos os registros do assunto, incluindo o "__meta". Vazio se ainda não existe. */
+  readAll(name: DocName): Promise<Record<string, string>>;
+  readKey(name: DocName, key: string): Promise<string | null>;
+  write(name: DocName, key: string, json: string): Promise<void>;
+  remove(name: DocName, key: string): Promise<void>;
+  /** Formato antigo (um documento por assunto), só para migrar. */
+  readLegacy(name: DocName): Promise<string | null>;
 }
 
-/** Armazenamento em arquivos JSON (um arquivo por documento). */
-export class FileStore implements DocStore {
+/** Armazenamento em arquivos JSON (um arquivo por assunto, com todos os registros). */
+export class FileStore implements RecordStore {
   readonly kind = 'file';
   constructor(private dir: string) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  private file(name: DocName) {
-    return path.join(this.dir, `${name}.json`);
+  private file(name: DocName) { return path.join(this.dir, `${name}.records.json`); }
+  private async load(name: DocName): Promise<Record<string, string>> {
+    try { return JSON.parse(await fs.promises.readFile(this.file(name), 'utf8')); }
+    catch (err: any) { if (err?.code === 'ENOENT') return {}; throw err; }
   }
-  async read(name: DocName) {
-    try {
-      return await fs.promises.readFile(this.file(name), 'utf8');
-    } catch (err: any) {
-      if (err?.code === 'ENOENT') return null;
-      throw err;
-    }
+  private queue: Promise<void> = Promise.resolve();
+  private mutate(name: DocName, fn: (r: Record<string, string>) => void) {
+    this.queue = this.queue.then(async () => {
+      const r = await this.load(name);
+      fn(r);
+      const tmp = `${this.file(name)}.tmp`;
+      await fs.promises.writeFile(tmp, JSON.stringify(r), 'utf8');
+      await fs.promises.rename(tmp, this.file(name)); // gravação atômica
+    });
+    return this.queue;
   }
-  async write(name: DocName, json: string) {
-    const tmp = `${this.file(name)}.tmp`;
-    await fs.promises.writeFile(tmp, json, 'utf8');
-    await fs.promises.rename(tmp, this.file(name)); // gravação atômica
+  readAll(name: DocName) { return this.load(name); }
+  async readKey(name: DocName, key: string) { return (await this.load(name))[key] ?? null; }
+  write(name: DocName, key: string, json: string) { return this.mutate(name, (r) => { r[key] = json; }); }
+  remove(name: DocName, key: string) { return this.mutate(name, (r) => { delete r[key]; }); }
+  async readLegacy(name: DocName) {
+    try { return await fs.promises.readFile(path.join(this.dir, `${name}.json`), 'utf8'); }
+    catch (err: any) { if (err?.code === 'ENOENT') return null; throw err; }
   }
 }
 
@@ -61,22 +85,37 @@ export interface FirestoreLike {
     doc(id: string): {
       get(): Promise<{ exists: boolean; data(): any }>;
       set(data: any): Promise<unknown>;
+      delete(): Promise<unknown>;
     };
+    get(): Promise<{ docs: Array<{ id: string; data(): any }> }>;
   };
 }
 
-export class FirestoreStore implements DocStore {
+/** Firestore: coleção `<prefixo>_<assunto>`, um documento por registro. Formato antigo: `vanescolar/<assunto>`. */
+export class FirestoreStore implements RecordStore {
   readonly kind = 'firestore';
-  constructor(private db: FirestoreLike, private collectionName = 'vanescolar') {}
-  async read(name: DocName) {
-    const snap = await this.db.collection(this.collectionName).doc(name).get();
+  constructor(private db: FirestoreLike, private legacyCollection = 'vanescolar', private prefix = 'vanescolar') {}
+  private col(name: DocName) { return this.db.collection(`${this.prefix}_${name}`); }
+  // O id do documento não pode ter "/": as chaves usam ":" e "-" apenas, mas protegemos mesmo assim.
+  private id(key: string) { return key.replace(/\//g, '%2F'); }
+  private unid(id: string) { return id.replace(/%2F/g, '/'); }
+  async readAll(name: DocName) {
+    const snap = await this.col(name).get();
+    const out: Record<string, string> = {};
+    for (const d of snap.docs) { const j = d.data()?.json; if (typeof j === 'string') out[this.unid(d.id)] = j; }
+    return out;
+  }
+  async readKey(name: DocName, key: string) {
+    const snap = await this.col(name).doc(this.id(key)).get();
     return snap.exists ? (snap.data()?.json ?? null) : null;
   }
-  async write(name: DocName, json: string) {
-    await this.db
-      .collection(this.collectionName)
-      .doc(name)
-      .set({ json, updatedAt: new Date().toISOString() });
+  async write(name: DocName, key: string, json: string) {
+    await this.col(name).doc(this.id(key)).set({ json, updatedAt: new Date().toISOString() });
+  }
+  async remove(name: DocName, key: string) { await this.col(name).doc(this.id(key)).delete(); }
+  async readLegacy(name: DocName) {
+    const snap = await this.db.collection(this.legacyCollection).doc(name).get();
+    return snap.exists ? (snap.data()?.json ?? null) : null;
   }
 }
 
@@ -118,8 +157,62 @@ export function chooseStoreKind(env: NodeJS.ProcessEnv = process.env): 'firestor
 
 export type Snapshot = Record<DocName, unknown>;
 
+type Registros = Record<string, string>;
+
+/** Converte o valor de um assunto em registros (uma chave por entidade). */
+export function paraRegistros(name: DocName, valor: any): Registros {
+  const out: Registros = {};
+  const j = (v: unknown) => JSON.stringify(v);
+  if (valor === null || valor === undefined) return out;
+  switch (name) {
+    case 'users':
+      for (const u of valor as any[]) out[`u-${u.id}`] = j(u);
+      break;
+    case 'invitations':
+      for (const c of valor as any[]) out[`i-${c.code}`] = j(c);
+      break;
+    case 'settings':
+      out['settings'] = j(valor);
+      break;
+    case 'state':
+      for (const p of (valor.paradas ?? []) as any[]) out[`parada-${p.id}`] = j(p);
+      for (const [id, t] of Object.entries(valor.trips ?? {})) out[`trip-${id}`] = j(t);
+      break;
+    case 'mensalidades':
+      for (const [k, c] of Object.entries(valor.configs ?? {})) out[`cfg-${k}`] = j(c);
+      for (const p of (valor.pagamentos ?? []) as any[]) out[`pg-${p.id_motorista}-${p.id_aluno}-${p.mes}`] = j(p);
+      break;
+  }
+  return out;
+}
+
+/** Faz o caminho inverso: monta o valor do assunto a partir dos registros. */
+export function dosRegistros(name: DocName, reg: Registros): any {
+  const vals = (prefixo: string) => Object.entries(reg).filter(([k]) => k.startsWith(prefixo)).map(([k, v]) => [k, JSON.parse(v)] as const);
+  const porId = (a: any, b: any) => (Number(a.id) || 0) - (Number(b.id) || 0);
+  switch (name) {
+    case 'users': return vals('u-').map(([, v]) => v).sort(porId);
+    case 'invitations': return vals('i-').map(([, v]) => v).sort((a: any, b: any) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')));
+    case 'settings': return reg['settings'] ? JSON.parse(reg['settings']) : undefined;
+    case 'state': return {
+      paradas: vals('parada-').map(([, v]) => v).sort(porId),
+      trips: Object.fromEntries(vals('trip-').map(([k, v]) => [k.slice('trip-'.length), v]))
+    };
+    case 'mensalidades': return {
+      configs: Object.fromEntries(vals('cfg-').map(([k, v]) => [k.slice('cfg-'.length), v])),
+      pagamentos: vals('pg-').map(([, v]) => v)
+    };
+  }
+}
+
+const novaRevisao = () => crypto.randomBytes(6).toString('hex');
+const EM_LOTES = 10;
+
 export class Persistence {
-  private lastSaved = new Map<DocName, string>();
+  /** Último conteúdo gravado/lido de cada registro (para gravar só o que mudou). */
+  private lastSaved = new Map<DocName, Registros>();
+  /** Revisão conhecida de cada assunto (para saber se outra instância gravou algo). */
+  private rev = new Map<DocName, string>();
   private timer: NodeJS.Timeout | null = null;
   private saving: Promise<void> = Promise.resolve();
   private getSnapshot: (() => Snapshot) | null = null;
@@ -127,7 +220,7 @@ export class Persistence {
   /** Motivo (código curto, sem dados sensíveis) pelo qual o armazenamento durável não está ativo. */
   reason = '';
 
-  constructor(private store: DocStore | null, private delayMs = 2000) {}
+  constructor(private store: RecordStore | null, private delayMs = 2000) {}
 
   /** Desativa a gravação (ex.: falha ao ler o estado salvo). Evita sobrescrever dados reais com estado vazio. */
   disable(reason: string) {
@@ -140,16 +233,55 @@ export class Persistence {
     return this.store ? this.store.kind : 'memory';
   }
 
-  /** Lê os documentos salvos. Retorna null para documentos inexistentes. */
+  /** Lê os registros de um assunto; migra do formato antigo se a coleção nova ainda não existe. */
+  private async lerAssunto(store: RecordStore, name: DocName): Promise<{ valor: any; existe: boolean }> {
+    const todos = await store.readAll(name);
+    if (todos[META] !== undefined) {
+      const { [META]: meta, ...registros } = todos;
+      this.lastSaved.set(name, registros);
+      try { this.rev.set(name, JSON.parse(meta).rev); } catch { this.rev.delete(name); }
+      return { valor: dosRegistros(name, registros), existe: true };
+    }
+    // Coleção nova ainda não inicializada: tenta o formato antigo (uma vez).
+    const antigo = await store.readLegacy(name);
+    if (antigo) {
+      const valor = JSON.parse(antigo);
+      // lastSaved vazio => a próxima gravação escreve tudo no formato novo (a migração).
+      this.lastSaved.set(name, {});
+      this.rev.delete(name);
+      return { valor, existe: true };
+    }
+    this.lastSaved.set(name, {});
+    this.rev.delete(name);
+    return { valor: undefined, existe: false };
+  }
+
+  /** Lê os assuntos salvos. Retorna só os que existem. */
   async load(names: DocName[] = DOC_NAMES): Promise<Partial<Record<DocName, any>>> {
     const out: Partial<Record<DocName, any>> = {};
     if (!this.store) return out;
     for (const name of names) {
-      const raw = await this.store.read(name);
-      if (raw) {
-        out[name] = JSON.parse(raw);
-        this.lastSaved.set(name, raw);
-      }
+      const { valor, existe } = await this.lerAssunto(this.store, name);
+      if (existe) out[name] = valor;
+    }
+    return out;
+  }
+
+  /**
+   * Para várias instâncias do servidor: relê só os assuntos que OUTRA instância alterou.
+   * Custa 1 leitura por assunto (o registro "__meta"); só relê tudo se a revisão mudou.
+   */
+  async reloadIfChanged(names: DocName[]): Promise<Partial<Record<DocName, any>>> {
+    const out: Partial<Record<DocName, any>> = {};
+    const store = this.store;
+    if (!store) return out;
+    for (const name of names) {
+      const meta = await store.readKey(name, META);
+      let revRemota: string | undefined;
+      try { revRemota = meta ? JSON.parse(meta).rev : undefined; } catch {}
+      if (revRemota === undefined || revRemota === this.rev.get(name)) continue;
+      const { valor, existe } = await this.lerAssunto(store, name);
+      if (existe) out[name] = valor;
     }
     return out;
   }
@@ -167,7 +299,7 @@ export class Persistence {
     }, this.delayMs);
   }
 
-  /** Grava agora os documentos que mudaram desde a última gravação. */
+  /** Grava agora os registros que mudaram desde a última gravação. */
   flush(): Promise<void> {
     if (!this.store || !this.getSnapshot) return Promise.resolve();
     if (this.timer) {
@@ -176,12 +308,29 @@ export class Persistence {
     }
     const store = this.store;
     const snapshot = this.getSnapshot();
+    // Copia os registros já aqui: o que for gravado é exatamente o que existia neste instante.
+    const novos = new Map<DocName, Registros>();
+    for (const name of DOC_NAMES) novos.set(name, paraRegistros(name, snapshot[name]));
+
     this.saving = this.saving.then(async () => {
       for (const name of DOC_NAMES) {
-        const json = JSON.stringify(snapshot[name] ?? null);
-        if (this.lastSaved.get(name) === json) continue;
-        await store.write(name, json);
-        this.lastSaved.set(name, json);
+        const atuais = novos.get(name)!;
+        const antes = this.lastSaved.get(name) ?? {};
+        const gravar = Object.entries(atuais).filter(([k, v]) => antes[k] !== v);
+        const apagar = Object.keys(antes).filter((k) => !(k in atuais));
+        const primeiraVez = !this.rev.has(name);
+        if (gravar.length === 0 && apagar.length === 0 && !primeiraVez) continue;
+        for (let i = 0; i < gravar.length; i += EM_LOTES) {
+          await Promise.all(gravar.slice(i, i + EM_LOTES).map(([k, v]) => store.write(name, k, v)));
+        }
+        for (let i = 0; i < apagar.length; i += EM_LOTES) {
+          await Promise.all(apagar.slice(i, i + EM_LOTES).map((k) => store.remove(name, k)));
+        }
+        // A revisão só muda depois dos dados, para quem a ler já encontrar o conteúdo novo.
+        const rev = novaRevisao();
+        await store.write(name, META, JSON.stringify({ rev, v: 2 }));
+        this.rev.set(name, rev);
+        this.lastSaved.set(name, atuais);
       }
     });
     return this.saving;

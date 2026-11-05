@@ -573,6 +573,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
               <h2 className="text-xl font-bold text-white mb-6">Configurações de Acesso</h2>
               
               <div className="max-w-xl space-y-6">
+                <div className="p-6 bg-slate-900 border border-slate-700 rounded-3xl space-y-3">
+                  <h3 className="text-sm font-bold text-slate-100">Cópia de segurança</h3>
+                  <p className="text-xs text-slate-400">Baixa um arquivo com todos os dados (contas, alunos, rotas e mensalidades), sem as senhas. Guarde em local seguro: contém dados de crianças. Faça antes de mudanças grandes, pois o plano gratuito do Firestore não tem backup automático.</p>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const blob = await TransportRepository.baixarBackup(false);
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `vanescolar-backup-${new Date().toISOString().slice(0, 10)}.json`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        setMsgLimpar({ ok: true, texto: 'Backup baixado.' });
+                      } catch (err: any) {
+                        setMsgLimpar({ ok: false, texto: err?.message || 'Falha ao gerar o backup.' });
+                      }
+                    }}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-100 text-sm font-bold cursor-pointer"
+                  >
+                    Baixar backup
+                  </button>
+                </div>
+
                 <div className="p-6 bg-rose-950/30 border border-rose-500/40 rounded-3xl space-y-3">
                   <h3 className="text-sm font-bold text-rose-300">Limpar todos os dados</h3>
                   <p className="text-xs text-slate-400">Apaga alunos, paradas, motoristas, responsáveis e convites. Só os acessos de administrador são mantidos. Não tem volta.</p>

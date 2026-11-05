@@ -945,7 +945,8 @@ async function startServer() {
     if (persistence.kind === 'memory' || !sensivel) return next();
     try {
       await persistence.flush();
-      const saved = await persistence.load(['users', 'invitations', 'mensalidades']);
+      // Só relê o que OUTRA instância alterou (1 leitura por assunto, não a coleção inteira).
+      const saved = await persistence.reloadIfChanged(['users', 'invitations', 'mensalidades']);
       if (Array.isArray(saved.users)) {
         usersDB.splice(0, usersDB.length, ...saved.users);
         if (!SEED_LOGIN_ENABLED) for (const u of usersDB) if (seedEmails.has(u.email.toLowerCase())) u.passwordHash = '';
@@ -1366,6 +1367,30 @@ async function startServer() {
   });
 
   // Apaga TODOS os dados (alunos, paradas, motoristas, responsáveis, convites, mensagens). Mantém só os admins.
+  // Cópia de segurança baixável (o plano gratuito do Firestore não faz backup automático).
+  // Por padrão NÃO inclui os hashes de senha; com ?senhas=1 inclui (guarde o arquivo com cuidado: tem dados de crianças).
+  app.get('/api/admin/backup', authenticate, requireAdmin, rateLimiter(5, 60000), (req: Request, res: Response) => {
+    const admin = (req as any).user as SessionPayload;
+    const comSenhas = req.query.senhas === '1';
+    const copia = {
+      versao: 2,
+      geradoEm: new Date().toISOString(),
+      inclui_senhas: comSenhas,
+      users: usersDB.map((u) => comSenhas ? u : { ...u, passwordHash: undefined }),
+      invitations: driverInvitationsDB,
+      state: {
+        paradas: serverState.paradas,
+        trips: Object.fromEntries([...tripsDB.entries()].map(([id, t]) => [id, { viagem: t.viagem, mensagens: t.mensagens }]))
+      },
+      settings: { adminEmails: ADMIN_EMAILS },
+      mensalidades: mensalidadesDB
+    };
+    auditLog('BACKUP_BAIXADO', admin.email, `Cópia de segurança gerada (senhas: ${comSenhas ? 'sim' : 'não'})`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Disposition', `attachment; filename="vanescolar-backup-${copia.geradoEm.slice(0, 10)}.json"`);
+    res.json(copia);
+  });
+
   app.post('/api/admin/limpar-tudo', authenticate, requireAdmin, rateLimiter(3, 60000), (req: Request, res: Response) => {
     if (req.body?.confirmacao !== 'LIMPAR TUDO') {
       return res.status(400).json({ error: 'Confirmação ausente. Digite LIMPAR TUDO.' });
@@ -2293,7 +2318,9 @@ async function startServer() {
     };
     const msgDriverId = driverIdFor(user);
     if (msgDriverId === null) return res.status(403).json({ error: 'Você ainda não está vinculado a um motorista.' });
-    getTrip(msgDriverId).mensagens.push(novaMsg);
+    const msgs = getTrip(msgDriverId).mensagens;
+    msgs.push(novaMsg);
+    if (msgs.length > 200) msgs.splice(0, msgs.length - 200); // guarda as 200 mais recentes: o registro da viagem não cresce sem limite
     broadcast('MENSAGEM_ENVIADA', { mensagem: novaMsg }, msgDriverId);
     res.json({ sucesso: true, mensagem: novaMsg });
   });

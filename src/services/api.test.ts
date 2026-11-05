@@ -1065,3 +1065,16 @@ test('Mensalidades: motorista define valor, dá baixa e desfaz; dados isolados p
   assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${alunoId}/desfazer`, a, { mes })).status, 404);
   assert.equal((await jsonReq('GET', '/api/motorista/mensalidades', a)).data.resumo.recebido, 0);
 });
+
+test('Backup: só o administrador baixa e as senhas não vão no arquivo por padrão', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'BackupMot');
+  assert.equal((await jsonReq('GET', '/api/admin/backup')).status, 401);
+  assert.equal((await jsonReq('GET', '/api/admin/backup', mot)).status, 403, 'motorista não baixa backup');
+  const r = await jsonReq('GET', '/api/admin/backup', adm);
+  assert.equal(r.status, 200);
+  assert.ok(Array.isArray(r.data.users) && r.data.users.length > 0);
+  assert.ok(r.data.users.every((u: any) => u.passwordHash === undefined), 'sem hashes de senha');
+  assert.ok(Array.isArray(r.data.state.paradas) && r.data.mensalidades && Array.isArray(r.data.mensalidades.pagamentos));
+  assert.equal(r.data.inclui_senhas, false);
+});
