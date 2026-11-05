@@ -855,6 +855,26 @@ export const TransportRepository = {
     return data;
   },
 
+  /** Modo de teste (servidor com MODO_TESTE_SEM_LOGIN=true): entra sem senha. */
+  async modoTesteAtivo(): Promise<boolean> {
+    try {
+      const r = await fetch(`${getBaseUrl()}/api/health`);
+      return !!(await r.json()).modoTeste;
+    } catch { return false; }
+  },
+
+  async entrarModoTeste(papel: 'motorista' | 'responsavel', nome?: string) {
+    const res = await fetch(`${getBaseUrl()}/api/teste/entrar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ papel, nome })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Modo de teste indisponível.');
+    AuthService.setSessionToken(data.token);
+    return data;
+  },
+
   async loginGoogle() {
     await sleep();
     try {
