@@ -720,6 +720,16 @@ export const TransportRepository = {
     return handleAdminResponse(res);
   },
 
+  /** Baixa a cópia de segurança (JSON) dos dados do app. */
+  async baixarBackup(comSenhas = false): Promise<Blob> {
+    const res = await fetch(`${getBaseUrl()}/api/admin/backup${comSenhas ? '?senhas=1' : ''}`, { headers: getAuthHeaders(true) });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || 'Não foi possível gerar o backup.');
+    }
+    return res.blob();
+  },
+
   async revogarConviteMotorista(code: string) {
     const res = await fetch(`${getBaseUrl()}/api/admin/convites-motorista/${code}`, {
       method: 'DELETE',
