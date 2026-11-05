@@ -154,6 +154,10 @@ export const ParentApp: React.FC<ParentAppProps> = ({
       TransportRepository.getDadosAlunoParaPais(alunoDemoId).then((res) => {
         if (res) setDados(res);
       }).catch(() => {});
+      // A confirmação do motorista muda o vínculo do filho: atualiza a lista para o aviso "Aguardando…" sumir na hora.
+      if (!isDemo && (event === 'STATUS_EMBARQUE_ATUALIZADO' || event === 'NOVA_PARADA_CADASTRADA' || event === 'INIT_STATE' || event === 'ALUNO_CONFIRMADO')) {
+        TransportRepository.getFilhos().then((f) => { if (f) setFilhosInfo(f); }).catch(() => {});
+      }
 
       if (event === 'aluno:status_alterado' || event === 'STATUS_EMBARQUE_ATUALIZADO') {
         setSucessoFeedback('Status de transporte atualizado em tempo real pelo motorista!');
