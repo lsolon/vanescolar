@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { TransportRepository, FilhoResumo } from '../../services/api';
 import { CampoHora } from '../shared/CampoHora';
-import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 
 type Motorista = { id: number; nome: string };
 const campo = 'w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-cyan-400 min-h-[44px]';
@@ -46,7 +45,6 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
   const [entrada, setEntrada] = useState('');
   const [saida, setSaida] = useState('');
   const [tel, setTel] = useState('');
-  const [local, setLocal] = useState<LocalMarcado | null>(null);
   const [codigo, setCodigo] = useState('');
   const [motoristaId, setMotoristaId] = useState<number | ''>(motoristas[0]?.id ?? '');
   const [erro, setErro] = useState<string | null>(null);
@@ -58,22 +56,10 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
     if (!entrada || !saida) { setErro('Informe a entrada e a saída da escola.'); return; }
     setSalvando(true);
     try {
-      // O local de embarque é necessário para o tempo de chegada acompanhar a van: se não foi marcado, busca pelo endereço.
-      let pos = local;
-      if (!pos) {
-        const g = await TransportRepository.geocodificar(endereco);
-        if (g) pos = { latitude: g.latitude, longitude: g.longitude };
-      }
-      if (!pos) {
-        setErro('Não consegui achar o endereço no mapa. Use "Usar minha localização agora" ou toque no mapa para marcar o ponto de embarque.');
-        setSalvando(false);
-        return;
-      }
       await TransportRepository.cadastrarFilho({
         nomeAluno: nome.trim(), escola: escola.trim(), endereco: endereco.trim(), pontoReferencia: ref.trim(),
         escolaEntrada: entrada, escolaSaida: saida, telefone: tel.trim() || undefined,
-        ...(motoristaId !== '' && motoristas.length > 0 ? { motoristaId } : { codigoMotorista: codigo.trim() }),
-        latitude: pos.latitude, longitude: pos.longitude
+        ...(motoristaId !== '' && motoristas.length > 0 ? { motoristaId } : { codigoMotorista: codigo.trim() })
       });
       onSalvo();
     } catch (err) {
@@ -106,10 +92,6 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
       <label className="text-[11px] text-slate-300 block">Seu telefone / WhatsApp (opcional)
         <input value={tel} onChange={(e) => setTel(e.target.value)} inputMode="tel" maxLength={20} placeholder="(21) 98765-4321" className={`${campo} mt-1`} autoComplete="tel" />
       </label>
-      <div>
-        <span className="text-[11px] text-slate-300 block mb-1">Local de embarque no mapa</span>
-        <SeletorLocal valor={local} onChange={setLocal} endereco={endereco} />
-      </div>
       <EscolhaMotorista motoristas={motoristas} motoristaId={motoristaId} setMotoristaId={setMotoristaId} codigo={codigo} setCodigo={setCodigo} />
       {erro && <p role="alert" className="text-xs text-rose-300">{erro}</p>}
       <div className="flex gap-2 pt-1">
@@ -133,38 +115,6 @@ export const BarraFilhos: React.FC<{ filhos: FilhoResumo[]; ativo: number | null
     <button type="button" onClick={onAdicionar} className="shrink-0 px-3 py-2 rounded-xl text-xs font-bold border border-dashed border-slate-600 text-slate-300 min-h-[44px] cursor-pointer">+ Filho</button>
   </nav>
 );
-
-/** Aviso quando a estimativa é aproximada: o responsável marca o local de embarque para ela ficar precisa. */
-export const MarcarLocalFilho: React.FC<{ alunoId: number; onSalvo: () => void }> = ({ alunoId, onSalvo }) => {
-  const [aberto, setAberto] = useState(false);
-  const [local, setLocal] = useState<LocalMarcado | null>(null);
-  const [erro, setErro] = useState<string | null>(null);
-  const [salvando, setSalvando] = useState(false);
-  const salvar = async () => {
-    if (!local) return;
-    setSalvando(true); setErro(null);
-    try { await TransportRepository.definirLocalFilho(alunoId, local.latitude, local.longitude); setAberto(false); onSalvo(); }
-    catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao salvar.'); }
-    finally { setSalvando(false); }
-  };
-  return (
-    <section aria-label="Local de embarque" className="rounded-2xl p-3 border border-amber-400/40 bg-amber-400/10 text-xs space-y-2">
-      <p className="text-amber-100">O tempo de chegada está aproximado. Marque o ponto de embarque no mapa para ele acompanhar a van de verdade.</p>
-      {!aberto ? (
-        <button type="button" onClick={() => setAberto(true)} className="px-3 py-2 rounded-xl bg-amber-400 text-slate-950 font-bold min-h-[44px] cursor-pointer">Marcar local de embarque</button>
-      ) : (
-        <div className="space-y-2">
-          <SeletorLocal valor={local} onChange={setLocal} />
-          {erro && <p role="alert" className="text-rose-300">{erro}</p>}
-          <div className="flex gap-2">
-            <button type="button" disabled={!local || salvando} onClick={salvar} className="px-3 py-2 rounded-xl bg-cyan-500 text-slate-950 font-bold min-h-[44px] cursor-pointer disabled:opacity-50">{salvando ? 'Salvando…' : 'Salvar local'}</button>
-            <button type="button" onClick={() => setAberto(false)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 font-bold min-h-[44px] cursor-pointer">Cancelar</button>
-          </div>
-        </div>
-      )}
-    </section>
-  );
-};
 
 /** Situação do vínculo do filho em foco: aguardando, recusado (trocar de motorista) e excluir. */
 export const SituacaoVinculo: React.FC<{ filho: FilhoResumo; motoristas: Motorista[]; onMudou: () => void }> = ({ filho, motoristas, onMudou }) => {

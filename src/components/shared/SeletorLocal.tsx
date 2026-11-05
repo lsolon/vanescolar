@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { TransportRepository } from '../../services/api';
 
 export interface LocalMarcado { latitude: number; longitude: number; precisaoM?: number }
 
@@ -13,20 +12,7 @@ const pino = L.divIcon({
 });
 
 /** O motorista marca o ponto de embarque: pelo GPS do celular (melhor, no local) ou tocando no mapa. */
-const distKm = (a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }) => {
-  const R = 6371, rad = (x: number) => (x * Math.PI) / 180;
-  const dLa = rad(b.latitude - a.latitude), dLo = rad(b.longitude - a.longitude);
-  const h = Math.sin(dLa / 2) ** 2 + Math.cos(rad(a.latitude)) * Math.cos(rad(b.latitude)) * Math.sin(dLo / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(h));
-};
-
-/**
- * Marca o ponto de embarque: pelo endereço digitado (busca no mapa), pelo GPS do celular ou tocando no mapa.
- * Com `endereco`, mostra o botão de busca e avisa se o ponto marcado ficou longe do endereço.
- */
-export const SeletorLocal: React.FC<{ valor: LocalMarcado | null; onChange: (v: LocalMarcado | null) => void; endereco?: string }> = ({ valor, onChange, endereco }) => {
-  const [refGeo, setRefGeo] = useState<{ latitude: number; longitude: number } | null>(null);
-  const [achando, setAchando] = useState(false);
+export const SeletorLocal: React.FC<{ valor: LocalMarcado | null; onChange: (v: LocalMarcado | null) => void }> = ({ valor, onChange }) => {
   const el = useRef<HTMLDivElement>(null);
   const mapa = useRef<L.Map | null>(null);
   const marcador = useRef<L.Marker | null>(null);
@@ -83,26 +69,9 @@ export const SeletorLocal: React.FC<{ valor: LocalMarcado | null; onChange: (v: 
     );
   };
 
-  const buscarEndereco = async () => {
-    if (!endereco || endereco.trim().length < 5) { setErro('Digite o endereço de embarque primeiro.'); return; }
-    setErro(null); setAchando(true);
-    const g = await TransportRepository.geocodificar(endereco);
-    setAchando(false);
-    if (!g) { setErro('Não encontrei esse endereço no mapa. Toque no mapa para marcar o local.'); return; }
-    setRefGeo({ latitude: g.latitude, longitude: g.longitude });
-    onChange({ latitude: g.latitude, longitude: g.longitude });
-  };
-
-  const longe = valor && refGeo ? distKm(valor, refGeo) : 0;
-
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2">
-        {endereco !== undefined && (
-          <button type="button" onClick={buscarEndereco} disabled={achando} className="px-3 py-2 rounded-xl bg-amber-400/10 border border-amber-400/40 text-amber-200 text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50">
-            {achando ? 'Procurando…' : 'Localizar pelo endereço'}
-          </button>
-        )}
         <button type="button" onClick={usarGps} disabled={buscando} className="px-3 py-2 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50">
           {buscando ? 'Buscando GPS…' : 'Usar minha localização agora'}
         </button>
@@ -116,7 +85,6 @@ export const SeletorLocal: React.FC<{ valor: LocalMarcado | null; onChange: (v: 
           ? `Local marcado${valor.precisaoM ? ` (precisão ~${valor.precisaoM} m)` : ''}. Toque no mapa para ajustar.`
           : 'Fique no ponto de embarque e use o GPS, ou toque no mapa para marcar o local.'}
       </p>
-      {longe > 3 && <p role="alert" className="text-[11px] text-amber-300">Atenção: o ponto está a {longe.toFixed(1)} km do endereço digitado. Confira se é o lugar certo.</p>}
       {erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
     </div>
   );
