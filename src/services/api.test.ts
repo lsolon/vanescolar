@@ -907,6 +907,45 @@ test('Sugerir rota: ordena pelas distâncias, o motorista reordena à mão e apl
   assert.equal((await jsonReq('GET', '/api/rotas/sugestao', undefined)).status, 401);
 });
 
+test('Ida e volta têm ordens independentes: a volta parte da escola e mudar uma não altera a outra', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'IdaVolta');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola IV', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  const A = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno A', latitude: -22.95, longitude: -43.20 })).data.novaParada.id;
+  const B = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno B', latitude: -22.90, longitude: -43.20 })).data.novaParada.id;
+  const C = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno C', latitude: -22.93, longitude: -43.20 })).data.novaParada.id;
+  await jsonReq('PUT', '/api/motorista/escolas', mot, { nome: 'Escola IV', latitude: -22.85, longitude: -43.20 });
+  const ordemDe = async (sentido: string, modo = 'atual') => (await jsonReq('GET', `/api/rotas/sugestao?sentido=${sentido}&modo=${modo}`, mot)).data;
+
+  const ida0 = await ordemDe('IDA');
+  assert.equal(ida0.modo, 'atual');
+  assert.equal(ida0.sentido, 'IDA');
+  // volta parte da escola: o mais perto da escola (B) vem primeiro
+  const vSug = await ordemDe('VOLTA', 'sugestao');
+  assert.equal(vSug.partida, 'escola');
+  assert.equal(vSug.paradas[0].id, B, 'volta: primeiro o aluno mais perto da escola');
+  const ordemVoltaSug = vSug.paradas.map((p: any) => p.id);
+
+  // aplica só a volta; a ida não muda
+  const idaAntes = ida0.paradas.map((p: any) => p.id);
+  assert.equal((await jsonReq('POST', '/api/rotas/ordem', mot, { ids: ordemVoltaSug, sentido: 'VOLTA' })).status, 200);
+  assert.deepEqual((await ordemDe('IDA')).paradas.map((p: any) => p.id), idaAntes, 'ida intacta');
+  assert.deepEqual((await ordemDe('VOLTA')).paradas.map((p: any) => p.id), ordemVoltaSug, 'volta salva');
+
+  // aplica só a ida; a volta não muda
+  const novaIda = [C, A, B];
+  assert.equal((await jsonReq('POST', '/api/rotas/ordem', mot, { ids: novaIda, sentido: 'IDA' })).status, 200);
+  assert.deepEqual((await ordemDe('IDA')).paradas.map((p: any) => p.id), novaIda);
+  assert.deepEqual((await ordemDe('VOLTA')).paradas.map((p: any) => p.id), ordemVoltaSug, 'volta intacta');
+  assert.equal(JSON.stringify(await ordemDe('VOLTA')).includes('-22.9'), false, 'sem coordenadas');
+
+  // aluno removido sai das duas; a volta continua numerada sem buracos
+  await jsonReq('POST', `/api/paradas/${B}/remover`, mot);
+  const v2 = (await ordemDe('VOLTA')).paradas;
+  assert.equal(v2.some((p: any) => p.id === B), false);
+  assert.deepEqual(v2.map((p: any) => p.ordemAtual), [1, 2]);
+});
+
 test('Horário combinado: se a van está adiantada (ex.: aluno anterior faltou), o tempo e o aviso não prometem antes dele', async () => {
   const partes = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date());
   const agora = (Number(partes.find((x) => x.type === 'hour')!.value) % 24) * 60 + Number(partes.find((x) => x.type === 'minute')!.value);
