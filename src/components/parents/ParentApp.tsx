@@ -33,6 +33,7 @@ import { HorariosEscola } from './HorariosEscola';
 import { AdicionarFilho, BarraFilhos, SituacaoVinculo } from './FilhosParent';
 import { MensalidadeCard } from './MensalidadeCard';
 import { MeuIdAcesso } from '../shared/MeuIdAcesso';
+import { InstalarApp } from '../shared/InstalarApp';
 import {
   MapPin,
   Clock,
@@ -416,6 +417,8 @@ export const ParentApp: React.FC<ParentAppProps> = ({
         )}
 
         {modoReal && <MensalidadeCard />}
+
+        {modoReal && <InstalarApp />}
 
         {modoReal && <MeuIdAcesso />}
 

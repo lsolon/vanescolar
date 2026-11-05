@@ -2371,7 +2371,13 @@ async function startServer() {
 
   const isProd = process.env.NODE_ENV === 'production';
   if (isProd) {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
+    // O service worker e o manifesto não podem ficar presos no cache do navegador, senão o app não atualiza.
+    app.use(express.static(path.resolve(__dirname, 'dist'), {
+      setHeaders: (res, file) => {
+        if (/(^|[\\/])(sw\.js|manifest\.webmanifest|offline\.html)$/.test(file)) res.setHeader('Cache-Control', 'no-cache');
+        if (file.endsWith('sw.js')) res.setHeader('Service-Worker-Allowed', '/');
+      }
+    }));
     app.get('*', (_req: Request, res: Response) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
