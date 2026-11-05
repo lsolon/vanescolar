@@ -24,7 +24,8 @@ const snap = (n: number) => ({
   users: [{ id: 1, email: 'a@a.com', n }],
   invitations: [],
   state: { paradas: [{ id: 1 }], mensagens: [] },
-  settings: { adminEmails: ['x@x.com'] }
+  settings: { adminEmails: ['x@x.com'] },
+  mensalidades: { configs: {}, pagamentos: [] }
 });
 
 test('FirestoreStore: salva e recarrega todos os documentos', async () => {
@@ -32,7 +33,7 @@ test('FirestoreStore: salva e recarrega todos os documentos', async () => {
   const p1 = new Persistence(new FirestoreStore(db), 10);
   p1.attach(() => snap(1) as any);
   await p1.flush();
-  assert.equal(writes.length, 4);
+  assert.equal(writes.length, 5);
 
   const p2 = new Persistence(new FirestoreStore(db), 10);
   const loaded = await p2.load();
@@ -60,7 +61,7 @@ test('Persistence: scheduleSave agrupa várias mudanças em uma gravação', asy
   p.attach(() => snap(1) as any);
   p.scheduleSave(); p.scheduleSave(); p.scheduleSave();
   await new Promise((r) => setTimeout(r, 120));
-  assert.equal(writes.length, 4);
+  assert.equal(writes.length, 5);
 });
 
 test('FileStore: sobrevive a "reinício" e escolhe armazenamento pelo ambiente', async () => {
