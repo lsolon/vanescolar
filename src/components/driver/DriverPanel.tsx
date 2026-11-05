@@ -108,6 +108,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const [erroPin, setErroPin] = useState<string | null>(null);
 
   // Modal de Cadastro de Novo Aluno pelo Motorista
+  const [aba, setAba] = useState<'diario' | 'mapa' | 'ajustes'>('diario');
   const [sentidoRota, setSentidoRota] = useState<'IDA' | 'VOLTA'>('IDA');
   // Ajuste manual dos horários previstos de uma parada
   const [paradaHorarios, setParadaHorarios] = useState<{ id: number | string; nome: string } | null>(null);
@@ -573,46 +574,30 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
       {/* CONTEÚDO PRINCIPAL COM ZERO-CACHE */}
       <main className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* MAPA REBATÍVEL */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-400 px-1">
-            <span className="flex items-center gap-1.5">
-              <MapPin className="w-3.5 h-3.5 text-amber-400" />
-              Trajeto Freguesia (Jacarepaguá, RJ)
-            </span>
-            <button
-              onClick={() => setMostrarMapa(!mostrarMapa)}
-              className="text-amber-400 hover:underline"
-            >
-              {mostrarMapa ? 'Ocultar Mapa' : 'Expandir Mapa'}
-            </button>
+        {erroGps && (
+          <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+            {erroGps === 'permissao_negada'
+              ? 'O GPS está bloqueado. Permita a localização deste site nas configurações do navegador para que os pais acompanhem a van.'
+              : erroGps === 'sem_suporte'
+              ? 'Este navegador não oferece GPS. Abra o app no Chrome ou Safari do celular.'
+              : 'Não foi possível obter sua localização agora. Verifique se o GPS do celular está ligado.'}
           </div>
+        )}
 
-          {erroGps && (
-            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
-              {erroGps === 'permissao_negada'
-                ? 'O GPS está bloqueado. Permita a localização deste site nas configurações do navegador para que os pais acompanhem a van.'
-                : erroGps === 'sem_suporte'
-                ? 'Este navegador não oferece GPS. Abra o app no Chrome ou Safari do celular.'
-                : 'Não foi possível obter sua localização agora. Verifique se o GPS do celular está ligado.'}
-            </div>
-          )}
-          {mostrarMapa && (
-            <LiveMap
-              coordenadas={coordenadas}
-              isRotaAtiva={isRotaAtiva}
-              compact={true}
-              motoristaNome={motorista?.nome}
-            />
-          )}
-        </div>
+        {/* NAVEGAÇÃO: a home é o Diário de Bordo; o resto fica a um toque */}
+        <nav aria-label="Seções do painel" role="tablist" className="grid grid-cols-3 gap-2">
+          {([['diario', 'Diário de Bordo'], ['mapa', 'Mapa'], ['ajustes', 'Rotas e ajustes']] as const).map(([k, nome]) => (
+            <button key={k} type="button" role="tab" aria-selected={aba === k} onClick={() => setAba(k)}
+              className={`relative px-2 py-2 min-h-[44px] rounded-xl border text-[11px] font-black cursor-pointer ${aba === k ? 'bg-amber-400/15 text-amber-200 border-amber-400/50' : 'bg-slate-900 text-slate-400 border-slate-800'}`}>
+              {nome}
+              {k === 'diario' && pendentes.length > 0 && <span aria-label={`${pendentes.length} solicitações pendentes`} className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-black flex items-center justify-center">{pendentes.length}</span>}
+            </button>
+          ))}
+        </nav>
 
-        <CodigoMotorista nome={motorista?.nome} />
+        {aba === 'diario' && (
+          <>
         <SolicitacoesPendentes pendentes={pendentes} totalNaVan={paradas.length} onMudou={carregarDadosZeroCache} />
-        <EscolasDoMotorista versao={paradas.length} />
-        <RotasIdaVolta sentidoAtivo={sentidoRota} versao={paradas.length} onAplicado={carregarDadosZeroCache} />
-        <MeuIdAcesso />
-
         {/* DIÁRIO DE BORDO COM MASCARAMENTO VISUAL RIGOROSO */}
         <div className="space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -923,6 +908,48 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             );
           })}
         </div>
+          </>
+        )}
+
+        {aba === 'mapa' && (
+          <>
+        {/* MAPA REBATÍVEL */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-400 px-1">
+            <span className="flex items-center gap-1.5">
+              <MapPin className="w-3.5 h-3.5 text-amber-400" />
+              Trajeto Freguesia (Jacarepaguá, RJ)
+            </span>
+            <button
+              onClick={() => setMostrarMapa(!mostrarMapa)}
+              className="text-amber-400 hover:underline"
+            >
+              {mostrarMapa ? 'Ocultar Mapa' : 'Expandir Mapa'}
+            </button>
+          </div>
+
+          {mostrarMapa && (
+            <LiveMap
+              coordenadas={coordenadas}
+              isRotaAtiva={isRotaAtiva}
+              compact={true}
+              motoristaNome={motorista?.nome}
+            />
+          )}
+        </div>
+
+          </>
+        )}
+
+        {aba === 'ajustes' && (
+          <>
+        <CodigoMotorista nome={motorista?.nome} />
+        <EscolasDoMotorista versao={paradas.length} />
+        <RotasIdaVolta sentidoAtivo={sentidoRota} versao={paradas.length} onAplicado={carregarDadosZeroCache} />
+        <MeuIdAcesso />
+
+          </>
+        )}
       </main>
 
       {/* MODAL DE CONFIRMAÇÃO DO KILL-SWITCH REMOTO */}
