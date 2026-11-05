@@ -6,7 +6,7 @@
  * ============================================================================
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { TransportRepository } from '../../services/api';
 import {
   Bus,
@@ -48,6 +48,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   const isDemoMode = (typeof window !== 'undefined' && window.location.search.includes('demo=true')) || import.meta.env.VITE_DEMO_MODE === 'true';
 
   const [activePortal, setActivePortal] = useState<'SELECT' | 'DRIVER' | 'PARENT' | 'REGISTER' | 'FORGOT' | 'DRIVER_REGISTER' | 'DRIVER_FORGOT' | 'ADMIN_INVITES'>('SELECT');
+
+  // Modo de teste (servidor com MODO_TESTE_SEM_LOGIN=true)
+  const [modoTeste, setModoTeste] = useState(false);
+  useEffect(() => { TransportRepository.modoTesteAtivo().then(setModoTeste); }, []);
+  const entrarTeste = async (papel: 'motorista' | 'responsavel') => {
+    try {
+      await TransportRepository.entrarModoTeste(papel);
+      if (papel === 'motorista') onLoginDriver(); else onLoginParent();
+    } catch (err: any) { alert(err.message || 'Falha no modo de teste.'); }
+  };
 
   // Estados Motorista (Login)
   const [driverEmail, setDriverEmail] = useState(isDemoMode ? 'leandrosolon@gmail.com' : '');
@@ -384,6 +394,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         <p className="text-sm sm:text-base text-slate-400 text-center max-w-xl mb-10">
           Selecione seu perfil para acessar o painel operacional ou o portal da família.
         </p>
+
+        {modoTeste && activePortal === 'SELECT' && (
+          <div className="w-full max-w-2xl mb-6 p-4 rounded-2xl border-2 border-dashed border-rose-500/60 bg-rose-500/10 text-center">
+            <p className="text-xs font-bold text-rose-300 mb-3">MODO DE TESTE ATIVO — entrada sem login (não use em produção)</p>
+            <div className="flex flex-wrap gap-3 justify-center">
+              <button id="teste-motorista" onClick={() => entrarTeste('motorista')} className="px-4 py-2 rounded-xl bg-amber-400 text-slate-900 font-bold text-xs min-h-[44px] cursor-pointer">Entrar como Motorista (teste)</button>
+              <button id="teste-responsavel" onClick={() => entrarTeste('responsavel')} className="px-4 py-2 rounded-xl bg-cyan-400 text-slate-900 font-bold text-xs min-h-[44px] cursor-pointer">Entrar como Responsável (teste)</button>
+            </div>
+          </div>
+        )}
 
         {activePortal === 'SELECT' && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 w-full max-w-2xl">

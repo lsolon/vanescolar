@@ -54,6 +54,7 @@ async function verifyFirebaseIdToken(idToken: unknown): Promise<{ email: string 
   }
 }
 
+const MODO_TESTE_SEM_LOGIN = process.env.MODO_TESTE_SEM_LOGIN === 'true';
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'leandrosolon@gmail.com,admin@vanescolar.com.br')
   .split(',')
   .map((e) => e.trim().toLowerCase());
@@ -804,7 +805,7 @@ async function startServer() {
 
   // Saúde do servidor (não expõe dados): útil para conferir se a persistência está ativa.
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ ok: true, persistence: persistence.kind, instancia: instanciaId, iniciadoEm, ...(persistence.reason ? { motivo: persistence.reason } : {}) });
+    res.json({ ok: true, modoTeste: MODO_TESTE_SEM_LOGIN, persistence: persistence.kind, instancia: instanciaId, iniciadoEm, ...(persistence.reason ? { motivo: persistence.reason } : {}) });
   });
 
   app.use((_req: Request, res: Response, next: NextFunction) => {
@@ -875,6 +876,38 @@ async function startServer() {
   // --------------------------------------------------------------------------
 
   // REGISTRO DE MOTORISTA COM CÓDIGO DE CONVITE OBRIGATÓRIO
+  // ==========================================================================
+  // MODO DE TESTE (temporário): entrar como motorista/responsável sem login.
+  // Só existe com MODO_TESTE_SEM_LOGIN=true no ambiente. Desligado por padrão.
+  // ==========================================================================
+  app.post('/api/teste/entrar', rateLimiter(30, 60000), (req: Request, res: Response) => {
+    if (!MODO_TESTE_SEM_LOGIN) return res.status(404).json({ error: 'Não encontrado.' });
+    const papel = req.body?.papel === 'motorista' ? 'motorista' : req.body?.papel === 'responsavel' ? 'responsavel' : null;
+    if (!papel) return res.status(400).json({ error: 'Informe papel: motorista ou responsavel.' });
+    const slug = String(req.body?.nome || papel).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || papel;
+    const email = `teste-${papel}-${slug}@teste.local`;
+    let user = usersDB.find((u) => u.email === email);
+    if (!user) {
+      if (usersDB.filter((u) => u.email.endsWith('@teste.local')).length >= 50) {
+        return res.status(429).json({ error: 'Limite de usuários de teste atingido.' });
+      }
+      user = {
+        id: usersDB.reduce((m, u) => Math.max(m, u.id), 200) + 1,
+        fullName: String(req.body?.nome || (papel === 'motorista' ? 'Motorista Teste' : 'Responsável Teste')).slice(0, 60),
+        email,
+        passwordHash: '',
+        role: papel,
+        emailVerified: true,
+        ...(papel === 'motorista' ? { phone: '(21) 90000-0000', veiculoModelo: 'Van Teste', veiculoPlaca: 'TST-0001', codigoMotorista: novoCodigoMotorista() } : {}),
+        lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-teste' }
+      };
+      usersDB.push(user);
+    }
+    auditLog('LOGIN_MODO_TESTE', user.email, `Entrada sem login como ${papel}`);
+    const token = signToken({ role: user.role, userId: user.id, email: user.email, studentId: user.studentId, emailVerified: true });
+    res.json({ sucesso: true, token, role: user.role, emailVerified: true, studentId: user.studentId });
+  });
+
   app.post('/api/auth/register-motorista', rateLimiter(5, 60000), (req: Request, res: Response) => {
     const { fullName, email, password, phone, vehicleModel, vehiclePlate, invitationCode, lgpdConsent, firebaseUid } = req.body;
     const loginId = req.body.loginId ? lerLoginId(req.body.loginId) : undefined;
