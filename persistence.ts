@@ -141,10 +141,10 @@ export class Persistence {
   }
 
   /** Lê os documentos salvos. Retorna null para documentos inexistentes. */
-  async load(): Promise<Partial<Record<DocName, any>>> {
+  async load(names: DocName[] = DOC_NAMES): Promise<Partial<Record<DocName, any>>> {
     const out: Partial<Record<DocName, any>> = {};
     if (!this.store) return out;
-    for (const name of DOC_NAMES) {
+    for (const name of names) {
       const raw = await this.store.read(name);
       if (raw) {
         out[name] = JSON.parse(raw);

@@ -712,9 +712,35 @@ async function startServer() {
   process.once('SIGTERM', () => shutdown('SIGTERM'));
   process.once('SIGINT', () => shutdown('SIGINT'));
 
+  const instanciaId = crypto.randomBytes(3).toString('hex');
+  const iniciadoEm = new Date().toISOString();
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '100kb' }));
+
+  // VÁRIAS INSTÂNCIAS: o estado fica em memória e só era lido do armazenamento na partida. Se a hospedagem roda
+  // mais de uma cópia do servidor, um convite/conta criado numa cópia não existia na outra (e a gravação de uma
+  // sobrescrevia a da outra). Nas rotas de contas e convites, relê usuários e convites do armazenamento antes
+  // de atender e grava logo depois de alterar.
+  app.use(async (req: Request, res: Response, next: NextFunction) => {
+    const sensivel = req.path.startsWith('/api/auth/') || req.path.startsWith('/api/admin/') || req.path === '/api/vincular';
+    if (persistence.kind === 'memory' || !sensivel) return next();
+    try {
+      await persistence.flush();
+      const saved = await persistence.load(['users', 'invitations']);
+      if (Array.isArray(saved.users)) {
+        usersDB.splice(0, usersDB.length, ...saved.users);
+        if (!SEED_LOGIN_ENABLED) for (const u of usersDB) if (seedEmails.has(u.email.toLowerCase())) u.passwordHash = '';
+      }
+      if (Array.isArray(saved.invitations)) driverInvitationsDB.splice(0, driverInvitationsDB.length, ...saved.invitations);
+    } catch (err: any) {
+      console.error('[Persistência] Falha ao reler contas/convites:', err?.message || err);
+    }
+    if (req.method !== 'GET') {
+      res.on('finish', () => { if (res.statusCode < 400) persistence.flush().catch(() => {}); });
+    }
+    next();
+  });
 
   // Qualquer requisição que altera dados (POST/PUT/PATCH/DELETE) e termina com sucesso agenda uma gravação.
   app.use((req: Request, res: Response, next: NextFunction) => {
@@ -726,7 +752,7 @@ async function startServer() {
 
   // Saúde do servidor (não expõe dados): útil para conferir se a persistência está ativa.
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ ok: true, persistence: persistence.kind, ...(persistence.reason ? { motivo: persistence.reason } : {}) });
+    res.json({ ok: true, persistence: persistence.kind, instancia: instanciaId, iniciadoEm, ...(persistence.reason ? { motivo: persistence.reason } : {}) });
   });
 
   app.use((_req: Request, res: Response, next: NextFunction) => {
