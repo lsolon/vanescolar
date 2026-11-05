@@ -1497,6 +1497,16 @@ export const TransportRepository = {
     return (await res.json()).escolas || [];
   },
 
+  /** Endereço da escola → coordenadas (OpenStreetMap, via servidor). null se não achar. */
+  async buscarEnderecoEscola(endereco: string): Promise<{ latitude: number; longitude: number; nome: string } | null> {
+    try {
+      const res = await fetch(`${getBaseUrl()}/api/motorista/escolas/buscar?q=${encodeURIComponent(endereco)}`, { headers: getAuthHeaders() });
+      if (!res.ok) return null;
+      const d = await res.json();
+      return d.encontrado ? { latitude: d.latitude, longitude: d.longitude, nome: d.nome } : null;
+    } catch { return null; }
+  },
+
   async definirLocalEscola(nome: string, latitude: number, longitude: number): Promise<void> {
     const res = await fetch(`${getBaseUrl()}/api/motorista/escolas`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ nome, latitude, longitude }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Não foi possível salvar o local da escola.');

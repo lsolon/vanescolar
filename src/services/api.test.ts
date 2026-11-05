@@ -938,3 +938,14 @@ test('Horário combinado: se a van está adiantada (ex.: aluno anterior faltou),
   assert.equal(tarde.adiantada, false);
   assert.ok(tarde.minutos <= 2, `minutos=${tarde.minutos}`);
 });
+
+test('Escola por endereço: só o motorista busca; sem resultado o app orienta a marcar no mapa', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'Busca');
+  const fam = await novoResponsavelVerificado(adm);
+  assert.equal((await jsonReq('GET', '/api/motorista/escolas/buscar?q=Rua%20Tirol%20340', undefined)).status, 401);
+  assert.equal((await jsonReq('GET', '/api/motorista/escolas/buscar?q=Rua%20Tirol%20340', fam)).status, 403, 'responsável não consulta endereços');
+  const r = await jsonReq('GET', '/api/motorista/escolas/buscar?q=ab', mot);
+  assert.equal(r.status, 404, 'consulta curta não procura');
+  assert.ok(r.data.error);
+});
