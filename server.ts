@@ -6,11 +6,11 @@
  */
 
 import express, { Request, Response, NextFunction } from 'express';
+import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import http from 'http';
 import { createPersistence } from './persistence';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -147,51 +147,55 @@ let driverInvitationsDB: DriverInvitation[] = DEMO_MODE ? [
   }
 ] : [];
 
-let usersDB: UserRecord[] = [
-  {
-    id: 1,
-    fullName: 'Tio David Santos',
-    email: 'david.santos@vanescolar.com.br',
-    passwordHash: SEED_LOGIN_ENABLED ? crypto.scryptSync('password123', 'salt-van-escolar', 64).toString('hex') : '',
-    role: 'motorista',
-    emailVerified: true,
-    totpEnabled: false,
-    phone: '(21) 98765-4321',
-    veiculoModelo: 'Renault Master Executiva 2.3',
-    veiculoPlaca: 'RIO-2024',
-    capacidade: 16,
-    horarios: ['Manhã', 'Tarde'],
-    lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-lgpd-art14' }
-  },
-  {
-    id: 2,
-    fullName: 'Tio Carlos Souza',
-    email: 'carlos.souza@vanescolar.com.br',
-    passwordHash: SEED_LOGIN_ENABLED ? crypto.scryptSync('password123', 'salt-van-escolar', 64).toString('hex') : '',
-    role: 'motorista',
-    emailVerified: true,
-    totpEnabled: false,
-    phone: '(21) 97654-3210',
-    veiculoModelo: 'Mercedes-Benz Sprinter 415',
-    veiculoPlaca: 'RIO-2025',
-    capacidade: 18,
-    horarios: ['Manhã', 'Tarde', 'Noite'],
-    lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-lgpd-art14' }
-  },
-  {
-    id: 101,
-    fullName: 'Leandro Solon',
-    email: 'leandrosolon@gmail.com',
-    passwordHash: SEED_LOGIN_ENABLED ? crypto.scryptSync('123456abcd', 'salt-van-escolar', 64).toString('hex') : '',
-    role: 'motorista',
-    emailVerified: true,
-    phone: '(21) 99123-4567',
-    veiculoModelo: 'Renault Master Executiva 2.3',
-    veiculoPlaca: 'RIO-2024',
-    lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-lgpd-art14' },
-    studentId: 201
-  }
-];
+function getSeedUsers(): UserRecord[] {
+  return [
+    {
+      id: 1,
+      fullName: 'Tio David Santos',
+      email: 'david.santos@vanescolar.com.br',
+      passwordHash: SEED_LOGIN_ENABLED ? crypto.scryptSync('password123', 'salt-van-escolar', 64).toString('hex') : '',
+      role: 'motorista',
+      emailVerified: true,
+      totpEnabled: false,
+      phone: '(21) 98765-4321',
+      veiculoModelo: 'Renault Master Executiva 2.3',
+      veiculoPlaca: 'RIO-2024',
+      capacidade: 16,
+      horarios: ['Manhã', 'Tarde'],
+      lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-lgpd-art14' }
+    },
+    {
+      id: 2,
+      fullName: 'Tio Carlos Souza',
+      email: 'carlos.souza@vanescolar.com.br',
+      passwordHash: SEED_LOGIN_ENABLED ? crypto.scryptSync('password123', 'salt-van-escolar', 64).toString('hex') : '',
+      role: 'motorista',
+      emailVerified: true,
+      totpEnabled: false,
+      phone: '(21) 97654-3210',
+      veiculoModelo: 'Mercedes-Benz Sprinter 415',
+      veiculoPlaca: 'RIO-2025',
+      capacidade: 18,
+      horarios: ['Manhã', 'Tarde', 'Noite'],
+      lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-lgpd-art14' }
+    },
+    {
+      id: 101,
+      fullName: 'Leandro Solon',
+      email: 'leandrosolon@gmail.com',
+      passwordHash: SEED_LOGIN_ENABLED ? crypto.scryptSync('123456abcd', 'salt-van-escolar', 64).toString('hex') : '',
+      role: 'motorista',
+      emailVerified: true,
+      phone: '(21) 99123-4567',
+      veiculoModelo: 'Renault Master Executiva 2.3',
+      veiculoPlaca: 'RIO-2024',
+      lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-lgpd-art14' },
+      studentId: 201
+    }
+  ];
+}
+
+let usersDB: UserRecord[] = getSeedUsers();
 
 function auditLog(action: string, actor: string, details: string) {
   console.log(`[AUDIT] [${new Date().toISOString()}] Ação: ${action} | Ator: ${actor} | Detalhes: ${details}`);
@@ -713,18 +717,6 @@ function broadcast(event: string, data: any, driverId?: number | null) {
 }
 
 async function startServer() {
-  // Abre a porta já: a hospedagem testa a porta logo na partida e o carregamento do estado (Firestore) pode demorar.
-  // Até o servidor ficar pronto, as requisições recebem 503.
-  const PORT = Number(process.env.PORT) || 3000;
-  let pronto: ((req: any, res: any) => void) | null = null;
-  const httpServer = http.createServer((req, res) => {
-    if (pronto) return pronto(req, res);
-    res.statusCode = 503;
-    res.setHeader('Retry-After', '2');
-    res.end('VanEscolar iniciando...');
-  });
-  httpServer.listen(PORT, '0.0.0.0', () => console.log(`[VanEscolar Server] Porta ${PORT} aberta; carregando dados...`));
-
   // ==========================================================================
   // PERSISTÊNCIA: carrega o estado salvo (Firestore/arquivo) antes de aceitar requisições
   // ==========================================================================
@@ -1215,7 +1207,15 @@ async function startServer() {
     }
     const admin = (req as any).user as SessionPayload;
     const antes = { usuarios: usersDB.length, convites: driverInvitationsDB.length, paradas: serverState.paradas.length };
-    usersDB = usersDB.filter((u) => ADMIN_EMAILS.includes(u.email.toLowerCase()));
+    const adminUsers = usersDB.filter((u) => ADMIN_EMAILS.includes(u.email.toLowerCase()));
+    const seedUsers = SEED_LOGIN_ENABLED ? getSeedUsers() : [];
+    const mergedUsers = [...adminUsers];
+    for (const su of seedUsers) {
+      if (!mergedUsers.some((u) => u.email.toLowerCase() === su.email.toLowerCase())) {
+        mergedUsers.push(su);
+      }
+    }
+    usersDB = mergedUsers;
     driverInvitationsDB = [];
     serverState.paradas = [];
     tripsDB.clear();
@@ -1970,9 +1970,18 @@ async function startServer() {
     }
   });
 
-  app.post('/api/reset', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
+  app.post('/api/reset', (req: Request, res: Response) => {
     if (!DEMO_MODE) return res.status(403).json({ error: 'Modo demonstração desativado.' });
-    const rsDriverId = driverIdFor((req as any).user) as number;
+    const seedUsers = SEED_LOGIN_ENABLED ? getSeedUsers() : [];
+    for (const su of seedUsers) {
+      const idx = usersDB.findIndex((u) => u.email.toLowerCase() === su.email.toLowerCase());
+      if (idx >= 0) {
+        usersDB[idx] = { ...su };
+      } else {
+        usersDB.push({ ...su });
+      }
+    }
+    const rsDriverId = 1;
     const rsRec = usersDB.find((u) => u.id === rsDriverId);
     if (rsRec) (rsRec as any).dispositivo_bloqueado = false;
     getTrip(rsDriverId).viagem.status = 'AGENDADA';
@@ -1996,7 +2005,6 @@ async function startServer() {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   } else {
-    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa'
@@ -2004,8 +2012,10 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  pronto = app;
-  console.log(`[VanEscolar Server] Pronto na porta ${PORT} com autenticação completa do Motorista e Admin Convites`);
+  const PORT = 3000;
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[VanEscolar Server] Rodando na porta ${PORT} com autenticação completa do Motorista e Admin Convites`);
+  });
 }
 
 startServer().catch(console.error);
