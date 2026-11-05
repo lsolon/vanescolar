@@ -30,8 +30,8 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 
-export type DocName = 'users' | 'invitations' | 'state' | 'settings' | 'mensalidades';
-export const DOC_NAMES: DocName[] = ['users', 'invitations', 'state', 'settings', 'mensalidades'];
+export type DocName = 'users' | 'invitations' | 'state' | 'settings' | 'mensalidades' | 'financeiro';
+export const DOC_NAMES: DocName[] = ['users', 'invitations', 'state', 'settings', 'mensalidades', 'financeiro'];
 
 const META = '__meta';
 
@@ -178,6 +178,10 @@ export function paraRegistros(name: DocName, valor: any): Registros {
       for (const p of (valor.paradas ?? []) as any[]) out[`parada-${p.id}`] = j(p);
       for (const [id, t] of Object.entries(valor.trips ?? {})) out[`trip-${id}`] = j(t);
       break;
+    case 'financeiro':
+      for (const l of (valor.lancamentos ?? []) as any[]) out[`lan-${l.id_motorista}-${l.id}`] = j(l);
+      for (const c of (valor.custos_fixos ?? []) as any[]) out[`fix-${c.id_motorista}-${c.id}`] = j(c);
+      break;
     case 'mensalidades':
       for (const [k, c] of Object.entries(valor.configs ?? {})) out[`cfg-${k}`] = j(c);
       for (const p of (valor.pagamentos ?? []) as any[]) out[`pg-${p.id_motorista}-${p.id_aluno}-${p.mes}`] = j(p);
@@ -197,6 +201,10 @@ export function dosRegistros(name: DocName, reg: Registros): any {
     case 'state': return {
       paradas: vals('parada-').map(([, v]) => v).sort(porId),
       trips: Object.fromEntries(vals('trip-').map(([k, v]) => [k.slice('trip-'.length), v]))
+    };
+    case 'financeiro': return {
+      lancamentos: vals('lan-').map(([, v]) => v).sort(porId),
+      custos_fixos: vals('fix-').map(([, v]) => v).sort(porId)
     };
     case 'mensalidades': return {
       configs: Object.fromEntries(vals('cfg-').map(([k, v]) => [k.slice('cfg-'.length), v])),

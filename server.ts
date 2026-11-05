@@ -13,6 +13,7 @@ import crypto from 'crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { createPersistence } from './persistence';
 import * as M from './mensalidades';
+import * as F from './financeiro';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -201,6 +202,8 @@ function getSeedUsers(): UserRecord[] {
 let usersDB: UserRecord[] = getSeedUsers();
 /** Mensalidades (config por aluno + baixas de pagamento), separadas por motorista. */
 const mensalidadesDB: M.MensalidadesDB = M.novoMensalidadesDB();
+/** Financeiro do motorista (despesas, receitas extras, custos fixos, abastecimentos). Cada motorista só enxerga o seu. */
+const financeiroDB: F.FinanceiroDB = F.novoFinanceiroDB();
 
 function auditLog(action: string, actor: string, details: string) {
   console.log(`[AUDIT] [${new Date().toISOString()}] Ação: ${action} | Ator: ${actor} | Detalhes: ${details}`);
@@ -878,6 +881,10 @@ async function startServer() {
     const saved = await persistence.load();
     if (Array.isArray(saved.users)) usersDB.splice(0, usersDB.length, ...saved.users);
     if (Array.isArray(saved.invitations)) driverInvitationsDB.splice(0, driverInvitationsDB.length, ...saved.invitations);
+    if (saved.financeiro && typeof saved.financeiro === 'object') {
+      financeiroDB.lancamentos = Array.isArray(saved.financeiro.lancamentos) ? saved.financeiro.lancamentos : [];
+      financeiroDB.custos_fixos = Array.isArray(saved.financeiro.custos_fixos) ? saved.financeiro.custos_fixos : [];
+    }
     if (saved.mensalidades && typeof saved.mensalidades === 'object') {
       mensalidadesDB.configs = saved.mensalidades.configs && typeof saved.mensalidades.configs === 'object' ? saved.mensalidades.configs : {};
       mensalidadesDB.pagamentos = Array.isArray(saved.mensalidades.pagamentos) ? saved.mensalidades.pagamentos : [];
@@ -916,7 +923,8 @@ async function startServer() {
       trips: Object.fromEntries([...tripsDB.entries()].map(([id, t]) => [id, { viagem: t.viagem, mensagens: t.mensagens }]))
     },
     settings: { adminEmails: ADMIN_EMAILS },
-    mensalidades: mensalidadesDB
+    mensalidades: mensalidadesDB,
+    financeiro: financeiroDB
   }));
   const shutdown = async (signal: string) => {
     console.log(`[VanEscolar Server] ${signal} recebido: salvando estado antes de encerrar...`);
@@ -941,12 +949,13 @@ async function startServer() {
   // de atender e grava logo depois de alterar.
   app.use(async (req: Request, res: Response, next: NextFunction) => {
     const sensivel = req.path.startsWith('/api/auth/') || req.path.startsWith('/api/admin/') || req.path === '/api/vincular'
-      || req.path.startsWith('/api/motorista/mensalidades') || req.path === '/api/mensalidades';
+      || req.path.startsWith('/api/motorista/mensalidades') || req.path === '/api/mensalidades'
+      || req.path.startsWith('/api/motorista/financeiro');
     if (persistence.kind === 'memory' || !sensivel) return next();
     try {
       await persistence.flush();
       // Só relê o que OUTRA instância alterou (1 leitura por assunto, não a coleção inteira).
-      const saved = await persistence.reloadIfChanged(['users', 'invitations', 'mensalidades']);
+      const saved = await persistence.reloadIfChanged(['users', 'invitations', 'mensalidades', 'financeiro']);
       if (Array.isArray(saved.users)) {
         usersDB.splice(0, usersDB.length, ...saved.users);
         if (!SEED_LOGIN_ENABLED) for (const u of usersDB) if (seedEmails.has(u.email.toLowerCase())) u.passwordHash = '';
@@ -955,6 +964,10 @@ async function startServer() {
       if (saved.mensalidades && typeof saved.mensalidades === 'object') {
         mensalidadesDB.configs = saved.mensalidades.configs ?? {};
         mensalidadesDB.pagamentos = Array.isArray(saved.mensalidades.pagamentos) ? saved.mensalidades.pagamentos : [];
+      }
+      if (saved.financeiro && typeof saved.financeiro === 'object') {
+        financeiroDB.lancamentos = Array.isArray(saved.financeiro.lancamentos) ? saved.financeiro.lancamentos : [];
+        financeiroDB.custos_fixos = Array.isArray(saved.financeiro.custos_fixos) ? saved.financeiro.custos_fixos : [];
       }
     } catch (err: any) {
       console.error('[Persistência] Falha ao reler contas/convites:', err?.message || err);
@@ -1383,7 +1396,8 @@ async function startServer() {
         trips: Object.fromEntries([...tripsDB.entries()].map(([id, t]) => [id, { viagem: t.viagem, mensagens: t.mensagens }]))
       },
       settings: { adminEmails: ADMIN_EMAILS },
-      mensalidades: mensalidadesDB
+      mensalidades: mensalidadesDB,
+      financeiro: financeiroDB
     };
     auditLog('BACKUP_BAIXADO', admin.email, `Cópia de segurança gerada (senhas: ${comSenhas ? 'sim' : 'não'})`);
     res.setHeader('Cache-Control', 'no-store');
@@ -1403,6 +1417,8 @@ async function startServer() {
     serverState.paradas = [];
     mensalidadesDB.configs = {};
     mensalidadesDB.pagamentos = [];
+    financeiroDB.lancamentos = [];
+    financeiroDB.custos_fixos = [];
     tripsDB.clear();
     for (const c of sseClients) { try { c.res.write(`event: DADOS_LIMPOS\ndata: {}\n\n`); } catch {} }
     auditLog('LIMPAR_TUDO', admin.email, `Dados apagados: ${JSON.stringify(antes)}`);
@@ -1858,6 +1874,112 @@ async function startServer() {
       };
     });
     res.json({ filhos });
+  });
+
+
+  // ---- Financeiro do motorista: despesas, receitas extras, custos fixos, combustível e consumo ----
+  // Dados PRIVADOS do motorista (o responsável nunca os vê). Admin usa o mesmo escopo do motorista 1, como nas demais rotas.
+  const lerMes = (v: unknown, hoje: string) => (v === undefined ? F.mesDe(hoje) : v);
+
+  app.get('/api/motorista/financeiro/resumo', authenticate, requireDriver, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const hoje = M.hojeBrasil();
+    const mes = lerMes(req.query.mes, hoje);
+    if (!F.mesValido(mes)) return res.status(400).json({ error: 'Mês inválido. Use o formato AAAA-MM.' });
+    const meus = F.resumoDoMes(financeiroDB, mensalidadesDB.pagamentos, driverId, mes);
+    const anterior = F.resumoDoMes(financeiroDB, mensalidadesDB.pagamentos, driverId, F.somarMeses(mes, -1));
+    const lanDele = financeiroDB.lancamentos.filter((l) => l.id_motorista === driverId);
+    const consumo = F.calcularConsumo(lanDele);
+    res.json({
+      mes,
+      hoje,
+      resumo: meus,
+      mes_anterior: { mes: anterior.mes, lucro: anterior.lucro, receita_total: anterior.receita_total, despesas_total: anterior.despesas_total },
+      serie: F.serieDeMeses(financeiroDB, mensalidadesDB.pagamentos, driverId, mes, 6),
+      consumo: { media_km_por_litro: consumo.media_km_por_litro, custo_medio_por_km: consumo.custo_medio_por_km, aviso: consumo.aviso, ciclos: consumo.ciclos.slice(-6).reverse() },
+      ultima_km: lanDele.filter((l) => l.km !== undefined).sort((a, b) => b.data.localeCompare(a.data) || b.id - a.id)[0]?.km ?? null
+    });
+  });
+
+  app.get('/api/motorista/financeiro/lancamentos', authenticate, requireDriver, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const mes = lerMes(req.query.mes, M.hojeBrasil());
+    if (!F.mesValido(mes)) return res.status(400).json({ error: 'Mês inválido. Use o formato AAAA-MM.' });
+    const lista = financeiroDB.lancamentos
+      .filter((l) => l.id_motorista === driverId && F.mesDe(l.data) === mes)
+      .sort((a, b) => b.data.localeCompare(a.data) || b.id - a.id);
+    res.json({ mes, lancamentos: lista });
+  });
+
+  app.post('/api/motorista/financeiro/lancamentos', authenticate, requireDriver, rateLimiter(60, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const v = F.validarLancamento(req.body || {}, M.hojeBrasil());
+    if (!v.ok) return res.status(400).json({ error: v.erro });
+    if (financeiroDB.lancamentos.filter((l) => l.id_motorista === driverId).length >= 20000) return res.status(400).json({ error: 'Limite de lançamentos atingido. Entre em contato com o suporte.' });
+    const novo: F.Lancamento = { ...v.dados, id: F.proximoId(financeiroDB.lancamentos), id_motorista: driverId, criado_em: new Date().toISOString() };
+    financeiroDB.lancamentos.push(novo);
+    auditLog('FINANCEIRO_LANCAMENTO', user.email, `Motorista ${driverId}: ${novo.tipo} ${novo.categoria}`);
+    res.json({ sucesso: true, lancamento: novo });
+  });
+
+  app.put('/api/motorista/financeiro/lancamentos/:id', authenticate, requireDriver, rateLimiter(60, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const id = parseInt(req.params.id, 10);
+    const atual = financeiroDB.lancamentos.find((l) => l.id === id && l.id_motorista === driverId);
+    if (!atual) return res.status(404).json({ error: 'Lançamento não encontrado.' });
+    const v = F.validarLancamento(req.body || {}, M.hojeBrasil());
+    if (!v.ok) return res.status(400).json({ error: v.erro });
+    Object.keys(atual).forEach((k) => { if (!['id', 'id_motorista', 'criado_em'].includes(k)) delete (atual as any)[k]; });
+    Object.assign(atual, v.dados);
+    res.json({ sucesso: true, lancamento: atual });
+  });
+
+  app.delete('/api/motorista/financeiro/lancamentos/:id', authenticate, requireDriver, rateLimiter(60, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const id = parseInt(req.params.id, 10);
+    const antes = financeiroDB.lancamentos.length;
+    financeiroDB.lancamentos = financeiroDB.lancamentos.filter((l) => !(l.id === id && l.id_motorista === driverId));
+    if (financeiroDB.lancamentos.length === antes) return res.status(404).json({ error: 'Lançamento não encontrado.' });
+    res.json({ sucesso: true });
+  });
+
+  app.get('/api/motorista/financeiro/custos-fixos', authenticate, requireDriver, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    res.json({ custos_fixos: financeiroDB.custos_fixos.filter((c) => c.id_motorista === driverId) });
+  });
+
+  app.post('/api/motorista/financeiro/custos-fixos', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const nome = String(req.body?.nome ?? '').trim().slice(0, 60);
+    const valor = F.lerNumero(req.body?.valor_mensal, { max: 1_000_000 });
+    const hojeMes = F.mesDe(M.hojeBrasil());
+    const desde = req.body?.desde === undefined || req.body?.desde === '' ? hojeMes : req.body.desde;
+    const ate = req.body?.ate === undefined || req.body?.ate === '' ? undefined : req.body.ate;
+    if (nome.length < 2) return res.status(400).json({ error: 'Informe o nome do custo (ex.: Seguro).' });
+    if (valor === null) return res.status(400).json({ error: 'Informe um valor mensal maior que zero.' });
+    if (!F.mesValido(desde)) return res.status(400).json({ error: 'Mês inicial inválido.' });
+    if (ate !== undefined && (!F.mesValido(ate) || ate < desde)) return res.status(400).json({ error: 'Mês final inválido.' });
+    if (financeiroDB.custos_fixos.filter((c) => c.id_motorista === driverId).length >= 100) return res.status(400).json({ error: 'Limite de custos fixos atingido.' });
+    const novo: F.CustoFixo = { id: F.proximoId(financeiroDB.custos_fixos), id_motorista: driverId, nome, valor_mensal: Math.round(valor * 100) / 100, desde, ate };
+    financeiroDB.custos_fixos.push(novo);
+    res.json({ sucesso: true, custo_fixo: novo });
+  });
+
+  app.delete('/api/motorista/financeiro/custos-fixos/:id', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const id = parseInt(req.params.id, 10);
+    const antes = financeiroDB.custos_fixos.length;
+    financeiroDB.custos_fixos = financeiroDB.custos_fixos.filter((c) => !(c.id === id && c.id_motorista === driverId));
+    if (financeiroDB.custos_fixos.length === antes) return res.status(404).json({ error: 'Custo fixo não encontrado.' });
+    res.json({ sucesso: true });
   });
 
   // ---- Sugestão de rota: o app propõe a ordem pelas distâncias; o motorista reordena à mão e aplica ----

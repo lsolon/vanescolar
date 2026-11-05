@@ -5,6 +5,7 @@ import type { LinhaMensalidadeMotorista, MensalidadesMotorista, StatusMensalidad
 const brl = (n: number | null | undefined) => (n ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
 const nomeMes = (m: string) => `${MESES[parseInt(m.slice(5), 10) - 1]} de ${m.slice(0, 4)}`;
+const tituloMes = (m: string) => { const t = nomeMes(m); return t.charAt(0).toUpperCase() + t.slice(1); };
 const somarMes = (m: string, d: number) => {
   const idx = parseInt(m.slice(0, 4), 10) * 12 + (parseInt(m.slice(5), 10) - 1) + d;
   return `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, '0')}`;
@@ -145,7 +146,7 @@ export const Mensalidades: React.FC = () => {
       <div className="flex items-center justify-between gap-2">
         <button type="button" aria-label="Mês anterior" onClick={() => setMes(somarMes(dados.mes, -1))} className="w-11 h-11 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 font-black cursor-pointer">‹</button>
         <div className="text-center">
-          <h2 className="text-sm font-extrabold text-slate-100 capitalize">{nomeMes(dados.mes)}</h2>
+          <h2 className="text-sm font-extrabold text-slate-100">{tituloMes(dados.mes)}</h2>
           {dados.mes !== mesAtual && <button type="button" onClick={() => setMes(undefined)} className="text-[11px] text-amber-300 underline cursor-pointer">Voltar ao mês atual</button>}
         </div>
         <button type="button" aria-label="Próximo mês" onClick={() => setMes(somarMes(dados.mes, 1))} className="w-11 h-11 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 font-black cursor-pointer">›</button>
