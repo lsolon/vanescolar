@@ -6,11 +6,11 @@
  */
 
 import express, { Request, Response, NextFunction } from 'express';
-import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import http from 'http';
 import { createPersistence } from './persistence';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -713,6 +713,18 @@ function broadcast(event: string, data: any, driverId?: number | null) {
 }
 
 async function startServer() {
+  // Abre a porta já: a hospedagem testa a porta logo na partida e o carregamento do estado (Firestore) pode demorar.
+  // Até o servidor ficar pronto, as requisições recebem 503.
+  const PORT = Number(process.env.PORT) || 3000;
+  let pronto: ((req: any, res: any) => void) | null = null;
+  const httpServer = http.createServer((req, res) => {
+    if (pronto) return pronto(req, res);
+    res.statusCode = 503;
+    res.setHeader('Retry-After', '2');
+    res.end('VanEscolar iniciando...');
+  });
+  httpServer.listen(PORT, '0.0.0.0', () => console.log(`[VanEscolar Server] Porta ${PORT} aberta; carregando dados...`));
+
   // ==========================================================================
   // PERSISTÊNCIA: carrega o estado salvo (Firestore/arquivo) antes de aceitar requisições
   // ==========================================================================
@@ -1984,6 +1996,7 @@ async function startServer() {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   } else {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa'
@@ -1991,10 +2004,8 @@ async function startServer() {
     app.use(vite.middlewares);
   }
 
-  const PORT = Number(process.env.PORT) || 3000;
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[VanEscolar Server] Rodando na porta ${PORT} com autenticação completa do Motorista e Admin Convites`);
-  });
+  pronto = app;
+  console.log(`[VanEscolar Server] Pronto na porta ${PORT} com autenticação completa do Motorista e Admin Convites`);
 }
 
 startServer().catch(console.error);
