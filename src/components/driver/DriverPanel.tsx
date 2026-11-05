@@ -25,6 +25,7 @@ import {
   StatusEmbarque,
   GPSCoordinate
 } from '../../types/database';
+import { InstalarApp } from '../shared/InstalarApp';
 import { Mensalidades } from './Mensalidades';
 import { TransportRepository, subscribeToDatabaseChanges } from '../../services/api';
 import {
@@ -923,6 +924,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
         {aba === 'ajustes' && (
           <>
+        <InstalarApp />
         <CodigoMotorista nome={motorista?.nome} />
         <EscolasDoMotorista versao={paradas.length} />
         <RotasIdaVolta sentidoAtivo={sentidoRota} versao={paradas.length} onAplicado={carregarDadosZeroCache} />
