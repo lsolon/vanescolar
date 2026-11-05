@@ -1078,3 +1078,68 @@ test('Backup: só o administrador baixa e as senhas não vão no arquivo por pad
   assert.ok(Array.isArray(r.data.state.paradas) && r.data.mensalidades && Array.isArray(r.data.mensalidades.pagamentos));
   assert.equal(r.data.inclui_senhas, false);
 });
+
+test('Financeiro: lançamentos, consumo e lucro do mês; dados privados de cada motorista', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const a = await novoMotorista(adm, 'FinA');
+  const b = await novoMotorista(adm, 'FinB');
+  const P = '/api/motorista/financeiro';
+  const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+  const mes = hoje.slice(0, 7);
+
+  assert.equal((await jsonReq('GET', `${P}/resumo`)).status, 401);
+  const fam = await novoResponsavelVerificado(adm);
+  assert.equal((await jsonReq('GET', `${P}/resumo`, fam)).status, 403, 'responsável não vê o financeiro');
+  assert.equal((await jsonReq('GET', `${P}/resumo?mes=2026-13`, a)).status, 400);
+
+  // validações
+  assert.equal((await jsonReq('POST', `${P}/lancamentos`, a, { tipo: 'DESPESA', categoria: 'OUTROS', valor: 0 })).status, 400);
+  assert.equal((await jsonReq('POST', `${P}/lancamentos`, a, { tipo: 'DESPESA', categoria: 'COMBUSTIVEL', litros: 40, valor: 240 })).status, 400, 'abastecimento sem km');
+  assert.equal((await jsonReq('POST', `${P}/lancamentos`, a, { tipo: 'DESPESA', categoria: 'OUTROS', valor: 5, data: '2999-01-01' })).status, 400);
+
+  // dois tanques cheios e um parcial no meio: 500 km e 50 L => 10 km/L
+  const ab = (km: number, litros: number, valor: number, cheio: boolean) =>
+    jsonReq('POST', `${P}/lancamentos`, a, { tipo: 'DESPESA', categoria: 'COMBUSTIVEL', combustivel: 'DIESEL', km, litros, valor, tanque_cheio: cheio, data: hoje });
+  assert.equal((await ab(10000, 40, 240, true)).status, 200);
+  assert.equal((await ab(10300, 20, 120, false)).status, 200);
+  const ultimo = await ab(10500, 30, 180, true);
+  assert.equal(ultimo.status, 200);
+  assert.equal((await jsonReq('POST', `${P}/lancamentos`, a, { tipo: 'DESPESA', categoria: 'MANUTENCAO', valor: '200,00', data: hoje, obs: 'Troca de óleo' })).status, 200);
+  assert.equal((await jsonReq('POST', `${P}/lancamentos`, a, { tipo: 'RECEITA', categoria: 'PASSEIO', valor: 400, data: hoje })).status, 200);
+  assert.equal((await jsonReq('POST', `${P}/custos-fixos`, a, { nome: 'Seguro', valor_mensal: 250 })).status, 200);
+
+  const r = (await jsonReq('GET', `${P}/resumo`, a)).data;
+  assert.equal(r.mes, mes);
+  assert.equal(r.consumo.media_km_por_litro, 10);
+  assert.equal(r.resumo.combustivel.litros, 90);
+  assert.equal(r.resumo.combustivel.valor, 540);
+  assert.equal(r.resumo.receita_extras, 400);
+  assert.equal(r.resumo.custos_fixos, 250);
+  assert.equal(r.resumo.despesas_total, 540 + 200 + 250);
+  assert.equal(r.resumo.lucro, 400 - (540 + 200 + 250));
+  assert.equal(r.resumo.km_rodados, 500);
+  assert.equal(r.serie.length, 6);
+  assert.equal(r.ultima_km, 10500);
+
+  // privacidade entre motoristas
+  const rb = (await jsonReq('GET', `${P}/resumo`, b)).data;
+  assert.equal(rb.resumo.despesas_total, 0);
+  assert.equal((await jsonReq('GET', `${P}/lancamentos`, b)).data.lancamentos.length, 0);
+  const id = ultimo.data.lancamento.id;
+  assert.equal((await jsonReq('DELETE', `${P}/lancamentos/${id}`, b)).status, 404, 'outro motorista não apaga');
+  assert.equal((await jsonReq('PUT', `${P}/lancamentos/${id}`, b, { tipo: 'DESPESA', categoria: 'OUTROS', valor: 1 })).status, 404);
+
+  // editar e apagar o próprio
+  const ed = await jsonReq('PUT', `${P}/lancamentos/${id}`, a, { tipo: 'DESPESA', categoria: 'COMBUSTIVEL', combustivel: 'DIESEL', km: 10500, litros: 30, valor: 190, tanque_cheio: true, data: hoje });
+  assert.equal(ed.status, 200);
+  assert.equal(ed.data.lancamento.valor, 190);
+  assert.equal((await jsonReq('DELETE', `${P}/lancamentos/${id}`, a)).status, 200);
+  assert.equal((await jsonReq('GET', `${P}/resumo`, a)).data.consumo.media_km_por_litro, null, 'sem o 2º tanque cheio não há ciclo');
+
+  // custo fixo: validação e remoção
+  assert.equal((await jsonReq('POST', `${P}/custos-fixos`, a, { nome: 'x', valor_mensal: 10 })).status, 400);
+  const fx = (await jsonReq('GET', `${P}/custos-fixos`, a)).data.custos_fixos;
+  assert.equal(fx.length, 1);
+  assert.equal((await jsonReq('DELETE', `${P}/custos-fixos/${fx[0].id}`, b)).status, 404);
+  assert.equal((await jsonReq('DELETE', `${P}/custos-fixos/${fx[0].id}`, a)).status, 200);
+});

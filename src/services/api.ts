@@ -562,6 +562,29 @@ export interface MensalidadeFilho {
   historico: { mes: string; status: StatusMensalidade; valor: number | null; pago_em: string | null }[];
 }
 
+export interface LancamentoFin {
+  id: number; data: string; tipo: 'DESPESA' | 'RECEITA'; categoria: string; valor: number;
+  km?: number; litros?: number; valor_litro?: number; combustivel?: string; tanque_cheio?: boolean; posto?: string; obs?: string;
+}
+export interface CustoFixoFin { id: number; nome: string; valor_mensal: number; desde: string; ate?: string }
+export interface ResumoFinanceiro {
+  mes: string; hoje: string;
+  resumo: {
+    mes: string; receita_mensalidades: number; receita_extras: number; receita_total: number;
+    despesas_variaveis: number; custos_fixos: number; despesas_total: number; lucro: number; margem_pct: number | null;
+    por_categoria: { categoria: string; valor: number }[];
+    combustivel: { litros: number; valor: number; preco_medio_litro: number | null; abastecimentos: number };
+    km_rodados: number | null; custo_por_km: number | null; lucro_por_km: number | null; combustivel_por_km: number | null;
+  };
+  mes_anterior: { mes: string; lucro: number; receita_total: number; despesas_total: number };
+  serie: { mes: string; receita: number; despesas: number; lucro: number }[];
+  consumo: {
+    media_km_por_litro: number | null; custo_medio_por_km: number | null; aviso: string | null;
+    ciclos: { inicio: string; fim: string; km: number; litros: number; valor: number; km_por_litro: number; custo_por_km: number; abastecimentos: number }[];
+  };
+  ultima_km: number | null;
+}
+
 export const TransportRepository = {
   async loginMotorista(email: string, pin: string): Promise<string> {
     return this.loginMotoristaEmail(email, pin);
@@ -1604,6 +1627,44 @@ export const TransportRepository = {
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível carregar as mensalidades.');
     return d.filhos as MensalidadeFilho[];
+  },
+
+  // ---- Financeiro do motorista ----
+  async resumoFinanceiro(mes?: string): Promise<ResumoFinanceiro> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/financeiro/resumo${mes ? `?mes=${encodeURIComponent(mes)}` : ''}`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível carregar o financeiro.');
+    return d as ResumoFinanceiro;
+  },
+  async listarLancamentosFin(mes: string): Promise<LancamentoFin[]> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/financeiro/lancamentos?mes=${encodeURIComponent(mes)}`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível carregar os lançamentos.');
+    return d.lancamentos as LancamentoFin[];
+  },
+  async salvarLancamentoFin(dados: Record<string, unknown>, id?: number): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/financeiro/lancamentos${id ? `/${id}` : ''}`, { method: id ? 'PUT' : 'POST', headers: getAuthHeaders(), body: JSON.stringify(dados) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível salvar.');
+  },
+  async apagarLancamentoFin(id: number): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/financeiro/lancamentos/${id}`, { method: 'DELETE', headers: getAuthHeaders() });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Não foi possível apagar.'); }
+  },
+  async listarCustosFixos(): Promise<CustoFixoFin[]> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/financeiro/custos-fixos`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível carregar os custos fixos.');
+    return d.custos_fixos as CustoFixoFin[];
+  },
+  async adicionarCustoFixo(dados: { nome: string; valor_mensal: number | string; desde?: string; ate?: string }): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/financeiro/custos-fixos`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(dados) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível salvar o custo fixo.');
+  },
+  async apagarCustoFixo(id: number): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/financeiro/custos-fixos/${id}`, { method: 'DELETE', headers: getAuthHeaders() });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Não foi possível apagar.'); }
   },
 
   async obterCodigoMotorista(): Promise<string> {

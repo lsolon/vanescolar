@@ -34,6 +34,10 @@ const snap = (n = 1): Record<DocName, any> => ({
     trips: { '1': { viagem: { id: 1001 }, mensagens: [] }, '2': { viagem: { id: 1002 }, mensagens: [{ texto: 'oi' }] } }
   },
   settings: { adminEmails: ['x@x.com'] },
+  financeiro: {
+    lancamentos: [{ id: 1, id_motorista: 1, data: '2026-11-01', tipo: 'DESPESA', categoria: 'OUTROS', valor: 10, criado_em: 'x' }],
+    custos_fixos: [{ id: 1, id_motorista: 1, nome: 'Seguro', valor_mensal: 250, desde: '2026-01' }]
+  },
   mensalidades: {
     configs: { '1:201': { valor: 300, vencimento_dia: 5 } },
     pagamentos: [{ id_motorista: 1, id_aluno: 201, mes: '2026-11', valor: 300, forma: 'PIX', pago_em: '2026-11-05', registrado_em: 'x' }]

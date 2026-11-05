@@ -27,6 +27,7 @@ import {
 } from '../../types/database';
 import { InstalarApp } from '../shared/InstalarApp';
 import { Mensalidades } from './Mensalidades';
+import { Financeiro } from './Financeiro';
 import { TransportRepository, subscribeToDatabaseChanges } from '../../services/api';
 import {
   Play,
@@ -107,7 +108,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const [erroPin, setErroPin] = useState<string | null>(null);
 
   // Modal de Cadastro de Novo Aluno pelo Motorista
-  const [aba, setAba] = useState<'diario' | 'mapa' | 'mensalidades' | 'ajustes'>('diario');
+  const [aba, setAba] = useState<'diario' | 'mapa' | 'mensalidades' | 'financeiro' | 'ajustes'>('diario');
   const [sentidoRota, setSentidoRota] = useState<'IDA' | 'VOLTA'>('IDA');
   // Com a rota em andamento vale o sentido do servidor (sobrevive a recarregar a página); antes de iniciar, o escolhido no seletor.
   const sentidoServidor: 'IDA' | 'VOLTA' | null = isRotaAtiva ? (String((viagemZeroCache?.viagem as any)?.sentido) === 'VOLTA' ? 'VOLTA' : 'IDA') : null;
@@ -588,10 +589,10 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         )}
 
         {/* NAVEGAÇÃO: a home é o Diário de Bordo; o resto fica a um toque */}
-        <nav aria-label="Seções do painel" role="tablist" className="grid grid-cols-4 gap-2">
-          {([['diario', 'Diário de Bordo'], ['mapa', 'Mapa'], ['mensalidades', 'Mensalidades'], ['ajustes', 'Rotas e ajustes']] as const).map(([k, nome]) => (
+        <nav aria-label="Seções do painel" role="tablist" className="flex gap-2 overflow-x-auto pb-1">
+          {([['diario', 'Diário de Bordo'], ['mapa', 'Mapa'], ['mensalidades', 'Mensalidades'], ['financeiro', 'Financeiro'], ['ajustes', 'Rotas e ajustes']] as const).map(([k, nome]) => (
             <button key={k} type="button" role="tab" aria-selected={aba === k} onClick={() => setAba(k)}
-              className={`relative px-2 py-2 min-h-[44px] rounded-xl border text-[11px] font-black cursor-pointer ${aba === k ? 'bg-amber-400/15 text-amber-200 border-amber-400/50' : 'bg-slate-900 text-slate-400 border-slate-800'}`}>
+              className={`relative shrink-0 px-3 py-2 min-h-[44px] rounded-xl border text-[11px] font-black cursor-pointer whitespace-nowrap ${aba === k ? 'bg-amber-400/15 text-amber-200 border-amber-400/50' : 'bg-slate-900 text-slate-400 border-slate-800'}`}>
               {nome}
               {k === 'diario' && pendentes.length > 0 && <span aria-label={`${pendentes.length} solicitações pendentes`} className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-black flex items-center justify-center">{pendentes.length}</span>}
             </button>
@@ -921,6 +922,8 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         )}
 
         {aba === 'mensalidades' && <Mensalidades />}
+
+        {aba === 'financeiro' && <Financeiro />}
 
         {aba === 'ajustes' && (
           <>
