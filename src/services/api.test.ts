@@ -1017,3 +1017,51 @@ test('Escola por endereço: só o motorista busca; sem resultado o app orienta a
   assert.equal(r.status, 404, 'consulta curta não procura');
   assert.ok(r.data.error);
 });
+
+test('Mensalidades: motorista define valor, dá baixa e desfaz; dados isolados por motorista', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const a = await novoMotorista(adm, 'MensA');
+  const b = await novoMotorista(adm, 'MensB');
+  const nova = await jsonReq('POST', '/api/paradas/nova', a, {
+    nomeAluno: 'Aluno Mens', endereco: 'Rua A, 1', pontoReferencia: '', escola: 'Escola A',
+    nomeResponsavel: 'Resp Mens', telefoneResponsavel: '21988887777'
+  });
+  assert.equal(nova.status, 200);
+  const alunoId = nova.data.novaParada.id_aluno;
+
+  // sem login e perfil errado
+  assert.equal((await jsonReq('GET', '/api/motorista/mensalidades')).status, 401);
+  const fam = await novoResponsavelVerificado(adm);
+  assert.equal((await jsonReq('GET', '/api/motorista/mensalidades', fam)).status, 403, 'responsável não vê a cobrança do motorista');
+  assert.equal((await jsonReq('GET', '/api/mensalidades', a)).status, 403, 'motorista não usa a rota dos pais');
+  assert.deepEqual((await jsonReq('GET', '/api/mensalidades', fam)).data.filhos, []);
+
+  // validações
+  assert.equal((await jsonReq('GET', '/api/motorista/mensalidades?mes=2026-13', a)).status, 400);
+  assert.equal((await jsonReq('PUT', `/api/motorista/mensalidades/${alunoId}/config`, a, { valor: 0, vencimento_dia: 5 })).status, 400);
+  assert.equal((await jsonReq('PUT', `/api/motorista/mensalidades/${alunoId}/config`, a, { valor: 300, vencimento_dia: 31 })).status, 400);
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${alunoId}/pagar`, a, { mes: '2026-11' })).status, 400, 'sem valor definido não dá baixa');
+
+  // fluxo feliz
+  assert.equal((await jsonReq('PUT', `/api/motorista/mensalidades/${alunoId}/config`, a, { valor: '350,00', vencimento_dia: 5 })).status, 200);
+  const hoje = (await jsonReq('GET', '/api/motorista/mensalidades', a)).data;
+  const linha = hoje.alunos.find((x: any) => x.id_aluno === alunoId);
+  assert.equal(linha.valor, 350);
+  assert.ok(['EM_ABERTO', 'ATRASADO'].includes(linha.status));
+  const mes = hoje.mes;
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${alunoId}/pagar`, a, { mes, forma: 'PIX' })).status, 200);
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${alunoId}/pagar`, a, { mes, data: '2999-01-01' })).status, 400, 'data futura');
+  const pago = (await jsonReq('GET', '/api/motorista/mensalidades', a)).data;
+  assert.equal(pago.alunos.find((x: any) => x.id_aluno === alunoId).status, 'PAGO');
+  assert.equal(pago.resumo.recebido, 350);
+
+  // outro motorista não enxerga nem mexe
+  assert.equal((await jsonReq('GET', '/api/motorista/mensalidades', b)).data.alunos.length, 0);
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${alunoId}/pagar`, b, { mes, valor: 1 })).status, 404);
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${alunoId}/desfazer`, b, { mes })).status, 404);
+
+  // desfazer
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${alunoId}/desfazer`, a, { mes })).status, 200);
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${alunoId}/desfazer`, a, { mes })).status, 404);
+  assert.equal((await jsonReq('GET', '/api/motorista/mensalidades', a)).data.resumo.recebido, 0);
+});

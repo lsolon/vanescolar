@@ -546,6 +546,22 @@ function mascararTelefone(tel: string): string {
   return tel;
 }
 
+export type StatusMensalidade = 'PAGO' | 'EM_ABERTO' | 'ATRASADO' | 'SEM_VALOR';
+export interface LinhaMensalidadeMotorista {
+  id_aluno: number; aluno: string; responsavel_nome: string; whatsapp: string;
+  valor: number | null; vencimento_dia: number | null; status: StatusMensalidade;
+  pago_em: string | null; valor_pago: number | null; forma: string | null; meses_em_atraso: number;
+}
+export interface MensalidadesMotorista {
+  mes: string; hoje: string; alunos: LinhaMensalidadeMotorista[];
+  resumo: { mes: string; previsto: number; recebido: number; a_vencer: number; atrasado: number; qtd_pagos: number; qtd_a_vencer: number; qtd_atrasados: number; qtd_sem_valor: number };
+}
+export interface MensalidadeFilho {
+  id_aluno: number; aluno: string; motorista: string; mes: string; valor: number | null; vencimento_dia: number | null;
+  status: StatusMensalidade; pago_em: string | null; meses_em_atraso: number;
+  historico: { mes: string; status: StatusMensalidade; valor: number | null; pago_em: string | null }[];
+}
+
 export const TransportRepository = {
   async loginMotorista(email: string, pin: string): Promise<string> {
     return this.loginMotoristaEmail(email, pin);
@@ -1541,6 +1557,43 @@ export const TransportRepository = {
       throw new Error(d.error || 'Não foi possível excluir.');
     }
     if (typeof window !== 'undefined' && alunoSelecionado() === alunoId) localStorage.removeItem(ALUNO_KEY);
+  },
+
+  // ---- Mensalidades ----
+  async listarMensalidades(mes?: string): Promise<MensalidadesMotorista> {
+    const q = mes ? `?mes=${encodeURIComponent(mes)}` : '';
+    const res = await fetch(`${getBaseUrl()}/api/motorista/mensalidades${q}`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível carregar as mensalidades.');
+    return d as MensalidadesMotorista;
+  },
+
+  async definirMensalidade(alunoId: number, valor: number | string, vencimentoDia: number, aplicarATodos = false): Promise<number> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/mensalidades/${alunoId}/config`, {
+      method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ valor, vencimento_dia: vencimentoDia, aplicar_a_todos: aplicarATodos })
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível salvar o valor.');
+    return d.atualizados as number;
+  },
+
+  async registrarPagamentoMensalidade(alunoId: number, p: { mes: string; valor?: number | string; forma?: string; data?: string }): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/mensalidades/${alunoId}/pagar`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(p) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível registrar o pagamento.');
+  },
+
+  async desfazerPagamentoMensalidade(alunoId: number, mes: string): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/mensalidades/${alunoId}/desfazer`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ mes }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível desfazer.');
+  },
+
+  async minhasMensalidades(): Promise<MensalidadeFilho[]> {
+    const res = await fetch(`${getBaseUrl()}/api/mensalidades`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível carregar as mensalidades.');
+    return d.filhos as MensalidadeFilho[];
   },
 
   async obterCodigoMotorista(): Promise<string> {

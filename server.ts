@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { createPersistence } from './persistence';
+import * as M from './mensalidades';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -198,6 +199,8 @@ function getSeedUsers(): UserRecord[] {
 }
 
 let usersDB: UserRecord[] = getSeedUsers();
+/** Mensalidades (config por aluno + baixas de pagamento), separadas por motorista. */
+const mensalidadesDB: M.MensalidadesDB = M.novoMensalidadesDB();
 
 function auditLog(action: string, actor: string, details: string) {
   console.log(`[AUDIT] [${new Date().toISOString()}] Ação: ${action} | Ator: ${actor} | Detalhes: ${details}`);
@@ -860,6 +863,10 @@ async function startServer() {
     const saved = await persistence.load();
     if (Array.isArray(saved.users)) usersDB.splice(0, usersDB.length, ...saved.users);
     if (Array.isArray(saved.invitations)) driverInvitationsDB.splice(0, driverInvitationsDB.length, ...saved.invitations);
+    if (saved.mensalidades && typeof saved.mensalidades === 'object') {
+      mensalidadesDB.configs = saved.mensalidades.configs && typeof saved.mensalidades.configs === 'object' ? saved.mensalidades.configs : {};
+      mensalidadesDB.pagamentos = Array.isArray(saved.mensalidades.pagamentos) ? saved.mensalidades.pagamentos : [];
+    }
     if (saved.state) {
       if (Array.isArray(saved.state.paradas)) serverState.paradas = saved.state.paradas;
       // Formato novo: uma viagem + mensagens por motorista. Formato antigo (único) pertence ao motorista 1.
@@ -893,7 +900,8 @@ async function startServer() {
       paradas: serverState.paradas,
       trips: Object.fromEntries([...tripsDB.entries()].map(([id, t]) => [id, { viagem: t.viagem, mensagens: t.mensagens }]))
     },
-    settings: { adminEmails: ADMIN_EMAILS }
+    settings: { adminEmails: ADMIN_EMAILS },
+    mensalidades: mensalidadesDB
   }));
   const shutdown = async (signal: string) => {
     console.log(`[VanEscolar Server] ${signal} recebido: salvando estado antes de encerrar...`);
@@ -914,16 +922,21 @@ async function startServer() {
   // sobrescrevia a da outra). Nas rotas de contas e convites, relê usuários e convites do armazenamento antes
   // de atender e grava logo depois de alterar.
   app.use(async (req: Request, res: Response, next: NextFunction) => {
-    const sensivel = req.path.startsWith('/api/auth/') || req.path.startsWith('/api/admin/') || req.path === '/api/vincular';
+    const sensivel = req.path.startsWith('/api/auth/') || req.path.startsWith('/api/admin/') || req.path === '/api/vincular'
+      || req.path.startsWith('/api/motorista/mensalidades') || req.path === '/api/mensalidades';
     if (persistence.kind === 'memory' || !sensivel) return next();
     try {
       await persistence.flush();
-      const saved = await persistence.load(['users', 'invitations']);
+      const saved = await persistence.load(['users', 'invitations', 'mensalidades']);
       if (Array.isArray(saved.users)) {
         usersDB.splice(0, usersDB.length, ...saved.users);
         if (!SEED_LOGIN_ENABLED) for (const u of usersDB) if (seedEmails.has(u.email.toLowerCase())) u.passwordHash = '';
       }
       if (Array.isArray(saved.invitations)) driverInvitationsDB.splice(0, driverInvitationsDB.length, ...saved.invitations);
+      if (saved.mensalidades && typeof saved.mensalidades === 'object') {
+        mensalidadesDB.configs = saved.mensalidades.configs ?? {};
+        mensalidadesDB.pagamentos = Array.isArray(saved.mensalidades.pagamentos) ? saved.mensalidades.pagamentos : [];
+      }
     } catch (err: any) {
       console.error('[Persistência] Falha ao reler contas/convites:', err?.message || err);
     }
@@ -1345,6 +1358,8 @@ async function startServer() {
     usersDB = usersDB.filter((u) => ADMIN_EMAILS.includes(u.email.toLowerCase()));
     driverInvitationsDB = [];
     serverState.paradas = [];
+    mensalidadesDB.configs = {};
+    mensalidadesDB.pagamentos = [];
     tripsDB.clear();
     for (const c of sseClients) { try { c.res.write(`event: DADOS_LIMPOS\ndata: {}\n\n`); } catch {} }
     auditLog('LIMPAR_TUDO', admin.email, `Dados apagados: ${JSON.stringify(antes)}`);
@@ -1634,6 +1649,7 @@ async function startServer() {
     if (!filho) return res.status(404).json({ error: 'Filho não encontrado.' });
     const dono = donoDaParada(filho);
     serverState.paradas = serverState.paradas.filter((p: any) => p !== filho);
+    M.removerAluno(mensalidadesDB, dono, alunoId);
     reordenar(dono);
     reordenarVolta(dono);
     broadcast('STATUS_EMBARQUE_ATUALIZADO', { paradaId: filho.id }, dono);
@@ -1693,6 +1709,112 @@ async function startServer() {
     rec.escolasLocal = { ...(rec.escolasLocal || {}), [k]: local };
     broadcast('HORARIOS_ATUALIZADOS', {}, driverId);
     res.json({ sucesso: true });
+  });
+
+
+  // ---- Mensalidades: controle de cobrança por família (baixa manual, sem integração bancária) ----
+  const alunosCobrancaDe = (driverId: number) =>
+    serverState.paradas.filter((p: any) => donoDaParada(p) === driverId && confirmada(p));
+
+  app.get('/api/motorista/mensalidades', authenticate, requireDriver, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const hoje = M.hojeBrasil();
+    const mes = req.query.mes === undefined ? M.mesDe(hoje) : req.query.mes;
+    if (!M.mesValido(mes)) return res.status(400).json({ error: 'Mês inválido. Use o formato AAAA-MM.' });
+    const alunos = alunosCobrancaDe(driverId).map((p: any) => ({
+      ...M.linhaDoAluno(mensalidadesDB, driverId, p.id_aluno, mes, hoje),
+      aluno: p.nome_sanitizado,
+      responsavel_nome: p.responsavel_nome ?? '',
+      whatsapp: String(p.responsavel_telefone ?? '').replace(/\D/g, '')
+    }));
+    // Mais urgentes primeiro: atrasados, em aberto, sem valor, pagos.
+    const peso: Record<string, number> = { ATRASADO: 0, EM_ABERTO: 1, SEM_VALOR: 2, PAGO: 3 };
+    alunos.sort((a, b) => peso[a.status] - peso[b.status] || a.responsavel_nome.localeCompare(b.responsavel_nome, 'pt-BR'));
+    res.json({ mes, hoje, alunos, resumo: M.resumir(alunos, mes) });
+  });
+
+  app.put('/api/motorista/mensalidades/:alunoId/config', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const alunoId = parseInt(req.params.alunoId, 10);
+    const valor = M.lerValor(req.body?.valor);
+    const dia = M.lerVencimento(req.body?.vencimento_dia);
+    if (valor === null) return res.status(400).json({ error: 'Informe um valor mensal maior que zero.' });
+    if (dia === null) return res.status(400).json({ error: 'O dia de vencimento deve ser de 1 a 28.' });
+    const alunos = alunosCobrancaDe(driverId);
+    if (!alunos.some((p: any) => p.id_aluno === alunoId)) return res.status(404).json({ error: 'Aluno não encontrado na sua van.' });
+    const alvos = req.body?.aplicar_a_todos === true ? alunos.map((p: any) => p.id_aluno as number) : [alunoId];
+    const hojeMes = M.mesDe(M.hojeBrasil());
+    const desdeInformado = req.body?.desde;
+    if (desdeInformado !== undefined && (!M.mesValido(desdeInformado) || desdeInformado > hojeMes)) return res.status(400).json({ error: 'Mês inicial inválido.' });
+    for (const id of alvos) {
+      const atual = mensalidadesDB.configs[M.chaveConfig(driverId, id)];
+      mensalidadesDB.configs[M.chaveConfig(driverId, id)] = { valor, vencimento_dia: dia, desde: desdeInformado ?? atual?.desde ?? hojeMes };
+    }
+    auditLog('MENSALIDADE_CONFIG', user.email, `Motorista ${driverId}: valor/vencimento definidos para ${alvos.length} aluno(s)`);
+    res.json({ sucesso: true, atualizados: alvos.length });
+  });
+
+  app.post('/api/motorista/mensalidades/:alunoId/pagar', authenticate, requireDriver, rateLimiter(60, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const alunoId = parseInt(req.params.alunoId, 10);
+    if (!alunosCobrancaDe(driverId).some((p: any) => p.id_aluno === alunoId)) return res.status(404).json({ error: 'Aluno não encontrado na sua van.' });
+    const hoje = M.hojeBrasil();
+    const mes = req.body?.mes;
+    if (!M.mesValido(mes)) return res.status(400).json({ error: 'Mês inválido. Use o formato AAAA-MM.' });
+    if (mes > M.somarMeses(M.mesDe(hoje), 1)) return res.status(400).json({ error: 'Só dá para registrar pagamento até o mês que vem.' });
+    const config = mensalidadesDB.configs[M.chaveConfig(driverId, alunoId)];
+    const valor = req.body?.valor === undefined || req.body?.valor === '' ? (config?.valor ?? null) : M.lerValor(req.body.valor);
+    if (valor === null) return res.status(400).json({ error: 'Defina o valor da mensalidade ou informe o valor recebido.' });
+    const forma = req.body?.forma === undefined ? 'PIX' : req.body.forma;
+    if (!M.FORMAS.includes(forma)) return res.status(400).json({ error: 'Forma de pagamento inválida.' });
+    const data = req.body?.data === undefined || req.body?.data === '' ? hoje : req.body.data;
+    if (!M.dataValida(data) || data > hoje) return res.status(400).json({ error: 'Data do pagamento inválida (não pode ser futura).' });
+    const pg = M.registrarPagamento(mensalidadesDB, { id_motorista: driverId, id_aluno: alunoId, mes, valor, forma, pago_em: data });
+    auditLog('MENSALIDADE_PAGA', user.email, `Motorista ${driverId}: aluno ${alunoId}, ${mes}`);
+    res.json({ sucesso: true, pagamento: pg });
+  });
+
+  app.post('/api/motorista/mensalidades/:alunoId/desfazer', authenticate, requireDriver, rateLimiter(60, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const alunoId = parseInt(req.params.alunoId, 10);
+    if (!M.mesValido(req.body?.mes)) return res.status(400).json({ error: 'Mês inválido. Use o formato AAAA-MM.' });
+    if (!M.desfazerPagamento(mensalidadesDB, driverId, alunoId, req.body.mes)) return res.status(404).json({ error: 'Não há pagamento registrado nesse mês.' });
+    auditLog('MENSALIDADE_DESFEITA', user.email, `Motorista ${driverId}: aluno ${alunoId}, ${req.body.mes}`);
+    res.json({ sucesso: true });
+  });
+
+  // O responsável só vê as mensalidades dos próprios filhos (somente leitura).
+  app.get('/api/mensalidades', authenticate, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    if (user.role !== 'responsavel') return res.status(403).json({ error: 'Acesso negado.' });
+    const hoje = M.hojeBrasil();
+    const mesAtual = M.mesDe(hoje);
+    const filhos = filhosDe(user.userId, user.studentId).filter(confirmada).map((f: any) => {
+      const dono = donoDaParada(f);
+      const historico = [0, 1, 2, 3, 4, 5].map((i) => {
+        const mes = M.somarMeses(mesAtual, -i);
+        const l = M.linhaDoAluno(mensalidadesDB, dono, f.id_aluno, mes, hoje);
+        return { mes, status: l.status, valor: l.valor, pago_em: l.pago_em };
+      });
+      const atual = M.linhaDoAluno(mensalidadesDB, dono, f.id_aluno, mesAtual, hoje);
+      return {
+        id_aluno: f.id_aluno,
+        aluno: f.nome_aluno,
+        motorista: usersDB.find((u) => u.id === dono)?.fullName ?? '',
+        mes: mesAtual,
+        valor: atual.valor,
+        vencimento_dia: atual.vencimento_dia,
+        status: atual.status,
+        pago_em: atual.pago_em,
+        meses_em_atraso: atual.meses_em_atraso,
+        historico
+      };
+    });
+    res.json({ filhos });
   });
 
   // ---- Sugestão de rota: o app propõe a ordem pelas distâncias; o motorista reordena à mão e aplica ----

@@ -31,6 +31,7 @@ import { RealMap } from '../shared/RealMap';
 import { PreferenciasProximidade } from './PreferenciasProximidade';
 import { HorariosEscola } from './HorariosEscola';
 import { AdicionarFilho, BarraFilhos, SituacaoVinculo } from './FilhosParent';
+import { MensalidadeCard } from './MensalidadeCard';
 import { MeuIdAcesso } from '../shared/MeuIdAcesso';
 import {
   MapPin,
@@ -413,6 +414,8 @@ export const ParentApp: React.FC<ParentAppProps> = ({
             <PreferenciasProximidade prefs={prefs} onChange={setPrefs} />
           </section>
         )}
+
+        {modoReal && <MensalidadeCard />}
 
         {modoReal && <MeuIdAcesso />}
 

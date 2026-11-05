@@ -22,8 +22,8 @@
 import fs from 'fs';
 import path from 'path';
 
-export type DocName = 'users' | 'invitations' | 'state' | 'settings';
-export const DOC_NAMES: DocName[] = ['users', 'invitations', 'state', 'settings'];
+export type DocName = 'users' | 'invitations' | 'state' | 'settings' | 'mensalidades';
+export const DOC_NAMES: DocName[] = ['users', 'invitations', 'state', 'settings', 'mensalidades'];
 
 export interface DocStore {
   readonly kind: string;
