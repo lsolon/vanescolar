@@ -57,6 +57,14 @@ function getAuthHeaders(isAdmin: boolean = false): Record<string, string> {
   };
 }
 
+// Quando o login comum (e-mail/Google) devolve um admin, o mesmo token serve às rotas administrativas.
+function guardarTokenAdminSeFor(data: any) {
+  if (data && data.role === 'admin' && data.token) {
+    memoryAdminToken = data.token;
+    if (typeof window !== 'undefined') localStorage.setItem(ADMIN_TOKEN_KEY, data.token);
+  }
+}
+
 async function handleAdminResponse(res: Response) {
   const contentType = res.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) {
@@ -576,6 +584,7 @@ export const TransportRepository = {
       if (data.token) {
         AuthService.setSessionToken(data.token);
       }
+      guardarTokenAdminSeFor(data);
       return data;
     } catch (err: any) {
       throw err;
@@ -842,6 +851,7 @@ export const TransportRepository = {
     if (data.token) {
       AuthService.setSessionToken(data.token);
     }
+    guardarTokenAdminSeFor(data);
     return data;
   },
 
@@ -866,6 +876,7 @@ export const TransportRepository = {
       if (data.token) {
         AuthService.setSessionToken(data.token);
       }
+      guardarTokenAdminSeFor(data);
       return data;
     } catch (err: any) {
       throw err;
