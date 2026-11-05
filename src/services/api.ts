@@ -394,6 +394,7 @@ export interface ProximidadeVan {
 }
 export interface SugestaoRota {
   sentido: 'IDA' | 'VOLTA';
+  modo?: 'atual' | 'sugestao';
   partida?: string;
   paradas: { id: number; nome: string; endereco?: string; temLocal: boolean; fixa?: boolean; ordemAtual: number; ordemSugerida: number }[];
   semLocal: number;
@@ -1479,15 +1480,15 @@ export const TransportRepository = {
     window.dispatchEvent(new Event('van-token')); // reconecta a transmissão ao vivo com o filho escolhido
   },
 
-  async obterSugestaoRota(sentido: 'IDA' | 'VOLTA'): Promise<SugestaoRota> {
-    const res = await fetch(`${getBaseUrl()}/api/rotas/sugestao?sentido=${sentido}`, { headers: getAuthHeaders() });
+  async obterSugestaoRota(sentido: 'IDA' | 'VOLTA', modo: 'sugestao' | 'atual' = 'sugestao'): Promise<SugestaoRota> {
+    const res = await fetch(`${getBaseUrl()}/api/rotas/sugestao?sentido=${sentido}&modo=${modo}`, { headers: getAuthHeaders() });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível sugerir a rota.');
     return d;
   },
 
-  async aplicarOrdemRota(ids: number[]): Promise<void> {
-    const res = await fetch(`${getBaseUrl()}/api/rotas/ordem`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ ids }) });
+  async aplicarOrdemRota(ids: number[], sentido: 'IDA' | 'VOLTA' = 'IDA'): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/rotas/ordem`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ ids, sentido }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Não foi possível aplicar a ordem.');
   },
 

@@ -85,71 +85,88 @@ const PARTIDA: Record<string, string> = {
   primeira: 'a partir da primeira parada'
 };
 
-/** Sugere a ordem das paradas pelas distâncias; o motorista pode mover cada parada antes de aplicar. */
-export const RotaSugerida: React.FC<{ sentido: 'IDA' | 'VOLTA'; onAplicado: () => void }> = ({ sentido, onAplicado }) => {
+type Sent = 'IDA' | 'VOLTA';
+const TEMA: Record<Sent, { nome: string; aba: string; titulo: string; borda: string; num: string; btn: string; sec: string }> = {
+  IDA: { nome: 'Ida', aba: 'bg-cyan-500/20 text-cyan-200 border-cyan-400/60', titulo: 'text-cyan-300', borda: 'border-cyan-400/30', num: 'text-cyan-300', btn: 'bg-cyan-400 text-slate-950', sec: 'bg-cyan-500/15 border-cyan-400/40 text-cyan-200' },
+  VOLTA: { nome: 'Volta', aba: 'bg-amber-500/20 text-amber-200 border-amber-400/60', titulo: 'text-amber-300', borda: 'border-amber-400/30', num: 'text-amber-300', btn: 'bg-amber-400 text-slate-950', sec: 'bg-amber-500/15 border-amber-400/40 text-amber-200' }
+};
+
+/** Duas rotas independentes (Ida em azul, Volta em âmbar): cada uma com sua ordem, sugestão automática e ajuste manual. */
+export const RotasIdaVolta: React.FC<{ sentidoAtivo?: Sent; versao?: number; onAplicado: () => void }> = ({ sentidoAtivo = 'IDA', versao, onAplicado }) => {
+  const [aba, setAba] = useState<Sent>(sentidoAtivo);
   const [sug, setSug] = useState<SugestaoRota | null>(null);
   const [ordem, setOrdem] = useState<SugestaoRota['paradas']>([]);
+  const [editado, setEditado] = useState(false);
   const [carregando, setCarregando] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+  const t = TEMA[aba];
 
-  const abrir = async () => {
-    setCarregando(true); setErro(null);
-    try { const s = await TransportRepository.obterSugestaoRota(sentido); setSug(s); setOrdem(s.paradas); }
-    catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao sugerir.'); }
+  const carregar = async (modo: 'atual' | 'sugestao') => {
+    setCarregando(true); setErro(null); setOk(null);
+    try {
+      const s = await TransportRepository.obterSugestaoRota(aba, modo);
+      setSug(s); setOrdem(s.paradas); setEditado(modo === 'sugestao' && s.mudou);
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao carregar a rota.'); }
     finally { setCarregando(false); }
   };
+  useEffect(() => { carregar('atual'); /* eslint-disable-next-line */ }, [aba, versao]);
+
   const mover = (i: number, d: -1 | 1) => {
     const j = i + d;
     if (j < 0 || j >= ordem.length) return;
-    const nova = [...ordem]; [nova[i], nova[j]] = [nova[j], nova[i]]; setOrdem(nova);
+    const nova = [...ordem]; [nova[i], nova[j]] = [nova[j], nova[i]]; setOrdem(nova); setEditado(true); setOk(null);
   };
   const aplicar = async () => {
     setSalvando(true); setErro(null);
-    try { await TransportRepository.aplicarOrdemRota(ordem.map((p) => p.id)); setSug(null); onAplicado(); }
-    catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao aplicar.'); }
+    try {
+      await TransportRepository.aplicarOrdemRota(ordem.map((p) => p.id), aba);
+      setEditado(false); setOk(`Rota de ${t.nome.toLowerCase()} salva.`); onAplicado();
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao aplicar.'); }
     finally { setSalvando(false); }
   };
 
-  if (!sug) {
-    return (
-      <div>
-        <button type="button" onClick={abrir} disabled={carregando} className="px-3 py-2 rounded-xl bg-cyan-500/15 border border-cyan-400/40 text-cyan-200 text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50">
-          {carregando ? 'Calculando…' : 'Sugerir rota'}
-        </button>
-        {erro && <p role="alert" className="text-[11px] text-rose-300 mt-1">{erro}</p>}
-      </div>
-    );
-  }
-
   return (
-    <section aria-label="Rota sugerida" className="bg-slate-900 border border-cyan-400/30 rounded-2xl p-4 space-y-3">
-      <div>
-        <h3 className="text-xs font-bold text-cyan-300">Rota sugerida ({sug.sentido === 'VOLTA' ? 'volta' : 'ida'})</h3>
-        {sug.partida && <p className="text-[11px] text-slate-400">Ordem calculada {PARTIDA[sug.partida] || ''}{sug.sentido === 'IDA' && sug.escolaDefinida ? ', terminando na escola' : ''}.</p>}
-        {typeof sug.kmSugerido === 'number' && <p className="text-[11px] text-slate-400">Distância em linha reta: ~{sug.kmSugerido} km (ordem atual: ~{sug.kmAtual} km).</p>}
-        <p className="text-[11px] text-slate-500">Use as setas para mudar a ordem como preferir e depois aplique.</p>
-      </div>
-      {sug.semLocal > 0 && <p className="text-[11px] text-amber-300">{sug.semLocal} aluno(s) sem local marcado ficam no fim. Marque o local de cada um para entrarem no cálculo.</p>}
-      {sug.sentido === 'IDA' && sug.escolaDefinida === false && <p className="text-[11px] text-amber-300">Marque o local da escola para a rota terminar nela.</p>}
-      <ol className="space-y-2">
-        {ordem.map((p, i) => (
-          <li key={p.id} className="flex items-center gap-2 rounded-xl bg-slate-950 border border-slate-800 px-3 py-2">
-            <span className="w-6 text-center text-sm font-black text-cyan-300">{i + 1}</span>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold text-slate-100 truncate">{p.nome}</p>
-              <p className="text-[10px] text-slate-500 truncate">{p.fixa ? 'já atendido' : p.temLocal ? (p.endereco || '') : 'sem local marcado'}</p>
-            </div>
-            <button type="button" aria-label={`Subir ${p.nome}`} onClick={() => mover(i, -1)} disabled={i === 0 || p.fixa || !!ordem[i - 1]?.fixa} className="w-10 h-10 rounded-lg bg-slate-800 text-slate-200 text-sm cursor-pointer disabled:opacity-30">▲</button>
-            <button type="button" aria-label={`Descer ${p.nome}`} onClick={() => mover(i, 1)} disabled={i === ordem.length - 1 || p.fixa} className="w-10 h-10 rounded-lg bg-slate-800 text-slate-200 text-sm cursor-pointer disabled:opacity-30">▼</button>
-          </li>
+    <section aria-label="Rotas de ida e volta" className={`bg-slate-900 border ${t.borda} rounded-2xl p-4 space-y-3`}>
+      <div role="tablist" aria-label="Sentido da rota" className="grid grid-cols-2 gap-2">
+        {(['IDA', 'VOLTA'] as Sent[]).map((sv) => (
+          <button key={sv} type="button" role="tab" id={`aba-rota-${sv}`} aria-selected={aba === sv} onClick={() => setAba(sv)}
+            className={`px-3 py-2 min-h-[44px] rounded-xl border text-xs font-black cursor-pointer ${aba === sv ? TEMA[sv].aba : 'bg-slate-950 border-slate-800 text-slate-400'}`}>
+            {sv === 'IDA' ? '➜ ' : '↩ '}{TEMA[sv].nome}{sv === 'IDA' ? ' (casa → escola)' : ' (escola → casa)'}
+          </button>
         ))}
-      </ol>
-      {erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
-      <div className="flex gap-2 flex-wrap">
-        <button type="button" onClick={aplicar} disabled={salvando} className="px-4 py-2 rounded-xl bg-cyan-400 text-slate-950 text-xs font-black min-h-[44px] cursor-pointer disabled:opacity-50">{salvando ? 'Aplicando…' : 'Aplicar esta ordem'}</button>
-        <button type="button" onClick={() => setOrdem(sug.paradas)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Voltar à sugestão</button>
-        <button type="button" onClick={() => setSug(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Fechar</button>
+      </div>
+      <div role="tabpanel" aria-labelledby={`aba-rota-${aba}`} className="space-y-3">
+        <div>
+          <h3 className={`text-xs font-bold ${t.titulo}`}>Rota de {t.nome.toLowerCase()}</h3>
+          {sug?.modo === 'sugestao' && sug.partida && <p className="text-[11px] text-slate-400">Ordem sugerida {PARTIDA[sug.partida] || ''}{aba === 'IDA' && sug.escolaDefinida ? ', terminando na escola' : ''}.</p>}
+          {sug?.modo === 'sugestao' && typeof sug.kmSugerido === 'number' && <p className="text-[11px] text-slate-400">Distância em linha reta: ~{sug.kmSugerido} km (ordem atual: ~{sug.kmAtual} km).</p>}
+          {sug?.modo !== 'sugestao' && <p className="text-[11px] text-slate-400">Ordem em uso. Use as setas ou peça uma sugestão.</p>}
+        </div>
+        {sug && sug.semLocal > 0 && <p className="text-[11px] text-amber-300">{sug.semLocal} aluno(s) sem local marcado ficam no fim da sugestão.</p>}
+        {sug && !sug.escolaDefinida && <p className="text-[11px] text-amber-300">Marque o local da escola para a sugestão considerar o trajeto até ela.</p>}
+        {ordem.length === 0 && !carregando && <p className="text-[11px] text-slate-500">Nenhum aluno confirmado nesta rota.</p>}
+        <ol className="space-y-2">
+          {ordem.map((p, i) => (
+            <li key={p.id} className="flex items-center gap-2 rounded-xl bg-slate-950 border border-slate-800 px-3 py-2">
+              <span className={`w-6 text-center text-sm font-black ${t.num}`}>{i + 1}</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-slate-100 truncate">{p.nome}</p>
+                <p className="text-[10px] text-slate-500 truncate">{p.fixa ? 'já atendido' : p.temLocal ? (p.endereco || '') : 'sem local marcado'}</p>
+              </div>
+              <button type="button" aria-label={`Subir ${p.nome}`} onClick={() => mover(i, -1)} disabled={i === 0 || p.fixa || !!ordem[i - 1]?.fixa} className="w-10 h-10 rounded-lg bg-slate-800 text-slate-200 text-sm cursor-pointer disabled:opacity-30">▲</button>
+              <button type="button" aria-label={`Descer ${p.nome}`} onClick={() => mover(i, 1)} disabled={i === ordem.length - 1 || p.fixa} className="w-10 h-10 rounded-lg bg-slate-800 text-slate-200 text-sm cursor-pointer disabled:opacity-30">▼</button>
+            </li>
+          ))}
+        </ol>
+        {erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
+        {ok && <p role="status" className="text-[11px] text-emerald-300">{ok}</p>}
+        <div className="flex gap-2 flex-wrap">
+          <button type="button" onClick={() => carregar('sugestao')} disabled={carregando || ordem.length < 2} className={`px-3 py-2 rounded-xl border text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50 ${t.sec}`}>{carregando ? 'Calculando…' : 'Sugerir rota'}</button>
+          <button type="button" onClick={aplicar} disabled={salvando || !editado} className={`px-4 py-2 rounded-xl text-xs font-black min-h-[44px] cursor-pointer disabled:opacity-40 ${t.btn}`}>{salvando ? 'Salvando…' : 'Salvar esta ordem'}</button>
+          {editado && <button type="button" onClick={() => carregar('atual')} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Descartar</button>}
+        </div>
       </div>
     </section>
   );

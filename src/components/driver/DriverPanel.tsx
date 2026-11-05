@@ -61,7 +61,7 @@ import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 import { MeuIdAcesso } from '../shared/MeuIdAcesso';
 import { CampoHora } from '../shared/CampoHora';
 import { CodigoMotorista, SolicitacoesPendentes } from './CodigoESolicitacoes';
-import { EscolasDoMotorista, RotaSugerida } from './RotaEEscolas';
+import { EscolasDoMotorista, RotasIdaVolta } from './RotaEEscolas';
 
 interface DriverPanelProps {
   coordenadas: GPSCoordinate;
@@ -610,7 +610,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         <CodigoMotorista nome={motorista?.nome} />
         <SolicitacoesPendentes pendentes={pendentes} totalNaVan={paradas.length} onMudou={carregarDadosZeroCache} />
         <EscolasDoMotorista versao={paradas.length} />
-        <RotaSugerida sentido={sentidoRota} onAplicado={carregarDadosZeroCache} />
+        <RotasIdaVolta sentidoAtivo={sentidoRota} versao={paradas.length} onAplicado={carregarDadosZeroCache} />
         <MeuIdAcesso />
 
         {/* DIÁRIO DE BORDO COM MASCARAMENTO VISUAL RIGOROSO */}
