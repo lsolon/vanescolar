@@ -15,6 +15,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { MensagensDaFamilia } from './MensagensDaFamilia';
 import {
   Aluno,
   Responsavel,
@@ -391,6 +392,8 @@ export const ParentApp: React.FC<ParentAppProps> = ({
             })()}
           </>
         )}
+
+        {modoReal && filhosInfo.filhos.some((f) => f.vinculo !== 'PENDENTE' && f.vinculo !== 'RECUSADO') && <MensagensDaFamilia />}
 
         {modoReal && (
           <HorariosEscola

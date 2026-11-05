@@ -341,7 +341,6 @@ test('Estado por motorista: viagem, GPS, mensagens e alunos são isolados entre 
   assert.equal(aluno.status, 200);
   await jsonReq('POST', '/api/rotas/iniciar', tokenA);
   await jsonReq('POST', '/api/gps', tokenA, { latitude: -22.1, longitude: -43.2 });
-  await jsonReq('POST', '/api/mensagens', tokenA, { texto: 'mensagem privada da Ana' });
 
   const estA = await jsonReq('GET', '/api/estado', tokenA);
   const estB = await jsonReq('GET', '/api/estado', tokenB);
@@ -1017,6 +1016,83 @@ test('Ordem por sentido: volta segue o inverso da ida até o motorista salvar; o
   d = await diario();
   assert.deepEqual(porOrdem(d, 'ordem_volta'), [A, C, B]);
   assert.deepEqual(porOrdem(d, 'ordem_ida'), [C, B, A]);
+});
+
+test('Mensagens: conversa privada por família, aviso geral, mensagens prontas, não lidas e limites', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const mot = await novoMotorista(adm.data.token, 'MsgVan');
+  const outro = await novoMotorista(adm.data.token, 'MsgOutro');
+  const nova = async (n: string) => (await jsonReq('POST', '/api/paradas/nova', mot, {
+    nomeAluno: n, endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777'
+  })).data;
+  const a = await nova('Aluno A'), b = await nova('Aluno B');
+  const respA = await novoResponsavel(a.codigoVinculo), respB = await novoResponsavel(b.codigoVinculo);
+  const resumo = async (tok = mot) => (await jsonReq('GET', '/api/motorista/mensagens/resumo', tok)).data;
+
+  let r = await resumo();
+  assert.equal(r.familias.length, 2);
+  assert.equal(r.total_nao_lidas, 0);
+  assert.ok(r.rapidas.length >= 3);
+
+  // a família A escreve; validações
+  assert.equal((await jsonReq('POST', '/api/conversa', respA, { texto: 'Bom dia, o Aluno A não vai hoje' })).status, 200);
+  assert.equal((await jsonReq('POST', '/api/conversa', respA, { texto: '   ' })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/conversa', respA, { texto: 'a'.repeat(501) })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/conversa', respA, { texto: 'estou em -22.932145, -43.201234' })).status, 400, 'sem coordenadas');
+  assert.equal((await jsonReq('POST', '/api/conversa', respA, { rapida: 'CHEGUEI' })).status, 400, 'prontas são só do motorista');
+  assert.equal((await jsonReq('POST', '/api/conversa', respA, { texto: 'oi', motorista: 99999 })).status, 403);
+  assert.equal((await jsonReq('POST', '/api/conversa', undefined, { texto: 'oi' })).status, 401);
+
+  r = await resumo();
+  assert.equal(r.total_nao_lidas, 1);
+  const famA = r.familias.find((f: any) => f.nao_lidas === 1);
+  const famB = r.familias.find((f: any) => f.nao_lidas === 0);
+  assert.ok(famA && famB);
+  assert.equal(famA.ultima.texto, 'Bom dia, o Aluno A não vai hoje');
+
+  // quem não é o motorista da família não lê nem escreve; admin e responsável também não
+  assert.equal((await jsonReq('GET', `/api/motorista/mensagens/familia/${famA.id}`, outro)).status, 404);
+  assert.equal((await jsonReq('POST', `/api/motorista/mensagens/familia/${famA.id}`, outro, { texto: 'invasão' })).status, 404);
+  assert.equal((await jsonReq('GET', '/api/motorista/mensagens/resumo', adm.data.token)).status, 403, 'admin não lê conversas');
+  assert.equal((await jsonReq('GET', `/api/motorista/mensagens/familia/${famA.id}`, adm.data.token)).status, 403);
+  assert.equal((await jsonReq('GET', '/api/motorista/mensagens/resumo', respA)).status, 403);
+
+  // o motorista lê (marca como lida) e responde com texto e com mensagem pronta
+  const conv = (await jsonReq('GET', `/api/motorista/mensagens/familia/${famA.id}`, mot)).data;
+  assert.deepEqual(conv.mensagens.map((m: any) => m.de), ['RESPONSAVEL']);
+  assert.equal((await resumo()).total_nao_lidas, 0);
+  assert.equal((await jsonReq('POST', `/api/motorista/mensagens/familia/${famA.id}`, mot, { rapida: 'CHEGUEI' })).status, 200);
+  assert.equal((await jsonReq('POST', `/api/motorista/mensagens/familia/${famA.id}`, mot, { rapida: 'NAO_EXISTE' })).status, 400);
+  assert.equal((await jsonReq('POST', `/api/motorista/mensagens/familia/${famA.id}`, mot, { texto: 'Combinado, obrigado!' })).status, 200);
+  assert.equal((await jsonReq('POST', '/api/motorista/mensagens/familia/999999', mot, { texto: 'x' })).status, 404);
+
+  // a família A recebe 2 não lidas; ao abrir, zera; a B não vê nada da A
+  assert.equal((await jsonReq('GET', '/api/conversa/resumo', respA)).data.nao_lidas, 2);
+  const feedA = (await jsonReq('GET', '/api/conversa', respA)).data;
+  assert.deepEqual(feedA.mensagens.map((m: any) => m.texto), ['Bom dia, o Aluno A não vai hoje', 'Cheguei no ponto de embarque.', 'Combinado, obrigado!']);
+  assert.ok(feedA.motorista.nome);
+  assert.equal((await jsonReq('GET', '/api/conversa/resumo', respA)).data.nao_lidas, 0);
+  const feedB0 = await jsonReq('GET', '/api/conversa', respB);
+  assert.deepEqual(feedB0.data.mensagens, []);
+  assert.equal(JSON.stringify(feedB0.data).includes('Aluno A'), false);
+  assert.deepEqual((await jsonReq('GET', `/api/motorista/mensagens/familia/${famB.id}`, mot)).data.mensagens, []);
+
+  // aviso geral: chega às duas famílias, conta como não lido uma vez e some do contador ao abrir
+  assert.equal((await jsonReq('POST', '/api/motorista/mensagens/aviso', outro, { texto: 'sem alunos' })).status, 400, 'van sem famílias');
+  assert.equal((await jsonReq('POST', '/api/motorista/mensagens/aviso', mot, { texto: 'Amanhã não haverá aula' })).status, 200);
+  assert.equal((await jsonReq('POST', '/api/motorista/mensagens/aviso', mot, { rapida: 'ATRASO_10' })).status, 200);
+  assert.equal((await jsonReq('GET', '/api/conversa/resumo', respB)).data.nao_lidas, 2);
+  const feedB = (await jsonReq('GET', '/api/conversa', respB)).data.mensagens;
+  assert.deepEqual(feedB.map((m: any) => m.texto), ['Amanhã não haverá aula', 'Estou com um atraso de cerca de 10 minutos.']);
+  assert.ok(feedB.every((m: any) => m.aviso === true));
+  assert.equal((await jsonReq('GET', '/api/conversa/resumo', respB)).data.nao_lidas, 0);
+  assert.equal((await jsonReq('GET', '/api/conversa/resumo', respA)).data.nao_lidas, 2, 'a família A ainda não abriu os avisos');
+  assert.equal((await jsonReq('GET', '/api/conversa', respA)).data.mensagens.length, 5);
+  assert.equal((await resumo()).avisos.length, 2);
+  // o aviso não entra na conversa individual do motorista com uma família
+  assert.equal((await jsonReq('GET', `/api/motorista/mensagens/familia/${famB.id}`, mot)).data.mensagens.length, 0);
+  // o estado compartilhado não carrega mais mensagens de ninguém
+  assert.deepEqual((await jsonReq('GET', '/api/estado', respB)).data.mensagens ?? [], []);
 });
 
 test('Horário combinado: se a van está adiantada (ex.: aluno anterior faltou), o tempo e o aviso não prometem antes dele', async () => {

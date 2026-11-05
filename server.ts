@@ -14,6 +14,7 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { createPersistence } from './persistence';
 import * as M from './mensalidades';
 import * as F from './financeiro';
+import * as G from './mensagens';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -204,6 +205,7 @@ let usersDB: UserRecord[] = getSeedUsers();
 const mensalidadesDB: M.MensalidadesDB = M.novoMensalidadesDB();
 /** Financeiro do motorista (despesas, receitas extras, custos fixos, abastecimentos). Cada motorista só enxerga o seu. */
 const financeiroDB: F.FinanceiroDB = F.novoFinanceiroDB();
+const mensagensDB: G.MensagensDB = G.novoMensagensDB();
 
 function auditLog(action: string, actor: string, details: string) {
   console.log(`[AUDIT] [${new Date().toISOString()}] Ação: ${action} | Ator: ${actor} | Detalhes: ${details}`);
@@ -904,6 +906,7 @@ async function startServer() {
       financeiroDB.lancamentos = Array.isArray(saved.financeiro.lancamentos) ? saved.financeiro.lancamentos : [];
       financeiroDB.custos_fixos = Array.isArray(saved.financeiro.custos_fixos) ? saved.financeiro.custos_fixos : [];
     }
+    if (saved.mensagens && typeof saved.mensagens === 'object') mensagensDB.mensagens = Array.isArray(saved.mensagens.mensagens) ? saved.mensagens.mensagens : [];
     if (saved.mensalidades && typeof saved.mensalidades === 'object') {
       mensalidadesDB.configs = saved.mensalidades.configs && typeof saved.mensalidades.configs === 'object' ? saved.mensalidades.configs : {};
       mensalidadesDB.pagamentos = Array.isArray(saved.mensalidades.pagamentos) ? saved.mensalidades.pagamentos : [];
@@ -943,7 +946,8 @@ async function startServer() {
     },
     settings: { adminEmails: ADMIN_EMAILS },
     mensalidades: mensalidadesDB,
-    financeiro: financeiroDB
+    financeiro: financeiroDB,
+    mensagens: mensagensDB
   }));
   const shutdown = async (signal: string) => {
     console.log(`[VanEscolar Server] ${signal} recebido: salvando estado antes de encerrar...`);
@@ -969,12 +973,13 @@ async function startServer() {
   app.use(async (req: Request, res: Response, next: NextFunction) => {
     const sensivel = req.path.startsWith('/api/auth/') || req.path.startsWith('/api/admin/') || req.path === '/api/vincular'
       || req.path.startsWith('/api/motorista/mensalidades') || req.path === '/api/mensalidades'
-      || req.path.startsWith('/api/motorista/financeiro');
+      || req.path.startsWith('/api/motorista/financeiro')
+      || req.path.startsWith('/api/motorista/mensagens') || req.path.startsWith('/api/conversa');
     if (persistence.kind === 'memory' || !sensivel) return next();
     try {
       await persistence.flush();
       // Só relê o que OUTRA instância alterou (1 leitura por assunto, não a coleção inteira).
-      const saved = await persistence.reloadIfChanged(['users', 'invitations', 'mensalidades', 'financeiro']);
+      const saved = await persistence.reloadIfChanged(['users', 'invitations', 'mensalidades', 'financeiro', 'mensagens']);
       if (Array.isArray(saved.users)) {
         usersDB.splice(0, usersDB.length, ...saved.users);
         if (!SEED_LOGIN_ENABLED) for (const u of usersDB) if (seedEmails.has(u.email.toLowerCase())) u.passwordHash = '';
@@ -988,6 +993,7 @@ async function startServer() {
         financeiroDB.lancamentos = Array.isArray(saved.financeiro.lancamentos) ? saved.financeiro.lancamentos : [];
         financeiroDB.custos_fixos = Array.isArray(saved.financeiro.custos_fixos) ? saved.financeiro.custos_fixos : [];
       }
+      if (saved.mensagens && typeof saved.mensagens === 'object') mensagensDB.mensagens = Array.isArray(saved.mensagens.mensagens) ? saved.mensagens.mensagens : [];
     } catch (err: any) {
       console.error('[Persistência] Falha ao reler contas/convites:', err?.message || err);
     }
@@ -1416,7 +1422,8 @@ async function startServer() {
       },
       settings: { adminEmails: ADMIN_EMAILS },
       mensalidades: mensalidadesDB,
-      financeiro: financeiroDB
+      financeiro: financeiroDB,
+      mensagens: mensagensDB
     };
     auditLog('BACKUP_BAIXADO', admin.email, `Cópia de segurança gerada (senhas: ${comSenhas ? 'sim' : 'não'})`);
     res.setHeader('Cache-Control', 'no-store');
@@ -1438,6 +1445,7 @@ async function startServer() {
     mensalidadesDB.pagamentos = [];
     financeiroDB.lancamentos = [];
     financeiroDB.custos_fixos = [];
+    mensagensDB.mensagens = [];
     tripsDB.clear();
     for (const c of sseClients) { try { c.res.write(`event: DADOS_LIMPOS\ndata: {}\n\n`); } catch {} }
     auditLog('LIMPAR_TUDO', admin.email, `Dados apagados: ${JSON.stringify(antes)}`);
@@ -2001,6 +2009,121 @@ async function startServer() {
     res.json({ sucesso: true });
   });
 
+  // ---- Mensagens: conversa privada motorista ↔ família + avisos gerais da van ----
+  // Privacidade: cada família só lê a própria conversa e os avisos; o motorista lê as conversas da sua van; nem o admin lê conversas.
+  const soMotorista = (req: Request, res: Response, next: NextFunction) => {
+    if (((req as any).user as SessionPayload)?.role !== 'motorista') return res.status(403).json({ error: 'As conversas são privadas entre o motorista e cada família.' });
+    next();
+  };
+  const familiasDoMotorista = (driverId: number) => {
+    const grupos = new Map<number, { id: number; nome: string; filhos: string[] }>();
+    for (const p of serverState.paradas as any[]) {
+      if (donoDaParada(p) !== driverId || !confirmada(p) || typeof p.vinculado_usuario_id !== 'number') continue;
+      const g = grupos.get(p.vinculado_usuario_id) ?? { id: p.vinculado_usuario_id, nome: usersDB.find((u) => u.id === p.vinculado_usuario_id)?.fullName || p.responsavel_nome || 'Responsável', filhos: [] as string[] };
+      g.filhos.push(p.nome_sanitizado || 'Aluno');
+      grupos.set(g.id, g);
+    }
+    return grupos;
+  };
+  /** Avisa por SSE (sem o texto): o motorista da van e a família envolvida buscam a conversa de novo. */
+  const avisarMensagens = (driverId: number, familiaId: number | null) => {
+    for (const c of sseClients) {
+      try {
+        if (c.role === 'motorista' && c.userId === driverId) c.res.write(`event: MENSAGENS_ATUALIZADAS\ndata: ${JSON.stringify({ familia: familiaId })}\n\n`);
+        else if (c.role === 'responsavel' && (familiaId === null || c.userId === familiaId) && motoristasDoResponsavel(c.userId, c.studentId).has(driverId)) c.res.write(`event: MENSAGENS_ATUALIZADAS\ndata: {}\n\n`);
+      } catch { /* conexão encerrada */ }
+    }
+  };
+  const msgPublica = (m: G.Mensagem) => ({ id: m.id, de: m.de, texto: m.texto, rapida: m.rapida, criado_em: m.criado_em, aviso: m.id_familia === null, lida: !!m.lida_em, lida_por: m.id_familia === null ? (m.lida_por ?? []).length : undefined });
+  const ultimasMsgs = (lista: G.Mensagem[], n = 200) => lista.slice(-n).map(msgPublica);
+
+  app.get('/api/motorista/mensagens/resumo', authenticate, requireDriver, soMotorista, rateLimiter(240, 60000), (req: Request, res: Response) => {
+    const driverId = ((req as any).user as SessionPayload).userId as number;
+    const familias = [...familiasDoMotorista(driverId).values()].map((f) => {
+      const c = G.conversaDireta(mensagensDB, driverId, f.id);
+      const u = c[c.length - 1];
+      return { ...f, ultima: u ? { texto: u.texto, de: u.de, criado_em: u.criado_em } : null, nao_lidas: G.naoLidasDoMotorista(mensagensDB, driverId, f.id) };
+    }).sort((a, b) => (b.ultima?.criado_em ?? '').localeCompare(a.ultima?.criado_em ?? '') || a.nome.localeCompare(b.nome, 'pt-BR'));
+    res.json({
+      rapidas: G.RAPIDAS,
+      familias,
+      avisos: ultimasMsgs(G.avisosDaVan(mensagensDB, driverId), 30),
+      total_nao_lidas: familias.reduce((t, f) => t + f.nao_lidas, 0),
+      total_familias: familias.length
+    });
+  });
+
+  app.get('/api/motorista/mensagens/familia/:id', authenticate, requireDriver, soMotorista, rateLimiter(240, 60000), (req: Request, res: Response) => {
+    const driverId = ((req as any).user as SessionPayload).userId as number;
+    const familia = familiasDoMotorista(driverId).get(Number(req.params.id));
+    if (!familia) return res.status(404).json({ error: 'Família não encontrada na sua van.' });
+    G.marcarLidasPeloMotorista(mensagensDB, driverId, familia.id, new Date().toISOString());
+    res.json({ familia, mensagens: ultimasMsgs(G.conversaDireta(mensagensDB, driverId, familia.id)) });
+  });
+
+  app.post('/api/motorista/mensagens/familia/:id', authenticate, requireDriver, soMotorista, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = user.userId as number;
+    const familia = familiasDoMotorista(driverId).get(Number(req.params.id));
+    if (!familia) return res.status(404).json({ error: 'Família não encontrada na sua van.' });
+    const t = G.resolverTexto(req.body, true);
+    if (!t.ok) return res.status(400).json({ error: t.erro });
+    const nova = G.enviar(mensagensDB, { motorista: driverId, familia: familia.id, de: 'MOTORISTA', texto: t.texto, rapida: t.rapida });
+    auditLog('MENSAGEM_ENVIADA', user.email, `Motorista ${driverId} → família ${familia.id}`); // sem o conteúdo (LGPD)
+    avisarMensagens(driverId, familia.id);
+    res.json({ sucesso: true, mensagem: msgPublica(nova) });
+  });
+
+  app.post('/api/motorista/mensagens/aviso', authenticate, requireDriver, soMotorista, rateLimiter(20, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = user.userId as number;
+    if (familiasDoMotorista(driverId).size === 0) return res.status(400).json({ error: 'Nenhuma família vinculada à sua van ainda.' });
+    const t = G.resolverTexto(req.body, true);
+    if (!t.ok) return res.status(400).json({ error: t.erro });
+    const nova = G.enviar(mensagensDB, { motorista: driverId, familia: null, de: 'MOTORISTA', texto: t.texto, rapida: t.rapida });
+    auditLog('AVISO_VAN_ENVIADO', user.email, `Motorista ${driverId} → toda a van`);
+    avisarMensagens(driverId, null);
+    res.json({ sucesso: true, mensagem: msgPublica(nova) });
+  });
+
+  /** Motorista da conversa do responsável: o pedido (se for de um motorista com aluno confirmado) ou o primeiro. */
+  const motoristaDaConversa = (user: SessionPayload, pedido: unknown): { driverId: number } | { status: number; erro: string } => {
+    if (user.role !== 'responsavel' || typeof user.userId !== 'number') return { status: 403, erro: 'Mensagens são entre o motorista e a família.' };
+    const meus = [...new Set(filhosDe(user.userId, user.studentId).filter(confirmada).map((p: any) => donoDaParada(p)))] as number[];
+    if (meus.length === 0) return { status: 403, erro: 'Você ainda não tem um aluno confirmado por um motorista.' };
+    if (pedido !== undefined && pedido !== '' && !meus.includes(Number(pedido))) return { status: 403, erro: 'Esse motorista não atende o seu aluno.' };
+    return { driverId: pedido !== undefined && pedido !== '' ? Number(pedido) : meus[0] };
+  };
+
+  app.get('/api/conversa/resumo', authenticate, rateLimiter(240, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    if (user.role !== 'responsavel' || typeof user.userId !== 'number') return res.json({ nao_lidas: 0 });
+    const meus = [...new Set(filhosDe(user.userId, user.studentId).filter(confirmada).map((p: any) => donoDaParada(p)))] as number[];
+    res.json({ nao_lidas: meus.reduce((t, d) => t + G.naoLidasDaFamilia(mensagensDB, d, user.userId as number), 0) });
+  });
+
+  app.get('/api/conversa', authenticate, rateLimiter(240, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const r = motoristaDaConversa(user, req.query.motorista);
+    if ('erro' in r) return res.status(r.status).json({ error: r.erro });
+    const familia = user.userId as number;
+    G.marcarLidasPelaFamilia(mensagensDB, r.driverId, familia, new Date().toISOString());
+    const perfil = perfilMotorista(r.driverId);
+    res.json({ motorista: { id: r.driverId, nome: perfil?.nome ?? 'Motorista' }, mensagens: ultimasMsgs(G.feedDaFamilia(mensagensDB, r.driverId, familia)) });
+  });
+
+  app.post('/api/conversa', authenticate, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const r = motoristaDaConversa(user, req.body?.motorista);
+    if ('erro' in r) return res.status(r.status).json({ error: r.erro });
+    const t = G.resolverTexto(req.body, false);
+    if (!t.ok) return res.status(400).json({ error: t.erro });
+    const nova = G.enviar(mensagensDB, { motorista: r.driverId, familia: user.userId as number, de: 'RESPONSAVEL', texto: t.texto });
+    auditLog('MENSAGEM_ENVIADA', user.email, `Família ${user.userId} → motorista ${r.driverId}`);
+    avisarMensagens(r.driverId, user.userId as number);
+    res.json({ sucesso: true, mensagem: msgPublica(nova) });
+  });
+
   // ---- Sugestão de rota: o app propõe a ordem pelas distâncias; o motorista reordena à mão e aplica ----
   app.get('/api/rotas/sugestao', authenticate, requireDriver, (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
@@ -2436,35 +2559,6 @@ async function startServer() {
     trip.viagem.status = 'AGENDADA';
     broadcast('DADOS_LIMPOS', {}, driverId);
     res.json({ sucesso: true });
-  });
-
-  app.post('/api/mensagens', authenticate, (req: Request, res: Response) => {
-    const user = (req as any).user as SessionPayload;
-    const { texto } = req.body;
-    let senderName = 'Responsável';
-    if (user.role === 'motorista') {
-      const dbDriver = usersDB.find(u => u.id === user.userId || (user.email && u.email.toLowerCase() === user.email.toLowerCase()));
-      senderName = dbDriver?.fullName ? `${dbDriver.fullName} (Motorista)` : 'Motorista';
-    } else if (user.role === 'admin') {
-      senderName = 'Administrador';
-    } else {
-      const dbResp = usersDB.find(u => u.id === user.userId);
-      senderName = dbResp?.fullName ? `${dbResp.fullName} (Responsável)` : 'Responsável';
-    }
-    const novaMsg = {
-      id: Math.random().toString(36).substring(2),
-      remetente: senderName,
-      papel: user.role === 'motorista' ? ('MOTORISTA' as const) : ('PAI' as const),
-      texto,
-      timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-    };
-    const msgDriverId = driverIdFor(user);
-    if (msgDriverId === null) return res.status(403).json({ error: 'Você ainda não está vinculado a um motorista.' });
-    const msgs = getTrip(msgDriverId).mensagens;
-    msgs.push(novaMsg);
-    if (msgs.length > 200) msgs.splice(0, msgs.length - 200); // guarda as 200 mais recentes: o registro da viagem não cresce sem limite
-    broadcast('MENSAGEM_ENVIADA', { mensagem: novaMsg }, msgDriverId);
-    res.json({ sucesso: true, mensagem: novaMsg });
   });
 
   // ALTERAR CONFIGURAÇÃO DE ENDEREÇOS DINÂMICOS (EXCLUSIVO MOTORISTA)

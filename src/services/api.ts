@@ -427,7 +427,8 @@ const eventosMapeados = [
   'DATABASE_RESET',
   'DADOS_LIMPOS',
   'GPS_ATUALIZADO',
-  'PROXIMIDADE_ATUALIZADA'
+  'PROXIMIDADE_ATUALIZADA',
+  'MENSAGENS_ATUALIZADAS'
 ];
 
 function conectarSSE() {
@@ -562,6 +563,19 @@ export interface MensalidadeFilho {
   id_aluno: number; aluno: string; motorista: string; mes: string; valor: number | null; vencimento_dia: number | null;
   status: StatusMensalidade; pago_em: string | null; meses_em_atraso: number;
   historico: { mes: string; status: StatusMensalidade; valor: number | null; pago_em: string | null }[];
+}
+
+export interface MensagemApp {
+  id: number; de: 'MOTORISTA' | 'RESPONSAVEL'; texto: string; rapida?: string; criado_em: string;
+  aviso: boolean; lida: boolean; lida_por?: number;
+}
+export interface FamiliaMensagens {
+  id: number; nome: string; filhos: string[]; nao_lidas: number;
+  ultima: { texto: string; de: 'MOTORISTA' | 'RESPONSAVEL'; criado_em: string } | null;
+}
+export interface ResumoMensagensMotorista {
+  rapidas: { id: string; texto: string }[]; familias: FamiliaMensagens[]; avisos: MensagemApp[];
+  total_nao_lidas: number; total_familias: number;
 }
 
 export interface LancamentoFin {
@@ -1631,6 +1645,49 @@ export const TransportRepository = {
     return d.filhos as MensalidadeFilho[];
   },
 
+  // ---- Mensagens motorista ↔ família ----
+  async resumoMensagensMotorista(): Promise<ResumoMensagensMotorista> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/mensagens/resumo`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível carregar as mensagens.');
+    return d as ResumoMensagensMotorista;
+  },
+  async conversaComFamilia(familiaId: number): Promise<{ familia: { id: number; nome: string; filhos: string[] }; mensagens: MensagemApp[] }> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/mensagens/familia/${familiaId}`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível abrir a conversa.');
+    return d;
+  },
+  async enviarParaFamilia(familiaId: number, msg: { texto?: string; rapida?: string }): Promise<MensagemApp> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/mensagens/familia/${familiaId}`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(msg) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível enviar a mensagem.');
+    return d.mensagem;
+  },
+  async enviarAvisoDaVan(msg: { texto?: string; rapida?: string }): Promise<MensagemApp> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/mensagens/aviso`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(msg) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível enviar o aviso.');
+    return d.mensagem;
+  },
+  async naoLidasDaFamilia(): Promise<number> {
+    const res = await fetch(`${getBaseUrl()}/api/conversa/resumo`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    return res.ok ? Number(d.nao_lidas) || 0 : 0;
+  },
+  async conversaDaFamilia(): Promise<{ motorista: { id: number; nome: string }; mensagens: MensagemApp[] }> {
+    const res = await fetch(`${getBaseUrl()}/api/conversa`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível abrir as mensagens.');
+    return d;
+  },
+  async enviarDaFamilia(texto: string): Promise<MensagemApp> {
+    const res = await fetch(`${getBaseUrl()}/api/conversa`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ texto }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível enviar a mensagem.');
+    return d.mensagem;
+  },
+
   // ---- Financeiro do motorista ----
   async resumoFinanceiro(mes?: string): Promise<ResumoFinanceiro> {
     const res = await fetch(`${getBaseUrl()}/api/motorista/financeiro/resumo${mes ? `?mes=${encodeURIComponent(mes)}` : ''}`, { headers: getAuthHeaders() });
@@ -1708,22 +1765,6 @@ export const TransportRepository = {
       const d = await res.json().catch(() => ({}));
       throw new Error(d.error || 'Não foi possível salvar o local.');
     }
-  },
-
-  async enviarMensagemDireta(remetente: string, papel: 'MOTORISTA' | 'PAI', texto: string) {
-    await sleep(50);
-    if (typeof window !== 'undefined' || true) {
-      const res = await fetch(`${getBaseUrl()}/api/mensagens`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({ remetente, papel, texto })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        return data.mensagem;
-      }
-    }
-    return { id: Math.random().toString(36), remetente, papel, texto, timestamp: '12:00' };
   },
 
   async iniciarRota(viagemId: number, sentido: 'IDA' | 'VOLTA' = 'IDA') {
