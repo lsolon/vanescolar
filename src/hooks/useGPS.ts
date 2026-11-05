@@ -164,6 +164,17 @@ export function useGPS(isAtivo: boolean, options: UseGPSOptions = {}) {
       }
       setErroGps(null);
       let ultimoEnvio = 0;
+      let pendente: GPSCoordinate | null = null;
+      let ultimoEnviado: GPSCoordinate | null = null;
+      const enviar = () => {
+        if (!pendente) return;
+        ultimoEnvio = Date.now();
+        ultimoEnviado = pendente;
+        TransportRepository.atualizarGPS(pendente);
+        pendente = null;
+      };
+      // A última posição nunca se perde: se o GPS parou de avisar dentro do intervalo, ela vai no próximo ciclo.
+      const timerEnvio = setInterval(enviar, intervalMs);
       let wakeLock: any = null;
       try { (navigator as any).wakeLock?.request('screen').then((w: any) => { wakeLock = w; }).catch(() => {}); } catch {}
       const watchId = navigator.geolocation.watchPosition(
@@ -181,17 +192,20 @@ export function useGPS(isAtivo: boolean, options: UseGPSOptions = {}) {
             etaNextStopMinutes: 0
           };
           setCoordenadas((prev) => ({ ...prev, ...telemetria }));
+          pendente = telemetria;
           const agora = Date.now();
-          if (agora - ultimoEnvio >= intervalMs) {
-            ultimoEnvio = agora;
-            TransportRepository.atualizarGPS(telemetria);
-          }
+          // Envia já se passou o intervalo ou se a van saltou para longe (ex.: mudança brusca de local).
+          const saltou = ultimoEnviado
+            ? Math.abs(telemetria.latitude - ultimoEnviado.latitude) + Math.abs(telemetria.longitude - ultimoEnviado.longitude) > 0.0005
+            : true;
+          if (agora - ultimoEnvio >= intervalMs || (saltou && agora - ultimoEnvio >= 2000)) enviar();
         },
         (err) => setErroGps(err.code === err.PERMISSION_DENIED ? 'permissao_negada' : 'indisponivel'),
         { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
       );
       return () => {
         navigator.geolocation.clearWatch(watchId);
+        clearInterval(timerEnvio);
         try { wakeLock?.release?.(); } catch {}
       };
     }
