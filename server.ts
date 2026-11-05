@@ -568,8 +568,27 @@ async function geocodificar(consulta: string): Promise<{ latitude: number; longi
   }
 }
 
-/** Posição da parada na rota do sentido: a volta tem ordem própria (cai na da ida enquanto não for definida). */
-const ordemNo = (p: any, sentido: string): number => (sentido === 'VOLTA' ? (p.ordem_volta ?? p.ordem_sequencia ?? 0) : (p.ordem_sequencia ?? 0));
+/** Situação da ordem da volta de um motorista: já salva por ele? maiores posições da ida e da volta. */
+function infoOrdemVolta(driverId: number): { salva: boolean; maxIda: number; maxVolta: number } {
+  let salva = false, maxIda = 0, maxVolta = 0;
+  for (const q of serverState.paradas as any[]) {
+    if (donoDaParada(q) !== driverId || !confirmada(q)) continue;
+    maxIda = Math.max(maxIda, q.ordem_sequencia ?? 0);
+    if (q.ordem_volta !== undefined && q.ordem_volta !== null) { salva = true; maxVolta = Math.max(maxVolta, q.ordem_volta); }
+  }
+  return { salva, maxIda, maxVolta };
+}
+/**
+ * Posição da parada na rota do sentido. Ida e volta têm ordem própria e o que o motorista salva fica valendo.
+ * Enquanto ele não salvar uma ordem para a volta, vale o inverso da ida; aluno novo entra no fim da volta já salva.
+ */
+const ordemNo = (p: any, sentido: string): number => {
+  if (sentido !== 'VOLTA') return p.ordem_sequencia ?? 0;
+  if (p.ordem_volta !== undefined && p.ordem_volta !== null) return p.ordem_volta;
+  if (!confirmada(p)) return p.ordem_sequencia ?? 0;
+  const info = infoOrdemVolta(donoDaParada(p));
+  return info.salva ? info.maxVolta + 1 + (p.ordem_sequencia ?? 0) / 1000 : info.maxIda + 1 - (p.ordem_sequencia ?? 0);
+};
 const sentidoDaViagem = (trip: Trip): 'IDA' | 'VOLTA' => (String((trip.viagem as any).sentido || 'IDA') === 'VOLTA' ? 'VOLTA' : 'IDA');
 
 const chaveEscola = (nome: unknown) => String(nome ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -2012,7 +2031,7 @@ async function startServer() {
     const item = (p: any, i: number) => ({ id: p.id, nome: p.nome_sanitizado, endereco: p.endereco_mascarado, temLocal: temLocalP(p), fixa: jaFeita(p), ordemAtual: posAtual.get(p.id), ordemSugerida: i + 1 });
     const semSugestao = String(req.query.modo) === 'atual' || !inicio || comLocal.length === 0;
     if (semSugestao) {
-      return res.json({ sentido, modo: 'atual', paradas: todas.map(item), semLocal: semLocal.length, escolaDefinida: !!escola, mudou: false });
+      return res.json({ sentido, modo: 'atual', paradas: todas.map(item), semLocal: semLocal.length, escolaDefinida: !!escola, mudou: false, ordemSalva: !volta || infoOrdemVolta(driverId).salva });
     }
     const fim = volta ? null : escola;
     const ord = ordenarPorProximidade(inicio!, comLocal, fim);
@@ -2027,7 +2046,8 @@ async function startServer() {
       escolaDefinida: !!escola,
       kmAtual: Number(kmAntes.toFixed(1)),
       kmSugerido: Number(kmDepois.toFixed(1)),
-      mudou: sugeridas.some((p: any, i: number) => posAtual.get(p.id) !== i + 1)
+      mudou: sugeridas.some((p: any, i: number) => posAtual.get(p.id) !== i + 1),
+      ordemSalva: !volta || infoOrdemVolta(driverId).salva
     });
   });
 

@@ -107,7 +107,7 @@ export const RotasIdaVolta: React.FC<{ sentidoAtivo?: Sent; versao?: number; onA
     setCarregando(true); setErro(null); setOk(null);
     try {
       const s = await TransportRepository.obterSugestaoRota(aba, modo);
-      setSug(s); setOrdem(s.paradas); setEditado(modo === 'sugestao' && s.mudou);
+      setSug(s); setOrdem(s.paradas); setEditado((modo === 'sugestao' && s.mudou) || s.ordemSalva === false);
     } catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao carregar a rota.'); }
     finally { setCarregando(false); }
   };
@@ -142,7 +142,8 @@ export const RotasIdaVolta: React.FC<{ sentidoAtivo?: Sent; versao?: number; onA
           <h3 className={`text-xs font-bold ${t.titulo}`}>Rota de {t.nome.toLowerCase()}</h3>
           {sug?.modo === 'sugestao' && sug.partida && <p className="text-[11px] text-slate-400">Ordem sugerida {PARTIDA[sug.partida] || ''}{aba === 'IDA' && sug.escolaDefinida ? ', terminando na escola' : ''}.</p>}
           {sug?.modo === 'sugestao' && typeof sug.kmSugerido === 'number' && <p className="text-[11px] text-slate-400">Distância em linha reta: ~{sug.kmSugerido} km (ordem atual: ~{sug.kmAtual} km).</p>}
-          {sug?.modo !== 'sugestao' && <p className="text-[11px] text-slate-400">Ordem em uso. Use as setas ou peça uma sugestão.</p>}
+          {sug?.modo !== 'sugestao' && sug?.ordemSalva === false && <p className="text-[11px] text-amber-200">A volta ainda não foi salva: por enquanto segue o inverso da ida. Ajuste com as setas e toque em Salvar para fixar.</p>}
+          {sug?.modo !== 'sugestao' && sug?.ordemSalva !== false && <p className="text-[11px] text-slate-400">Ordem em uso nas próximas viagens. Use as setas ou peça uma sugestão.</p>}
         </div>
         {sug && sug.semLocal > 0 && <p className="text-[11px] text-amber-300">{sug.semLocal} aluno(s) sem local marcado ficam no fim da sugestão.</p>}
         {sug && !sug.escolaDefinida && <p className="text-[11px] text-amber-300">Marque o local da escola para a sugestão considerar o trajeto até ela.</p>}

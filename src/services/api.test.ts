@@ -587,18 +587,18 @@ test('Horários da escola: responsável informa, van calcula ida/volta, motorist
 
   const ok = await jsonReq('PUT', `/api/alunos/${idB}/escola-horarios`, respB, { entrada: '07:30', saida: '12:00' });
   assert.equal(ok.status, 200, JSON.stringify(ok.data));
-  // B é a última parada (ordem 2): ida = 07:30 − 15 − 10 = 07:05; volta = 12:00 + 10 + 1×4 = 12:14
+  // B é a última parada da ida (ordem 2): ida = 07:30 − 15 − 10 = 07:05. A volta ainda não foi salva e segue o inverso da ida: B é o primeiro, volta = 12:00 + 10 = 12:10
   let p = await verB();
   assert.equal(p.escola_entrada, '07:30');
   assert.equal(p.hora_ida, '07:05');
-  assert.equal(p.hora_volta, '12:14');
+  assert.equal(p.hora_volta, '12:10');
   assert.equal(p.hora_prevista, '07:05');
 
   // A, ao informar o mesmo horário, vira a primeira parada: ida 4 min antes de B
   await jsonReq('PUT', `/api/alunos/${a.novaParada.id_aluno}/escola-horarios`, mot, { entrada: '07:30', saida: '12:00' });
   const ea = (await jsonReq('GET', '/api/estado', mot)).data.paradas.find((x: any) => x.id === a.novaParada.id);
   assert.equal(ea.hora_ida, '07:01');
-  assert.equal(ea.hora_volta, '12:10');
+  assert.equal(ea.hora_volta, '12:14', 'A é o último da volta (inverso da ida)');
 
   // motorista ajusta à mão; responsável vê; outro motorista não pode; limpar volta ao automático
   assert.equal((await jsonReq('PUT', `/api/paradas/${b.novaParada.id}/horarios`, outro, { horaIda: '06:00' })).status, 404);
@@ -606,7 +606,7 @@ test('Horários da escola: responsável informa, van calcula ida/volta, motorist
   assert.equal((await jsonReq('PUT', `/api/paradas/${b.novaParada.id}/horarios`, mot, { horaIda: '99:99' })).status, 400);
   assert.equal((await jsonReq('PUT', `/api/paradas/${b.novaParada.id}/horarios`, mot, { horaIda: '07:10' })).status, 200);
   assert.equal((await verB()).hora_ida, '07:10');
-  assert.equal((await verB()).hora_volta, '12:14', 'volta continua automática');
+  assert.equal((await verB()).hora_volta, '12:10', 'volta continua automática');
   await jsonReq('PUT', `/api/paradas/${b.novaParada.id}/horarios`, mot, { horaIda: null });
   assert.equal((await verB()).hora_ida, '07:05');
 
@@ -973,6 +973,50 @@ test('Ida e volta têm ordens independentes: a volta parte da escola e mudar uma
   const v2 = (await ordemDe('VOLTA')).paradas;
   assert.equal(v2.some((p: any) => p.id === B), false);
   assert.deepEqual(v2.map((p: any) => p.ordemAtual), [1, 2]);
+});
+
+test('Ordem por sentido: volta segue o inverso da ida até o motorista salvar; o que ele salva fica valendo', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'OrdemSentido');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola OS', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  const novo = async (nome: string) => (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: nome, latitude: -22.9, longitude: -43.2 })).data.novaParada.id as number;
+  const [A, B, C] = [await novo('Aluno A'), await novo('Aluno B'), await novo('Aluno C')];
+  const ordemDe = async (sentido: string) => (await jsonReq('GET', `/api/rotas/sugestao?sentido=${sentido}&modo=atual`, mot)).data;
+  const diario = async () => (await jsonReq('GET', '/api/estado', mot)).data.paradas as any[];
+  const porOrdem = (ps: any[], campo: string) => [...ps].sort((x, y) => x[campo] - y[campo]).map((p) => p.id);
+
+  // ida em A,B,C; a volta ainda não foi salva: aparece o inverso e avisa que não está salva
+  assert.deepEqual((await ordemDe('IDA')).paradas.map((p: any) => p.id), [A, B, C]);
+  const v0 = await ordemDe('VOLTA');
+  assert.deepEqual(v0.paradas.map((p: any) => p.id), [C, B, A], 'volta sem ordem salva = inverso da ida');
+  assert.equal(v0.ordemSalva, false);
+  assert.equal((await ordemDe('IDA')).ordemSalva, true);
+  let d = await diario();
+  assert.deepEqual(porOrdem(d, 'ordem_ida'), [A, B, C]);
+  assert.deepEqual(porOrdem(d, 'ordem_volta'), [C, B, A], 'diário recebe as duas ordens');
+
+  // reordenar a ida enquanto a volta não foi salva: a volta acompanha o inverso
+  await jsonReq('POST', '/api/rotas/ordem', mot, { ids: [B, A, C], sentido: 'IDA' });
+  assert.deepEqual((await ordemDe('VOLTA')).paradas.map((p: any) => p.id), [C, A, B]);
+
+  // o motorista salva a volta: passa a valer e não muda mais quando a ida muda
+  assert.equal((await jsonReq('POST', '/api/rotas/ordem', mot, { ids: [A, C, B], sentido: 'VOLTA' })).status, 200);
+  const v1 = await ordemDe('VOLTA');
+  assert.deepEqual(v1.paradas.map((p: any) => p.id), [A, C, B]);
+  assert.equal(v1.ordemSalva, true);
+  await jsonReq('POST', '/api/rotas/ordem', mot, { ids: [C, B, A], sentido: 'IDA' });
+  assert.deepEqual((await ordemDe('VOLTA')).paradas.map((p: any) => p.id), [A, C, B], 'volta salva não acompanha a ida');
+  assert.deepEqual((await ordemDe('IDA')).paradas.map((p: any) => p.id), [C, B, A]);
+
+  // vale nas próximas viagens: iniciar e encerrar a rota não desfaz a ordem salva
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'VOLTA' });
+  d = await diario();
+  assert.deepEqual(porOrdem(d, 'ordem_volta'), [A, C, B]);
+  assert.deepEqual(porOrdem(d, 'ordem_ida'), [C, B, A]);
+  await jsonReq('POST', '/api/rotas/encerrar', mot);
+  d = await diario();
+  assert.deepEqual(porOrdem(d, 'ordem_volta'), [A, C, B]);
+  assert.deepEqual(porOrdem(d, 'ordem_ida'), [C, B, A]);
 });
 
 test('Horário combinado: se a van está adiantada (ex.: aluno anterior faltou), o tempo e o aviso não prometem antes dele', async () => {
