@@ -92,6 +92,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const [fotoFalhou, setFotoFalhou] = useState<boolean>(false);
   const [carregando, setCarregando] = useState<boolean>(true);
   const [processandoAcaoId, setProcessandoAcaoId] = useState<number | null>(null);
+  const [reordenando, setReordenando] = useState(false);
   const [filtroStatus, setFiltroStatus] = useState<string>('TODOS');
   const [mensagemSucesso, setMensagemSucesso] = useState<string | null>(null);
   const [mostrarMapa, setMostrarMapa] = useState<boolean>(true);
@@ -397,7 +398,27 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const ausentes = paradas.filter((p) => p.status_embarque === 'AUSENTE').length;
 
   const ordemDoSentido = (p: any): number => (sentidoRota === 'VOLTA' ? (p.ordem_volta ?? p.ordem_sequencia) : (p.ordem_ida ?? p.ordem_sequencia)) ?? 0;
-  const paradasFiltradas = [...paradas].sort((a, b) => ordemDoSentido(a) - ordemDoSentido(b)).filter((p) => {
+  const paradasNaOrdem = [...paradas].sort((a, b) => ordemDoSentido(a) - ordemDoSentido(b));
+  /** Troca o aluno de lugar com o próximo pendente na direção pedida e salva: vale nas próximas viagens deste sentido até nova mudança. */
+  const moverNoDiario = async (item: any, d: -1 | 1) => {
+    const i = paradasNaOrdem.findIndex((x) => x.parada_id === item.parada_id);
+    let j = i + d;
+    while (j >= 0 && j < paradasNaOrdem.length && paradasNaOrdem[j].status_embarque !== 'PENDENTE') j += d;
+    if (i < 0 || j < 0 || j >= paradasNaOrdem.length) return;
+    const nova = [...paradasNaOrdem];
+    [nova[i], nova[j]] = [nova[j], nova[i]];
+    setReordenando(true);
+    try {
+      await TransportRepository.aplicarOrdemRota(nova.map((x) => Number(x.parada_id)), sentidoRota);
+      await carregarDadosZeroCache();
+      setMensagemSucesso(`Ordem da ${sentidoRota === 'VOLTA' ? 'volta' : 'ida'} salva para as próximas viagens.`);
+      setTimeout(() => setMensagemSucesso(null), 3500);
+    } catch (e) {
+      setMensagemSucesso(e instanceof Error ? e.message : 'Não foi possível salvar a ordem.');
+      setTimeout(() => setMensagemSucesso(null), 4500);
+    } finally { setReordenando(false); }
+  };
+  const paradasFiltradas = paradasNaOrdem.filter((p) => {
     if (filtroStatus === 'TODOS') return true;
     if (filtroStatus === 'PENDENTES') return p.status_embarque === 'PENDENTE';
     if (filtroStatus === 'A_BORDO') return p.status_embarque === 'EMBARCOU';
@@ -774,6 +795,12 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                       <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-rose-500/15 text-rose-400 border border-rose-500/30">
                         <AlertTriangle className="w-3 h-3" /> Ausente
                       </span>
+                    )}
+                    {filtroStatus === 'TODOS' && item.status_embarque === 'PENDENTE' && (
+                      <div role="group" aria-label={`Mudar a posição de ${item.nome_aluno_sanitizado} na ${sentidoRota === 'VOLTA' ? 'volta' : 'ida'}`} className="mt-2 flex justify-end gap-1.5">
+                        <button type="button" aria-label={`Subir ${item.nome_aluno_sanitizado}`} disabled={reordenando || !!processandoAcaoId} onClick={() => moverNoDiario(item, -1)} className="w-10 h-10 rounded-lg bg-slate-800 text-slate-200 text-sm cursor-pointer disabled:opacity-30">▲</button>
+                        <button type="button" aria-label={`Descer ${item.nome_aluno_sanitizado}`} disabled={reordenando || !!processandoAcaoId} onClick={() => moverNoDiario(item, 1)} className="w-10 h-10 rounded-lg bg-slate-800 text-slate-200 text-sm cursor-pointer disabled:opacity-30">▼</button>
+                      </div>
                     )}
                   </div>
                 </div>

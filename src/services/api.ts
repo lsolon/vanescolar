@@ -399,6 +399,8 @@ export interface SugestaoRota {
   paradas: { id: number; nome: string; endereco?: string; temLocal: boolean; fixa?: boolean; ordemAtual: number; ordemSugerida: number }[];
   semLocal: number;
   escolaDefinida?: boolean;
+  /** false só na volta que o motorista ainda não salvou (mostra o inverso da ida). */
+  ordemSalva?: boolean;
   kmAtual?: number;
   kmSugerido?: number;
   mudou: boolean;
