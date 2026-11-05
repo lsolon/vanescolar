@@ -104,6 +104,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
   // Aviso quando a van chega ao tempo escolhido (uma vez por rota).
   useEffect(() => {
     if (!modoReal || !prox) return;
+    if (prox.estado === 'embarcou' || prox.estado === 'entregue') { setAvisoProximidade(null); return; }
     if (prox.estado === 'aguardando' || prox.estado === 'encerrada') { avisoJaDisparado.current = false; return; }
     if (prox.avisoAtivo && !avisoJaDisparado.current && ['a_caminho', 'proxima'].includes(prox.estado)) {
       avisoJaDisparado.current = true;

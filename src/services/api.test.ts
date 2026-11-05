@@ -823,3 +823,86 @@ test('Privacidade: responsável não grava coordenadas do filho nem recebe mapa;
   // o motorista marca o ponto
   assert.equal((await jsonReq('PUT', `/api/paradas/${parada.id}/local`, mot, { latitude: -22.9, longitude: -43.2 })).status, 200);
 });
+
+test('Barra de deslocamento: a van avança pela distância até o embarque e depois até a escola (sem coordenadas)', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'Barra');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola Barra', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  const al = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Barra Um', latitude: -22.90, longitude: -43.20 })).data;
+  const resp = await novoResponsavel(al.codigoVinculo);
+  await jsonReq('POST', '/api/rotas/iniciar', mot);
+  const prox = async () => (await jsonReq('GET', '/api/proximidade', resp)).data.proximidade;
+
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.96, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  const p0 = await prox();
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.93, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  const p1 = await prox();
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.9005, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  const p2 = await prox();
+  assert.ok(p0.progresso < p1.progresso && p1.progresso < p2.progresso, `${p0.progresso} < ${p1.progresso} < ${p2.progresso}`);
+  assert.ok(p2.progresso > 0.9);
+  assert.equal(p2.posicao, undefined);
+
+  // aluno embarca; sem local da escola a barra fica cheia (comportamento antigo)
+  await jsonReq('POST', `/api/paradas/${al.novaParada.id}/status`, mot, { status: 'EMBARCOU' });
+  const semEscola = await prox();
+  assert.equal(semEscola.estado, 'embarcou');
+  assert.equal(semEscola.destino, undefined);
+
+  // motorista define a escola: a barra passa a acompanhar a van até lá
+  const escolas = (await jsonReq('GET', '/api/motorista/escolas', mot)).data.escolas;
+  assert.equal(escolas[0].nome, 'Escola Barra');
+  assert.equal((await jsonReq('PUT', '/api/motorista/escolas', mot, { nome: 'Outra', latitude: -22.8, longitude: -43.2 })).status, 404);
+  assert.equal((await jsonReq('PUT', '/api/motorista/escolas', mot, { nome: 'Escola Barra', latitude: 'x', longitude: 1 })).status, 400);
+  assert.equal((await jsonReq('PUT', '/api/motorista/escolas', mot, { nome: 'escola  barra', latitude: -22.80, longitude: -43.20 })).status, 200);
+  assert.equal((await jsonReq('PUT', '/api/motorista/escolas', resp, { nome: 'Escola Barra', latitude: -22.8, longitude: -43.2 })).status, 403, 'responsável não define escola');
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.90, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  const e0 = await prox();
+  assert.equal(e0.estado, 'embarcou');
+  assert.equal(e0.destino, 'escola');
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.85, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  const e1 = await prox();
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.805, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  const e2 = await prox();
+  assert.ok(e0.progresso < e1.progresso && e1.progresso < e2.progresso, `${e0.progresso} < ${e1.progresso} < ${e2.progresso}`);
+  assert.ok(e1.minutos < e0.minutos && e2.minutos <= e1.minutos);
+  assert.equal(e2.posicao, undefined);
+  assert.equal(JSON.stringify(e2).includes('-22.80'), false);
+});
+
+test('Sugerir rota: ordena pelas distâncias, o motorista reordena à mão e aplica; ordem inválida é recusada', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'Sug');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola Sug', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  // cadastrados fora de ordem: distâncias (ao sul → norte): C(-22.95) A(-22.93) D(-22.91) B(-22.92)... em linha
+  const A = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno A', latitude: -22.95, longitude: -43.20 })).data;
+  const B = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno B', latitude: -22.90, longitude: -43.20 })).data;
+  const C = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno C', latitude: -22.93, longitude: -43.20 })).data;
+  const S = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno S' })).data; // sem local
+  await jsonReq('PUT', '/api/motorista/escolas', mot, { nome: 'Escola Sug', latitude: -22.85, longitude: -43.20 });
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.98, longitude: -43.20, speedKmH: 0, accuracyMeters: 8 });
+
+  const r = await jsonReq('GET', '/api/rotas/sugestao?sentido=IDA', mot);
+  assert.equal(r.status, 200);
+  assert.equal(r.data.partida, 'gps');
+  const nomes = r.data.paradas.map((p: any) => p.nome.split(' ')[1].replace('.', ''));
+  assert.deepEqual(nomes.slice(0, 3), ['A', 'C', 'B'], 'sul → norte, terminando perto da escola');
+  assert.equal(nomes[3], 'S', 'sem local vai para o fim');
+  assert.equal(r.data.semLocal, 1);
+  assert.ok(r.data.kmSugerido <= r.data.kmAtual);
+  assert.equal(r.data.mudou, true);
+  assert.equal(JSON.stringify(r.data).includes('-22.9'), false, 'a sugestão não devolve coordenadas');
+
+  // aplica uma ordem escolhida à mão (B primeiro)
+  const ids = [B.novaParada.id, A.novaParada.id, C.novaParada.id, S.novaParada.id];
+  assert.equal((await jsonReq('POST', '/api/rotas/ordem', mot, { ids })).status, 200);
+  const dep = (await jsonReq('GET', '/api/estado', mot)).data.paradas.sort((x: any, y: any) => x.ordem_sequencia - y.ordem_sequencia);
+  assert.deepEqual(dep.map((p: any) => p.id), ids);
+  // inválidos
+  assert.equal((await jsonReq('POST', '/api/rotas/ordem', mot, { ids: ids.slice(1) })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/rotas/ordem', mot, { ids: [...ids.slice(0, 3), ids[0]] })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/rotas/ordem', mot, { ids: [...ids.slice(0, 3), 99999] })).status, 400);
+  const outro = await novoMotorista(adm, 'SugOutro');
+  assert.equal((await jsonReq('POST', '/api/rotas/ordem', outro, { ids })).status, 400, 'outro motorista não reordena a van alheia');
+  assert.equal((await jsonReq('GET', '/api/rotas/sugestao', undefined)).status, 401);
+});

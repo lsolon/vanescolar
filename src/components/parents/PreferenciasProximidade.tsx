@@ -12,7 +12,7 @@ const AVISOS = [3, 5, 10, 15, 20, 30];
 export const PreferenciasProximidade: React.FC<{ prefs: PrefsProximidade; onChange: (p: PrefsProximidade) => void }> = ({ prefs, onChange }) => {
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
-  const [aberto, setAberto] = useState(false);
+  const [aberto, setAberto] = useState(true);
 
   const salvar = async (novo: PrefsProximidade) => {
     const anterior = prefs;
@@ -32,7 +32,7 @@ export const PreferenciasProximidade: React.FC<{ prefs: PrefsProximidade; onChan
   return (
     <div className="mt-3 pt-3 border-t border-slate-800">
       <button type="button" onClick={() => setAberto(!aberto)} className="text-xs text-cyan-400 hover:underline cursor-pointer" aria-expanded={aberto}>
-        {aberto ? 'Fechar opções' : 'Personalizar barra e aviso'}
+        {aberto ? 'Esconder opções da barra' : 'Personalizar barra e aviso'}
       </button>
       {aberto && (
         <div className="mt-3 space-y-3">
