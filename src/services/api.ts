@@ -377,6 +377,7 @@ export interface ProximidadeVan {
   minutos: number | null;
   mapaLiberado: boolean;
   avisoAtivo: boolean;
+  estimativaPrecisa?: boolean;
   posicao?: { latitude: number; longitude: number; heading: number };
   atualizadoEm: string;
 }
@@ -1450,6 +1451,14 @@ export const TransportRepository = {
     const res = await fetch(`${getBaseUrl()}/api/filhos/${alunoId}/motorista`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(v) });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível trocar o motorista.');
+  },
+
+  async definirLocalFilho(alunoId: number, latitude: number, longitude: number): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/filhos/${alunoId}/local`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ latitude, longitude }) });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || 'Não foi possível salvar o local.');
+    }
   },
 
   async excluirFilho(alunoId: number): Promise<void> {

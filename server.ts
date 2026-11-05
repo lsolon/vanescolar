@@ -499,6 +499,8 @@ interface Proximidade {
   minutos: number | null;
   mapaLiberado: boolean;
   avisoAtivo: boolean;
+  /** true quando a estimativa usa a distância real até o aluno (local de embarque marcado) */
+  estimativaPrecisa?: boolean;
   posicao?: { latitude: number; longitude: number; heading: number };
   atualizadoEm: string;
 }
@@ -524,11 +526,22 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
   const antes = minhas.filter((p: any) => (p.ordem_sequencia ?? 0) < (mine.ordem_sequencia ?? 0));
   const faltam = antes.filter((p: any) => p.status_embarque === 'PENDENTE').length; // paradas antes da dele ainda não atendidas
   let minutos = (faltam + 1) * MIN_POR_PARADA;
+  let precisa = false;
   const gps = trip.gpsAtual;
-  if (gps.accuracyMeters > 0 && typeof mine.latitude === 'number' && typeof mine.longitude === 'number') {
-    const km = haversineKm(gps, mine);
-    const velocidade = Math.max(20, Math.min(50, gps.speedKmH || 0)); // km/h; evita estimativas absurdas com a van parada
-    minutos = Math.min(minutos, Math.max(1, Math.round((km / velocidade) * 60) + faltam));
+  const temLocal = (p: any) => typeof p.latitude === 'number' && typeof p.longitude === 'number';
+  if (gps.accuracyMeters > 0 && temLocal(mine)) {
+    // Caminho da van: posição atual → paradas pendentes antes do aluno (as que têm local) → aluno.
+    const pendentesAntes = antes.filter((p: any) => p.status_embarque === 'PENDENTE');
+    let ponto: { latitude: number; longitude: number } = gps;
+    let km = 0, semLocal = 0;
+    for (const p of pendentesAntes) {
+      if (temLocal(p)) { km += haversineKm(ponto, p); ponto = p; } else semLocal++;
+    }
+    km += haversineKm(ponto, mine);
+    // Distância em linha reta subestima o trajeto: fator 1,3. Velocidade real se a van anda; senão média urbana.
+    const v = (gps.speedKmH || 0) >= 8 ? Math.max(15, Math.min(50, gps.speedKmH)) : 25;
+    minutos = Math.max(1, Math.round((km * 1.3 / v) * 60 + pendentesAntes.length + semLocal * MIN_POR_PARADA));
+    precisa = true;
   }
   const proxima = faltam === 0;
   const progresso = Math.max(0, Math.min(0.97, (antes.length - faltam) / (antes.length + 1)));
@@ -538,7 +551,8 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
     progresso,
     minutos,
     mapaLiberado: proxima && gps.accuracyMeters > 0,
-    avisoAtivo: minutos <= avisoMin
+    avisoAtivo: minutos <= avisoMin,
+    estimativaPrecisa: precisa
   };
   if (out.mapaLiberado) out.posicao = { latitude: gps.latitude, longitude: gps.longitude, heading: gps.heading };
   return out;
@@ -1416,6 +1430,20 @@ async function startServer() {
     broadcast('NOVA_PARADA_CADASTRADA', { paradaId: nova.id }, motorista);
     const token = signToken({ role: 'responsavel', userId: rec.id, email: rec.email, studentId: rec.studentId, emailVerified: true });
     res.json({ sucesso: true, token, alunoId: nova.id_aluno });
+  });
+
+  // Responsável marca o local de embarque do filho (deixa a estimativa de chegada precisa).
+  app.put('/api/filhos/:id/local', authenticate, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    if (user.role !== 'responsavel') return res.status(403).json({ error: 'Acesso negado.' });
+    const filho: any = filhosDe(user.userId, user.studentId).find((p: any) => p.id_aluno === parseInt(req.params.id, 10));
+    if (!filho) return res.status(404).json({ error: 'Filho não encontrado.' });
+    const local = lerLocal(req.body?.latitude, req.body?.longitude);
+    if (!local) return res.status(400).json({ error: 'Localização inválida.' });
+    filho.latitude = local.latitude;
+    filho.longitude = local.longitude;
+    broadcast('STATUS_EMBARQUE_ATUALIZADO', { paradaId: filho.id }, donoDaParada(filho));
+    res.json({ sucesso: true });
   });
 
   // Muda o filho de van (precisa do código do novo motorista, ou de um já vinculado) — volta a ficar pendente.
