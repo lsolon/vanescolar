@@ -1042,6 +1042,8 @@ export const TransportRepository = {
             viagem_id: p.id_viagem,
             aluno_id: p.id_aluno,
             ordem_sequencia: p.ordem_sequencia,
+            ordem_ida: p.ordem_ida ?? p.ordem_sequencia,
+            ordem_volta: p.ordem_volta ?? p.ordem_sequencia,
             nome_aluno_sanitizado: p.nome_sanitizado || "Aluno",
             nome_completo_para_chamada: p.nome_aluno || "Aluno",
             endereco_mascarado: p.endereco_mascarado || "Endereço mascarado",

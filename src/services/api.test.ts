@@ -962,6 +962,12 @@ test('Ida e volta têm ordens independentes: a volta parte da escola e mudar uma
   assert.deepEqual((await ordemDe('VOLTA')).paradas.map((p: any) => p.id), ordemVoltaSug, 'volta intacta');
   assert.equal(JSON.stringify(await ordemDe('VOLTA')).includes('-22.9'), false, 'sem coordenadas');
 
+  // o diário do motorista recebe as duas ordens para mostrar o sentido escolhido
+  const est = (await jsonReq('GET', '/api/estado', mot)).data.paradas;
+  const porId = (id: number) => est.find((p: any) => p.id === id);
+  assert.deepEqual(novaIda.map((id) => porId(id).ordem_ida), [1, 2, 3]);
+  assert.deepEqual(ordemVoltaSug.map((id: number) => porId(id).ordem_volta), [1, 2, 3]);
+
   // aluno removido sai das duas; a volta continua numerada sem buracos
   await jsonReq('POST', `/api/paradas/${B}/remover`, mot);
   const v2 = (await ordemDe('VOLTA')).paradas;
