@@ -114,6 +114,8 @@ interface UserRecord {
   motoristasVinculados?: number[];
   veiculoModelo?: string;
   veiculoPlaca?: string;
+  /** Motorista: local de cada escola atendida (chave = nome normalizado) */
+  escolasLocal?: Record<string, { latitude: number; longitude: number }>;
   capacidade?: number;
   horarios?: string[];
   lgpdConsent: {
@@ -387,6 +389,8 @@ interface Trip {
   viagem: typeof serverState.viagem;
   gpsAtual: typeof serverState.gpsAtual;
   mensagens: typeof serverState.mensagens;
+  /** maior distância (km) vista por aluno desde o início da rota: base da barra de deslocamento */
+  refKm?: Record<string, number>;
 }
 const tripsDB = new Map<number, Trip>();
 tripsDB.set(1, { viagem: serverState.viagem, gpsAtual: serverState.gpsAtual, mensagens: serverState.mensagens });
@@ -506,9 +510,39 @@ interface Proximidade {
   avisoAtivo: boolean;
   /** true quando a estimativa usa a distância real até o aluno (local de embarque marcado) */
   estimativaPrecisa?: boolean;
+  /** a bordo: para onde a van segue (escola na ida, casa na volta) */
+  destino?: 'escola' | 'casa';
   posicao?: { latitude: number; longitude: number; heading: number };
   atualizadoEm: string;
 }
+const chaveEscola = (nome: unknown) => String(nome ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+function localDaEscola(driverId: number, nome: unknown): { latitude: number; longitude: number } | null {
+  const rec = usersDB.find((u) => u.id === driverId);
+  return rec?.escolasLocal?.[chaveEscola(nome)] ?? null;
+}
+const temLocalP = (p: any) => typeof p?.latitude === 'number' && typeof p?.longitude === 'number';
+
+/** Distância (km) do caminho: partida → pontos na ordem → destino opcional. */
+function caminhoKm(inicio: { latitude: number; longitude: number }, pontos: { latitude: number; longitude: number }[], destino?: { latitude: number; longitude: number } | null): number {
+  let km = 0, atual = inicio;
+  for (const p of pontos) { km += haversineKm(atual, p); atual = p; }
+  if (destino) km += haversineKm(atual, destino);
+  return km;
+}
+
+/** Barra de deslocamento: fração já percorrida, pela maior distância vista desde o início da rota. */
+function progressoPorDistancia(trip: Trip, chave: string, km: number): number | null {
+  trip.refKm = trip.refKm || {};
+  const ref = Math.max(trip.refKm[chave] ?? 0, km);
+  trip.refKm[chave] = ref;
+  return ref >= 0.3 ? Math.max(0, Math.min(0.97, 1 - km / ref)) : null;
+}
+
+function minutosPorKm(km: number, speedKmH: number, paradas: number): number {
+  const v = (speedKmH || 0) >= 8 ? Math.max(15, Math.min(50, speedKmH)) : 25;
+  return Math.max(1, Math.round((km * 1.3 / v) * 60 + paradas));
+}
+
 function computeProximity(driverId: number, studentId: number | undefined, avisoMin: number): Proximidade | null {
   if (!studentId) return null;
   const trip = getTrip(driverId);
@@ -520,46 +554,82 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
   const agora = new Date().toISOString();
   const st = String(trip.viagem.status);
   const rotaAtiva = st === 'EM_ANDAMENTO';
+  const sentido = String((trip.viagem as any).sentido || 'IDA');
+  const gps = trip.gpsAtual;
+  const gpsOk = gps.accuracyMeters > 0;
   const base = { rotaAtiva, mapaLiberado: false, avisoAtivo: false, atualizadoEm: agora };
   if (!confirmada(mine)) return { ...base, estado: 'aguardando', progresso: 0, minutos: null };
   if (mine.status_embarque === 'AUSENTE') return { ...base, estado: 'ausente', progresso: 0, minutos: null };
   if (mine.status_embarque === 'ENTREGUE') return { ...base, estado: 'entregue', progresso: 1, minutos: 0 };
-  if (mine.status_embarque === 'EMBARCOU') return { ...base, estado: 'embarcou', progresso: 1, minutos: 0 };
+  if (mine.status_embarque === 'EMBARCOU') {
+    // A bordo: a barra volta a acompanhar a van até o destino (escola na ida, casa na volta), sem mapa.
+    const destino = sentido === 'VOLTA' ? (temLocalP(mine) ? mine : null) : localDaEscola(driverId, mine.escola_destino);
+    if (rotaAtiva && gpsOk && destino) {
+      const paradasAteLa = sentido === 'VOLTA'
+        ? minhas.filter((p: any) => (p.ordem_sequencia ?? 0) < (mine.ordem_sequencia ?? 0) && p.status_embarque === 'EMBARCOU' && temLocalP(p))
+        : minhas.filter((p: any) => p.status_embarque === 'PENDENTE' && temLocalP(p));
+      const km = caminhoKm(gps, paradasAteLa, destino);
+      const prog = progressoPorDistancia(trip, `e${studentId}`, km) ?? 0;
+      const minutos = minutosPorKm(km, gps.speedKmH, paradasAteLa.length);
+      return { ...base, estado: 'embarcou', progresso: prog, minutos, destino: sentido === 'VOLTA' ? 'casa' : 'escola', estimativaPrecisa: true, avisoAtivo: false };
+    }
+    return { ...base, estado: 'embarcou', progresso: 1, minutos: 0 };
+  }
   if (st === 'FINALIZADA' || st === 'CONCLUIDA') return { ...base, estado: 'encerrada', progresso: 0, minutos: null };
   if (!rotaAtiva) return { ...base, estado: 'aguardando', progresso: 0, minutos: null };
+  // Na volta o aluno ainda está na escola até embarcar: a van não está "a caminho" da casa.
+  if (sentido === 'VOLTA') return { ...base, estado: 'aguardando', progresso: 0, minutos: null };
 
   const antes = minhas.filter((p: any) => (p.ordem_sequencia ?? 0) < (mine.ordem_sequencia ?? 0));
   const faltam = antes.filter((p: any) => p.status_embarque === 'PENDENTE').length; // paradas antes da dele ainda não atendidas
   let minutos = (faltam + 1) * MIN_POR_PARADA;
   let precisa = false;
-  const gps = trip.gpsAtual;
-  const temLocal = (p: any) => typeof p.latitude === 'number' && typeof p.longitude === 'number';
-  if (gps.accuracyMeters > 0 && temLocal(mine)) {
+  let progresso = Math.max(0, Math.min(0.97, (antes.length - faltam) / (antes.length + 1)));
+  if (gpsOk && temLocalP(mine)) {
     // Caminho da van: posição atual → paradas pendentes antes do aluno (as que têm local) → aluno.
     const pendentesAntes = antes.filter((p: any) => p.status_embarque === 'PENDENTE');
-    let ponto: { latitude: number; longitude: number } = gps;
-    let km = 0, semLocal = 0;
-    for (const p of pendentesAntes) {
-      if (temLocal(p)) { km += haversineKm(ponto, p); ponto = p; } else semLocal++;
-    }
-    km += haversineKm(ponto, mine);
-    // Distância em linha reta subestima o trajeto: fator 1,3. Velocidade real se a van anda; senão média urbana.
-    const v = (gps.speedKmH || 0) >= 8 ? Math.max(15, Math.min(50, gps.speedKmH)) : 25;
-    minutos = Math.max(1, Math.round((km * 1.3 / v) * 60 + pendentesAntes.length + semLocal * MIN_POR_PARADA));
+    const comLocal = pendentesAntes.filter(temLocalP);
+    const semLocal = pendentesAntes.length - comLocal.length;
+    const km = caminhoKm(gps, comLocal, mine);
+    minutos = minutosPorKm(km, gps.speedKmH, pendentesAntes.length + semLocal * (MIN_POR_PARADA - 1));
     precisa = true;
+    const porDistancia = progressoPorDistancia(trip, `a${studentId}`, km);
+    if (porDistancia !== null) progresso = porDistancia;
   }
   const proxima = faltam === 0;
-  const progresso = Math.max(0, Math.min(0.97, (antes.length - faltam) / (antes.length + 1)));
-  const out: Proximidade = {
-    ...base,
-    estado: proxima ? 'proxima' : 'a_caminho',
-    progresso,
-    minutos,
-    mapaLiberado: false, // o responsável nunca recebe o mapa nem a posição da van
-    avisoAtivo: minutos <= avisoMin,
-    estimativaPrecisa: precisa
-  };
-  return out;
+  return { ...base, estado: proxima ? 'proxima' : 'a_caminho', progresso, minutos, mapaLiberado: false, avisoAtivo: minutos <= avisoMin, estimativaPrecisa: precisa };
+}
+
+/**
+ * Sugere a ordem das paradas: vizinho mais próximo + melhoria 2-opt, com partida fixa e destino opcional.
+ * Retorna os índices (de `pts`) na ordem sugerida. `pts` só tem paradas com localização.
+ */
+function ordenarPorProximidade(inicio: { latitude: number; longitude: number }, pts: { latitude: number; longitude: number }[], fim: { latitude: number; longitude: number } | null): number[] {
+  const restantes = pts.map((_, i) => i);
+  const ordem: number[] = [];
+  let atual = inicio;
+  while (restantes.length) {
+    let melhor = 0;
+    for (let k = 1; k < restantes.length; k++) {
+      if (haversineKm(atual, pts[restantes[k]]) < haversineKm(atual, pts[restantes[melhor]])) melhor = k;
+    }
+    const idx = restantes.splice(melhor, 1)[0];
+    ordem.push(idx);
+    atual = pts[idx];
+  }
+  const custo = (o: number[]) => caminhoKm(inicio, o.map((i) => pts[i]), fim);
+  let melhorKm = custo(ordem), mudou = true, voltas = 0;
+  while (mudou && voltas++ < 50) {
+    mudou = false;
+    for (let i = 0; i < ordem.length - 1; i++) {
+      for (let j = i + 1; j < ordem.length; j++) {
+        const cand = [...ordem.slice(0, i), ...ordem.slice(i, j + 1).reverse(), ...ordem.slice(j + 1)];
+        const km = custo(cand);
+        if (km + 1e-9 < melhorKm) { ordem.splice(0, ordem.length, ...cand); melhorKm = km; mudou = true; }
+      }
+    }
+  }
+  return ordem;
 }
 
 /** ID de acesso: 3–30 caracteres (letras minúsculas, números, ponto, traço, sublinhado), sem @. */
@@ -1511,6 +1581,95 @@ async function startServer() {
       .forEach((p: any, i: number) => { p.ordem_sequencia = i + 1; });
   };
 
+  // ---- Escolas do motorista: ele define onde fica cada escola (destino da barra de deslocamento) ----
+  const escolasDoMotorista = (driverId: number) => {
+    const nomes = new Map<string, string>();
+    for (const p of serverState.paradas as any[]) {
+      if (donoDaParada(p) !== driverId || p.vinculo === 'RECUSADO' || !p.escola_destino) continue;
+      const k = chaveEscola(p.escola_destino);
+      if (!nomes.has(k)) nomes.set(k, String(p.escola_destino));
+    }
+    return [...nomes.entries()].map(([k, nome]) => ({ nome, local: usersDB.find((u) => u.id === driverId)?.escolasLocal?.[k] ?? null }));
+  };
+
+  app.get('/api/motorista/escolas', authenticate, requireDriver, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    res.json({ escolas: escolasDoMotorista(driverIdFor(user) as number) });
+  });
+
+  app.put('/api/motorista/escolas', authenticate, requireDriver, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const rec = usersDB.find((u) => u.id === user.userId) ?? usersDB.find((u) => u.id === driverId);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const k = chaveEscola(req.body?.nome);
+    if (!escolasDoMotorista(driverId).some((e) => chaveEscola(e.nome) === k)) return res.status(404).json({ error: 'Escola não encontrada entre os seus alunos.' });
+    const local = lerLocal(req.body?.latitude, req.body?.longitude);
+    if (!local) return res.status(400).json({ error: 'Localização inválida.' });
+    rec.escolasLocal = { ...(rec.escolasLocal || {}), [k]: local };
+    broadcast('HORARIOS_ATUALIZADOS', {}, driverId);
+    res.json({ sucesso: true });
+  });
+
+  // ---- Sugestão de rota: o app propõe a ordem pelas distâncias; o motorista reordena à mão e aplica ----
+  app.get('/api/rotas/sugestao', authenticate, requireDriver, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const trip = getTrip(driverId);
+    const volta = String(req.query.sentido || (trip.viagem as any).sentido || 'IDA').toUpperCase() === 'VOLTA';
+    const todas = serverState.paradas
+      .filter((p: any) => donoDaParada(p) === driverId && confirmada(p))
+      .sort((a: any, b: any) => (a.ordem_sequencia ?? 0) - (b.ordem_sequencia ?? 0));
+    // Quem já foi atendido (embarcou/entregue/ausente) fica onde está; só as paradas pendentes são reordenadas.
+    const feitas = todas.filter((p: any) => p.status_embarque !== 'PENDENTE');
+    const atuais = todas.filter((p: any) => p.status_embarque === 'PENDENTE');
+    const comLocal = atuais.filter(temLocalP);
+    const semLocal = atuais.filter((p: any) => !temLocalP(p));
+    const escolaDe = (p: any) => localDaEscola(driverId, p.escola_destino);
+    const escola = comLocal.map(escolaDe).find((x) => x) ?? atuais.map(escolaDe).find((x) => x) ?? null;
+    const gps = trip.gpsAtual;
+    let inicio: { latitude: number; longitude: number } | null = null, partida = '';
+    if (volta && escola) { inicio = escola; partida = 'escola'; }
+    else if (!volta && gps.accuracyMeters > 0) { inicio = { latitude: gps.latitude, longitude: gps.longitude }; partida = 'gps'; }
+    else if (!volta && escola && comLocal.length) {
+      inicio = comLocal.reduce((m: any, p: any) => (haversineKm(escola, p) > haversineKm(escola, m) ? p : m), comLocal[0]); partida = 'mais_distante';
+    } else if (comLocal.length) { inicio = comLocal[0]; partida = 'primeira'; }
+    const posAtual = new Map(todas.map((p: any, i: number) => [p.id, i + 1]));
+    const item = (p: any, i: number, fixa = false) => ({ id: p.id, nome: p.nome_sanitizado, endereco: p.endereco_mascarado, temLocal: temLocalP(p), fixa, ordemAtual: posAtual.get(p.id), ordemSugerida: i + 1 });
+    if (!inicio || comLocal.length === 0) {
+      return res.json({ sentido: volta ? 'VOLTA' : 'IDA', paradas: todas.map((p: any, i: number) => item(p, i, p.status_embarque !== 'PENDENTE')), semLocal: semLocal.length, escolaDefinida: !!escola, mudou: false });
+    }
+    const fim = volta ? null : escola;
+    const ord = ordenarPorProximidade(inicio, comLocal, fim);
+    const sugeridas = [...feitas, ...ord.map((i) => comLocal[i]), ...semLocal];
+    const kmAntes = caminhoKm(inicio, comLocal, fim), kmDepois = caminhoKm(inicio, ord.map((i) => comLocal[i]), fim);
+    res.json({
+      sentido: volta ? 'VOLTA' : 'IDA',
+      partida,
+      paradas: sugeridas.map((p: any, i: number) => item(p, i, p.status_embarque !== 'PENDENTE')),
+      semLocal: semLocal.length,
+      escolaDefinida: !!escola,
+      kmAtual: Number(kmAntes.toFixed(1)),
+      kmSugerido: Number(kmDepois.toFixed(1)),
+      mudou: sugeridas.some((p: any, i: number) => posAtual.get(p.id) !== i + 1)
+    });
+  });
+
+  // Aplica a ordem final escolhida pelo motorista (a sugerida, ou a que ele reordenou à mão).
+  app.post('/api/rotas/ordem', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((x: unknown) => Number(x)) : null;
+    const minhas = serverState.paradas.filter((p: any) => donoDaParada(p) === driverId && confirmada(p));
+    if (!ids || ids.length !== minhas.length || new Set(ids).size !== ids.length || !minhas.every((p: any) => ids.includes(p.id))) {
+      return res.status(400).json({ error: 'A ordem precisa conter exatamente os alunos confirmados da sua van, sem repetir.' });
+    }
+    ids.forEach((id: number, i: number) => { const p: any = minhas.find((x: any) => x.id === id); p.ordem_sequencia = i + 1; });
+    auditLog('ROTA_REORDENADA', user.email, `Nova ordem: ${ids.join(', ')}`);
+    broadcast('HORARIOS_ATUALIZADOS', {}, driverId);
+    res.json({ sucesso: true });
+  });
+
   // Motorista confirma o aluno e define o lugar na van (posicao opcional; padrão: no fim).
   app.post('/api/paradas/:id/confirmar', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
@@ -1769,6 +1928,7 @@ async function startServer() {
       (trip.viagem as any).sentido = sentido;
       (trip.viagem as any).periodo = sentido === 'VOLTA' ? 'MANHA_VOLTA' : 'MANHA_IDA';
       trip.viagem.status = 'EM_ANDAMENTO';
+      trip.refKm = {};
       if (mudou) {
         // Novo sentido: todos voltam a PENDENTE, exceto quem avisou ausência para este sentido.
         for (const p of serverState.paradas as any[]) {

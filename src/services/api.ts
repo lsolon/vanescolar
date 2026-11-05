@@ -386,9 +386,21 @@ export interface ProximidadeVan {
   mapaLiberado: boolean;
   avisoAtivo: boolean;
   estimativaPrecisa?: boolean;
+  destino?: 'escola' | 'casa';
   posicao?: { latitude: number; longitude: number; heading: number };
   atualizadoEm: string;
 }
+export interface SugestaoRota {
+  sentido: 'IDA' | 'VOLTA';
+  partida?: string;
+  paradas: { id: number; nome: string; endereco?: string; temLocal: boolean; fixa?: boolean; ordemAtual: number; ordemSugerida: number }[];
+  semLocal: number;
+  escolaDefinida?: boolean;
+  kmAtual?: number;
+  kmSugerido?: number;
+  mudou: boolean;
+}
+export interface EscolaMotorista { nome: string; local: { latitude: number; longitude: number } | null }
 export interface FilhoResumo { id_aluno: number; nome_aluno: string; escola_destino: string; vinculo: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO'; motorista: string | null }
 export interface PrefsProximidade { estilo: 'A' | 'B' | 'C'; avisoMin: number }
 
@@ -1463,6 +1475,29 @@ export const TransportRepository = {
     if (typeof window === 'undefined') return;
     localStorage.setItem(ALUNO_KEY, String(alunoId));
     window.dispatchEvent(new Event('van-token')); // reconecta a transmissão ao vivo com o filho escolhido
+  },
+
+  async obterSugestaoRota(sentido: 'IDA' | 'VOLTA'): Promise<SugestaoRota> {
+    const res = await fetch(`${getBaseUrl()}/api/rotas/sugestao?sentido=${sentido}`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível sugerir a rota.');
+    return d;
+  },
+
+  async aplicarOrdemRota(ids: number[]): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/rotas/ordem`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ ids }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Não foi possível aplicar a ordem.');
+  },
+
+  async obterEscolas(): Promise<EscolaMotorista[]> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/escolas`, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error('Não foi possível carregar as escolas.');
+    return (await res.json()).escolas || [];
+  },
+
+  async definirLocalEscola(nome: string, latitude: number, longitude: number): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/escolas`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ nome, latitude, longitude }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Não foi possível salvar o local da escola.');
   },
 
   async cadastrarFilho(params: {
