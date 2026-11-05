@@ -646,3 +646,134 @@ test('Admin confirma e-mail de responsável manualmente', async () => {
   const l = await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'senhaSegura123!' });
   assert.equal(l.data.emailVerified, true);
 });
+
+// ---------------------------------------------------------------------------
+// NOVO FLUXO: responsável cadastra filhos com o código do motorista; motorista confirma
+// ---------------------------------------------------------------------------
+async function novoResponsavelVerificado(adm: string) {
+  const email = `fam_${Date.now()}_${Math.random().toString(36).slice(2, 6)}@teste.com`;
+  const r = await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Família Teste', email, password: 'senhaSegura123!', lgpdConsent: true });
+  const lista = (await jsonReq('GET', '/api/admin/responsaveis', adm)).data.responsaveis;
+  await jsonReq('POST', `/api/admin/usuarios/${lista.find((x: any) => x.email === email).id}/confirmar-email`, adm);
+  return (await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'senhaSegura123!' })).data.token as string;
+}
+const FILHO = { escola: 'Colégio X', endereco: 'Rua das Flores, 10', pontoReferencia: 'Portão azul', escolaEntrada: '07:30', escolaSaida: '12:00' };
+
+test('Filhos: código do motorista é pedido uma vez; motorista confirma o lugar; irmãos vão ao mesmo motorista', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'Cod');
+  const outro = await novoMotorista(adm, 'CodOutro');
+  const codigo = (await jsonReq('GET', '/api/motorista/codigo', mot)).data.codigo;
+  assert.match(codigo, /^MOT-[0-9A-F]{6}$/);
+  assert.equal((await jsonReq('GET', '/api/motorista/codigo', mot)).data.codigo, codigo, 'código estável');
+  const codigoOutro = (await jsonReq('GET', '/api/motorista/codigo', outro)).data.codigo;
+  assert.notEqual(codigo, codigoOutro);
+
+  const fam = await novoResponsavelVerificado(adm);
+  // sem código / código errado
+  assert.equal((await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: 'Ana Luz' })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: 'Ana Luz', codigoMotorista: 'MOT-000000' })).status, 404);
+  // validações
+  assert.equal((await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: 'Ana Luz', codigoMotorista: codigo, escolaSaida: '06:00' })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: '', codigoMotorista: codigo })).status, 400);
+
+  // 1º filho com o código; 2º filho sem código (mesmo motorista já vinculado)
+  const f1 = await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: 'Ana Luz', codigoMotorista: codigo.toLowerCase(), telefone: '(21) 98888-7777' });
+  assert.equal(f1.status, 200, JSON.stringify(f1.data));
+  const motId = (await jsonReq('GET', '/api/estado', fam)).data.paradas[0].id_motorista;
+  const f2 = await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: 'Beto Luz', motoristaId: motId });
+  assert.equal(f2.status, 200, JSON.stringify(f2.data));
+  // motorista de outro código não vinculado exige o código
+  assert.equal((await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: 'Caio', motoristaId: 99999 })).status, 400);
+
+  // responsável vê os 2 filhos, ambos pendentes
+  let est = (await jsonReq('GET', '/api/estado', fam)).data;
+  assert.equal(est.filhos.length, 2);
+  assert.ok(est.filhos.every((f: any) => f.vinculo === 'PENDENTE'));
+  assert.equal(est.proximidade?.estado, 'aguardando');
+
+  // motorista vê as solicitações; quem não é dele não vê; responsável não confirma
+  let em = (await jsonReq('GET', '/api/estado', mot)).data.paradas;
+  assert.equal(em.length, 2);
+  assert.ok(em.every((p: any) => p.vinculo === 'PENDENTE'));
+  assert.equal((await jsonReq('GET', '/api/estado', outro)).data.paradas.length, 0);
+  const [pa, pb] = em;
+  assert.equal((await jsonReq('POST', `/api/paradas/${pa.id}/confirmar`, fam)).status, 403);
+  assert.equal((await jsonReq('POST', `/api/paradas/${pa.id}/confirmar`, outro)).status, 404);
+
+  // confirma o segundo na posição 1 e o primeiro no fim
+  assert.equal((await jsonReq('POST', `/api/paradas/${pb.id}/confirmar`, mot, { posicao: 1 })).data.ordem, 1);
+  assert.equal((await jsonReq('POST', `/api/paradas/${pa.id}/confirmar`, mot)).data.ordem, 2);
+  assert.equal((await jsonReq('POST', `/api/paradas/${pa.id}/confirmar`, mot)).status, 400, 'já confirmado');
+  em = (await jsonReq('GET', '/api/estado', mot)).data.paradas;
+  assert.deepEqual(em.map((p: any) => [p.id, p.ordem_sequencia]).sort(), [[pa.id, 2], [pb.id, 1]].sort());
+  // horários só dos confirmados: com a mesma escola, o 1º sai 4 min antes do 2º
+  const ida = (id: number) => em.find((p: any) => p.id === id).hora_ida;
+  assert.equal(ida(pb.id), '07:01');
+  assert.equal(ida(pa.id), '07:05');
+
+  // seleção de filho: ?aluno= troca o filho em foco
+  est = (await jsonReq('GET', `/api/estado?aluno=${pb.id_aluno}`, fam)).data;
+  assert.equal(est.filhoAtivo, pb.id_aluno);
+  assert.equal(est.paradas[0].id_aluno, pb.id_aluno);
+  // responsável não consegue focar filho de outra família
+  const fam2 = await novoResponsavelVerificado(adm);
+  assert.equal((await jsonReq('PUT', `/api/alunos/${pa.id_aluno}/escola-horarios`, fam2, { entrada: '08:00', saida: '12:00' })).status, 403);
+  assert.equal((await jsonReq('POST', `/api/alunos/${pa.id_aluno}/ausencia`, fam2, { motivo: 'x' })).status, 403);
+  assert.equal((await jsonReq('DELETE', `/api/filhos/${pa.id_aluno}`, fam2)).status, 404);
+});
+
+test('Filhos: dois motoristas, troca de van, remoção pelo motorista e exclusão pelo responsável', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const m1 = await novoMotorista(adm, 'Van1');
+  const m2 = await novoMotorista(adm, 'Van2');
+  const c1 = (await jsonReq('GET', '/api/motorista/codigo', m1)).data.codigo;
+  const c2 = (await jsonReq('GET', '/api/motorista/codigo', m2)).data.codigo;
+  const fam = await novoResponsavelVerificado(adm);
+
+  const a = (await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: 'Filho Um', codigoMotorista: c1 })).data;
+  const b = (await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: 'Filha Dois', codigoMotorista: c2 })).data;
+  assert.ok(a.alunoId && b.alunoId);
+  const p1 = (await jsonReq('GET', '/api/estado', m1)).data.paradas[0];
+  const p2 = (await jsonReq('GET', '/api/estado', m2)).data.paradas[0];
+  assert.equal((await jsonReq('GET', '/api/estado', m1)).data.paradas.length, 1, 'cada motorista vê só o seu');
+  await jsonReq('POST', `/api/paradas/${p1.id}/confirmar`, m1);
+  await jsonReq('POST', `/api/paradas/${p2.id}/confirmar`, m2);
+
+  // cada filho aponta para o seu motorista
+  const e1 = (await jsonReq('GET', `/api/estado?aluno=${a.alunoId}`, fam)).data;
+  const e2 = (await jsonReq('GET', `/api/estado?aluno=${b.alunoId}`, fam)).data;
+  assert.notEqual(e1.motorista.id, e2.motorista.id);
+  assert.equal(e1.filhos.length, 2);
+
+  // responsável não vê a posição bruta de nenhuma van
+  await jsonReq('POST', '/api/rotas/iniciar', m2);
+  await jsonReq('POST', '/api/gps', m2, { latitude: -22.777777, longitude: -43.111111, accuracyMeters: 5 });
+  // filho da van parada (m1) não recebe nada da posição da van do outro filho
+  const doOutro = (await jsonReq('GET', `/api/estado?aluno=${a.alunoId}`, fam)).data;
+  assert.equal(JSON.stringify(doOutro).includes('-22.777777'), false);
+  assert.equal(doOutro.gpsAtual.latitude, 0);
+
+  // motorista tira o aluno: some da lista dele; responsável vê RECUSADO e troca de van sem digitar código já vinculado
+  assert.equal((await jsonReq('POST', `/api/paradas/${p1.id}/remover`, m1)).status, 200);
+  assert.equal((await jsonReq('GET', '/api/estado', m1)).data.paradas.length, 0);
+  const ef = (await jsonReq('GET', `/api/estado?aluno=${a.alunoId}`, fam)).data;
+  assert.equal(ef.filhos.find((f: any) => f.id_aluno === a.alunoId).vinculo, 'RECUSADO');
+  const troca = await jsonReq('POST', `/api/filhos/${a.alunoId}/motorista`, fam, { motoristaId: e2.motorista.id });
+  assert.equal(troca.status, 200, JSON.stringify(troca.data));
+  assert.equal((await jsonReq('GET', '/api/estado', m2)).data.paradas.length, 2);
+  assert.equal((await jsonReq('GET', '/api/estado', m1)).data.paradas.length, 0);
+  // código errado na troca
+  assert.equal((await jsonReq('POST', `/api/filhos/${a.alunoId}/motorista`, fam, { codigoMotorista: 'MOT-FFFFFF' })).status, 404);
+
+  // trocar o código do motorista não derruba vínculos, mas o antigo deixa de valer
+  const novo = (await jsonReq('POST', '/api/motorista/codigo/trocar', m2)).data.codigo;
+  assert.notEqual(novo, c2);
+  assert.equal((await jsonReq('GET', `/api/estado?aluno=${b.alunoId}`, fam)).data.filhos.find((f: any) => f.id_aluno === b.alunoId).vinculo, 'CONFIRMADO');
+  assert.equal((await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: 'Outro', codigoMotorista: c2 })).status, 404);
+  assert.equal((await jsonReq('POST', '/api/filhos', (await novoResponsavelVerificado(adm)), { ...FILHO, nomeAluno: 'Novo', codigoMotorista: novo })).status, 200);
+
+  // responsável exclui filho; some do motorista
+  assert.equal((await jsonReq('DELETE', `/api/filhos/${b.alunoId}`, fam)).status, 200);
+  assert.equal((await jsonReq('GET', '/api/estado', m2)).data.paradas.filter((p: any) => p.id_aluno === b.alunoId).length, 0);
+});

@@ -155,6 +155,8 @@ export interface ParadaViagem {
   escola_entrada?: string;
   escola_saida?: string;
   ausencia_trecho?: 'IDA' | 'VOLTA' | 'AMBOS';
+  /** PENDENTE = aguardando o motorista confirmar; RECUSADO = motorista não aceitou/removeu */
+  vinculo?: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO';
   hora_embarque?: string;
   hora_desembarque?: string;
   latitude: number;
@@ -186,6 +188,9 @@ export interface ParadaMotoristaSanitizada {
   hora_volta?: string | null;
   escola_entrada?: string;
   escola_saida?: string;
+  vinculo?: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO';
+  /** Escola do aluno (para a solicitação pendente) */
+  escola_nome?: string;
   hora_embarque?: string;
   hora_desembarque?: string;
   motivo_ausencia?: string;

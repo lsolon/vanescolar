@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { TransportRepository } from '../../services/api';
+import { CampoHora } from '../shared/CampoHora';
 
 interface Props {
   alunoId: number | string;
@@ -45,14 +46,8 @@ export const HorariosEscola: React.FC<Props> = ({ alunoId, entrada, saida, horaI
       {editando ? (
         <form onSubmit={salvar} className="mt-2 space-y-2">
           <div className="grid grid-cols-2 gap-2">
-            <label className="text-[11px] text-slate-300">
-              Entrada na escola
-              <input type="time" required value={e} onChange={(x) => setE(x.target.value)} className="mt-1 w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-cyan-400" />
-            </label>
-            <label className="text-[11px] text-slate-300">
-              Saída da escola
-              <input type="time" required value={s} onChange={(x) => setS(x.target.value)} className="mt-1 w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-cyan-400" />
-            </label>
+            <div className="text-[11px] text-slate-300 space-y-1"><span id="lbl-entrada">Entrada na escola</span><CampoHora label="Entrada na escola" value={e} onChange={setE} horaPadrao="07" /></div>
+            <div className="text-[11px] text-slate-300 space-y-1"><span id="lbl-saida">Saída da escola</span><CampoHora label="Saída da escola" value={s} onChange={setS} horaPadrao="12" /></div>
           </div>
           {erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
           <div className="flex gap-2">

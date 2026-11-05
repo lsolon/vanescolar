@@ -59,6 +59,8 @@ import {
 import { LiveMap } from '../shared/LiveMap';
 import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 import { MeuIdAcesso } from '../shared/MeuIdAcesso';
+import { CampoHora } from '../shared/CampoHora';
+import { CodigoMotorista, SolicitacoesPendentes } from './CodigoESolicitacoes';
 
 interface DriverPanelProps {
   coordenadas: GPSCoordinate;
@@ -97,29 +99,17 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const [erroPin, setErroPin] = useState<string | null>(null);
 
   // Modal de Cadastro de Novo Aluno pelo Motorista
-  const [modalNovoAlunoAberto, setModalNovoAlunoAberto] = useState<boolean>(false);
-  const [novoAlunoNome, setNovoAlunoNome] = useState<string>('');
-  const [novoAlunoEndereco, setNovoAlunoEndereco] = useState<string>('');
-  const [novoAlunoPontoRef, setNovoAlunoPontoRef] = useState<string>('');
-  const [novoAlunoEscola, setNovoAlunoEscola] = useState<string>('Colégio Santa Mônica');
-  const [novoAlunoResponsavel, setNovoAlunoResponsavel] = useState<string>('');
-  const [novoAlunoTelefone, setNovoAlunoTelefone] = useState<string>('');
-  const [novoAlunoEntrada, setNovoAlunoEntrada] = useState<string>('');
-  const [novoAlunoSaida, setNovoAlunoSaida] = useState<string>('');
   const [sentidoRota, setSentidoRota] = useState<'IDA' | 'VOLTA'>('IDA');
   // Ajuste manual dos horários previstos de uma parada
   const [paradaHorarios, setParadaHorarios] = useState<{ id: number | string; nome: string } | null>(null);
   const [horaIdaEdit, setHoraIdaEdit] = useState('');
   const [horaVoltaEdit, setHoraVoltaEdit] = useState('');
   const [erroHorarios, setErroHorarios] = useState<string | null>(null);
-  const [novoAlunoLocal, setNovoAlunoLocal] = useState<LocalMarcado | null>(null);
   // Marcar o local de um aluno já cadastrado
   const [paradaMarcando, setParadaMarcando] = useState<{ id: number | string; nome: string } | null>(null);
   const [localMarcando, setLocalMarcando] = useState<LocalMarcado | null>(null);
   const [salvandoLocal, setSalvandoLocal] = useState(false);
   const [erroLocal, setErroLocal] = useState<string | null>(null);
-  const [cadastrandoAluno, setCadastrandoAluno] = useState<boolean>(false);
-  const [codigoGeradoSucesso, setCodigoGeradoSucesso] = useState<string | null>(null);
   const [copiado, setCopiado] = useState<boolean>(false);
 
   // Carrega dados sanitizados via Repository Pattern (Zero-Cache)
@@ -209,41 +199,6 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
       console.error('Erro ao atualizar status:', err);
     } finally {
       setProcessandoAcaoId(null);
-    }
-  };
-
-  // Cadastro de Novo Aluno na van pelo motorista
-  const handleCadastrarAluno = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!novoAlunoNome.trim() || !novoAlunoEndereco.trim()) return;
-    setCadastrandoAluno(true);
-    try {
-      const res = await TransportRepository.cadastrarNovoAlunoComCodigo({
-        nomeAluno: novoAlunoNome.trim(),
-        endereco: novoAlunoEndereco.trim(),
-        pontoReferencia: novoAlunoPontoRef.trim(),
-        escola: novoAlunoEscola.trim() || 'Colégio Santa Mônica',
-        nomeResponsavel: novoAlunoResponsavel.trim() || 'Responsável',
-        telefoneResponsavel: novoAlunoTelefone.trim() || '(21) 99999-8888',
-        ...(novoAlunoEntrada && novoAlunoSaida ? { escolaEntrada: novoAlunoEntrada, escolaSaida: novoAlunoSaida } : {}),
-        ...(novoAlunoLocal ? { latitude: novoAlunoLocal.latitude, longitude: novoAlunoLocal.longitude } : {})
-      });
-      setCodigoGeradoSucesso(res.codigoVinculo);
-      setNovoAlunoNome('');
-      setNovoAlunoEndereco('');
-      setNovoAlunoPontoRef('');
-      setNovoAlunoEscola('Colégio Santa Mônica');
-      setNovoAlunoResponsavel('');
-      setNovoAlunoTelefone('');
-      setNovoAlunoLocal(null);
-      setNovoAlunoEntrada('');
-      setNovoAlunoSaida('');
-      await carregarDadosZeroCache();
-      setMensagemSucesso(`Aluno cadastrado com sucesso! Código de vínculo: ${res.codigoVinculo}`);
-    } catch (err: unknown) {
-      console.error('Erro ao cadastrar aluno:', err);
-    } finally {
-      setCadastrandoAluno(false);
     }
   };
 
@@ -360,7 +315,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         {/* Modal de Desbloqueio com PIN */}
         {modalDesbloqueioAberto && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md">
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl text-left">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-sm w-full p-5 space-y-4 shadow-2xl text-left max-h-[calc(100dvh-1.5rem)] overflow-y-auto overscroll-contain">
               <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                 <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                   <Lock className="w-4 h-4 text-amber-400" />
@@ -419,7 +374,9 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   // ==========================================================================
   // TELA 2: OPERAÇÃO NORMAL COM ZERO-CACHE & MASCARAMENTO VISUAL
   // ==========================================================================
-  const paradas = viagemZeroCache?.paradas || [];
+  const todasParadas = viagemZeroCache?.paradas || [];
+  const pendentes = todasParadas.filter((p) => p.vinculo === 'PENDENTE');
+  const paradas = todasParadas.filter((p) => p.vinculo !== 'PENDENTE' && p.vinculo !== 'RECUSADO');
   const motorista = viagemZeroCache?.motorista;
   const totalAlunos = paradas.length;
   const embarcados = paradas.filter((p) => p.status_embarque === 'EMBARCOU').length;
@@ -641,6 +598,8 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           )}
         </div>
 
+        <CodigoMotorista nome={motorista?.nome} />
+        <SolicitacoesPendentes pendentes={pendentes} totalNaVan={paradas.length} onMudou={carregarDadosZeroCache} />
         <MeuIdAcesso />
 
         {/* DIÁRIO DE BORDO COM MASCARAMENTO VISUAL RIGOROSO */}
@@ -685,17 +644,6 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                 <span>End. Dinâmicos: {aceitaDinamicos ? 'LIGADO' : 'DESLIGADO'}</span>
               </button>
 
-              <button
-                onClick={() => {
-                  setCodigoGeradoSucesso(null);
-                  setModalNovoAlunoAberto(true);
-                }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs transition-all shadow-sm active:scale-95 cursor-pointer"
-                title="Cadastrar novo aluno na van e gerar código de vínculo"
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>+ Aluno</span>
-              </button>
 
               <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800 text-[11px]">
                 <button
@@ -731,19 +679,9 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
               <div className="space-y-1.5">
                 <h3 className="text-base font-bold text-slate-100">Van Vazia (0 Passageiros)</h3>
                 <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
-                  Este novo motorista ainda não possui alunos vinculados. Cadastre o primeiro aluno da sua rota para gerar o código de vínculo (ex: <strong>VAN-XXXX</strong>) para os pais.
+                  Você ainda não tem alunos na van. Passe o seu código (no cartão acima) aos responsáveis: eles cadastram os filhos e você confirma o lugar de cada um.
                 </p>
               </div>
-              <button
-                onClick={() => {
-                  setCodigoGeradoSucesso(null);
-                  setModalNovoAlunoAberto(true);
-                }}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs transition-all shadow-md shadow-amber-400/20 active:scale-95 cursor-pointer"
-              >
-                <UserPlus className="w-4 h-4" />
-                <span>Cadastrar Primeiro Aluno</span>
-              </button>
             </div>
           )}
 
@@ -974,7 +912,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
       {/* MODAL DE CONFIRMAÇÃO DO KILL-SWITCH REMOTO */}
       {modalKillSwitchAberto && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
-          <div className="bg-slate-900 border-2 border-rose-500/50 rounded-3xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+          <div className="bg-slate-900 border-2 border-rose-500/50 rounded-3xl max-w-sm w-full p-5 shadow-2xl space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto overscroll-contain">
             <div className="flex items-center gap-3 text-rose-400">
               <div className="p-2.5 rounded-2xl bg-rose-500/20 border border-rose-500/30">
                 <ShieldAlert className="w-6 h-6" />
@@ -1013,216 +951,19 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         </div>
       )}
 
-      {/* MODAL DE CADASTRO DE NOVO ALUNO / GERADOR DE CÓDIGO DE VÍNCULO */}
-      {modalNovoAlunoAberto && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-5 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-amber-400/20 text-amber-400">
-                  <UserPlus className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-slate-100">Cadastrar Novo Aluno</h3>
-                  <p className="text-[11px] text-slate-400">Adicione uma nova parada e gere o código para os pais</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setModalNovoAlunoAberto(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {codigoGeradoSucesso ? (
-              <div className="space-y-4 text-center py-2 animate-fadeIn">
-                <div className="w-12 h-12 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center mx-auto">
-                  <CheckCircle2 className="w-6 h-6" />
-                </div>
-                <div className="space-y-1">
-                  <h4 className="text-sm font-bold text-slate-100">Aluno Cadastrado com Sucesso!</h4>
-                  <p className="text-xs text-slate-400">
-                    Envie o código de vínculo abaixo para o responsável conectar o aplicativo dos pais:
-                  </p>
-                </div>
-
-                <div className="p-3 bg-slate-950 border-2 border-dashed border-amber-400/40 rounded-2xl flex items-center justify-between gap-2 max-w-xs mx-auto">
-                  <span className="font-mono text-xl font-black text-amber-300 tracking-wider">
-                    {codigoGeradoSucesso}
-                  </span>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(codigoGeradoSucesso);
-                      setCopiado(true);
-                      setTimeout(() => setCopiado(false), 2000);
-                    }}
-                    className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-400 text-xs font-bold flex items-center gap-1 transition-all"
-                    title="Copiar código de vínculo"
-                  >
-                    <Copy className="w-4 h-4" />
-                    <span>{copiado ? 'Copiado!' : 'Copiar'}</span>
-                  </button>
-                </div>
-
-                <div className="flex flex-col gap-2">
-                  <a
-                    href={`https://wa.me/?text=${encodeURIComponent(
-                      `Olá! Sou ${motorista?.nome || 'o motorista'} do transporte escolar. Seu código exclusivo de vínculo do aluno no aplicativo é: ${codigoGeradoSucesso}. Este código é de uso único.`
-                    )}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md flex items-center justify-center gap-2 transition-all cursor-pointer"
-                  >
-                    <MessageCircle className="w-4 h-4" />
-                    <span>Enviar Código via WhatsApp</span>
-                  </a>
-
-                  <button
-                    onClick={() => setModalNovoAlunoAberto(false)}
-                    className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs transition-all cursor-pointer"
-                  >
-                    Concluir e Ver no Diário de Bordo
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <form onSubmit={handleCadastrarAluno} className="space-y-3">
-                <div>
-                  <label className="text-[11px] font-bold text-slate-300 block mb-1">
-                    Nome Completo do Aluno *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: Pedro Henrique Silva"
-                    value={novoAlunoNome}
-                    onChange={(e) => setNovoAlunoNome(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-300 block mb-1">
-                    Endereço de Embarque *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Ex: Rua Tirol, 412 - Freguesia"
-                    value={novoAlunoEndereco}
-                    onChange={(e) => setNovoAlunoEndereco(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
-                      Ponto de Referência
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Ex: Ao lado da padaria"
-                      value={novoAlunoPontoRef}
-                      onChange={(e) => setNovoAlunoPontoRef(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
-                      Escola de Destino
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Ex: Colégio Santa Mônica"
-                      value={novoAlunoEscola}
-                      onChange={(e) => setNovoAlunoEscola(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
-                      Nome do Responsável
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Ex: Marcos Silva"
-                      value={novoAlunoResponsavel}
-                      onChange={(e) => setNovoAlunoResponsavel(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-300 block mb-1">
-                      Telefone / WhatsApp
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Ex: (21) 98765-4321"
-                      value={novoAlunoTelefone}
-                      onChange={(e) => setNovoAlunoTelefone(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-300 block mb-1">Entrada na escola</label>
-                    <input type="time" value={novoAlunoEntrada} onChange={(e) => setNovoAlunoEntrada(e.target.value)} className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400" />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-bold text-slate-300 block mb-1">Saída da escola</label>
-                    <input type="time" value={novoAlunoSaida} onChange={(e) => setNovoAlunoSaida(e.target.value)} className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400" />
-                  </div>
-                  <p className="col-span-2 text-[10px] text-slate-500">Opcional: o responsável também pode informar pelo app dele.</p>
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-300 block mb-1">Local de embarque (opcional)</label>
-                  <SeletorLocal valor={novoAlunoLocal} onChange={setNovoAlunoLocal} />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setModalNovoAlunoAberto(false)}
-                    className="py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={cadastrandoAluno}
-                    className="py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold shadow-md flex items-center justify-center gap-1.5 disabled:opacity-50 cursor-pointer"
-                  >
-                    {cadastrandoAluno ? <RefreshCw className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
-                    <span>Salvar e Gerar Código</span>
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
-
       {paradaHorarios && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 flex items-end sm:items-center justify-center p-3" role="dialog" aria-modal="true">
-          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 max-h-[calc(100dvh-1.5rem)] overflow-y-auto overscroll-contain">
             <h3 className="text-sm font-bold text-slate-100">Ajustar horários — {paradaHorarios.nome}</h3>
             <p className="text-[11px] text-slate-400">Os horários são calculados pela escola do aluno. Se mudar aqui, o seu valor passa a valer. Deixe vazio para voltar ao cálculo automático.</p>
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-[11px] font-bold text-slate-300 block mb-1">Horário de ida</label>
-                <input type="time" value={horaIdaEdit} onChange={(e) => setHoraIdaEdit(e.target.value)} className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100" />
+                <CampoHora label="Horário de ida" value={horaIdaEdit} onChange={setHoraIdaEdit} />
               </div>
               <div>
                 <label className="text-[11px] font-bold text-slate-300 block mb-1">Horário de volta</label>
-                <input type="time" value={horaVoltaEdit} onChange={(e) => setHoraVoltaEdit(e.target.value)} className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100" />
+                <CampoHora label="Horário de volta" value={horaVoltaEdit} onChange={setHoraVoltaEdit} horaPadrao="12" />
               </div>
             </div>
             {erroHorarios && <p role="alert" className="text-[11px] text-rose-300">{erroHorarios}</p>}
@@ -1236,7 +977,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
       {paradaMarcando && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 flex items-end sm:items-center justify-center p-3" role="dialog" aria-modal="true">
-          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 max-h-[92vh] overflow-y-auto">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 max-h-[calc(100dvh-1.5rem)] overflow-y-auto overscroll-contain">
             <h3 className="text-sm font-bold text-slate-100">Marcar local de embarque — {paradaMarcando.nome}</h3>
             <SeletorLocal valor={localMarcando} onChange={setLocalMarcando} />
             {erroLocal && <p role="alert" className="text-[11px] text-rose-300">{erroLocal}</p>}
