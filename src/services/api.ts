@@ -1030,7 +1030,7 @@ export const TransportRepository = {
             nome_aluno_sanitizado: p.nome_sanitizado || "Aluno",
             nome_completo_para_chamada: p.nome_aluno || "Aluno",
             endereco_mascarado: p.endereco_mascarado || "Endereço mascarado",
-            ponto_referencia_generico: p.ponto_referencia || "Próximo à via",
+            ponto_referencia_generico: p.ponto_referencia || "",
             escola_destino: p.escola_destino || "Colégio Santa Mônica",
             status_embarque: p.status_embarque,
             hora_prevista: p.hora_prevista,
@@ -1043,7 +1043,7 @@ export const TransportRepository = {
             hora_embarque: p.hora_embarque,
             hora_desembarque: p.hora_desembarque,
             motivo_ausencia: p.motivo_ausencia,
-            responsavel_contato_mascarado: p.responsavel_telefone_mascarado || "(21) 9****-4567",
+            responsavel_contato_mascarado: p.responsavel_telefone_mascarado || "",
             telefone_para_chamada: "",
             tem_localizacao: typeof p.latitude === 'number' && typeof p.longitude === 'number',
             google_maps_nav_url: typeof p.latitude === 'number' ? `https://www.google.com/maps/dir/?api=1&destination=${p.latitude},${p.longitude}` : undefined,
@@ -1188,7 +1188,7 @@ export const TransportRepository = {
               turno: 'MANHA',
               endereco_embarque: { rua: 'Rua Araguaia', numero: '850', latitude: -22.9348, longitude: -43.3412 },
               endereco_desembarque: { rua: 'Colégio Santa Mônica', numero: '100', latitude: -22.9360, longitude: -43.3420 },
-              referencia_mascarada: paradaServidor.ponto_referencia || 'Rua A... - Próximo à Praça',
+              referencia_mascarada: paradaServidor.ponto_referencia || '',
               nome_mascarado_lgpd: paradaServidor.nome_sanitizado,
               data_nascimento: '2017-06-14',
               endereco_embarque_real: paradaServidor.endereco_real || '',
@@ -1210,7 +1210,7 @@ export const TransportRepository = {
               email: 'pai@email.com',
               endereco_cobranca: paradaServidor.endereco_real || 'Rua Araguaia, 850',
               endereco_padrao: paradaServidor.endereco_real || '',
-              parentesco: 'Pai',
+              parentesco: '',
               bairro: 'Freguesia',
               cidade: 'Rio de Janeiro',
               created_at: new Date().toISOString()
@@ -1333,7 +1333,7 @@ export const TransportRepository = {
         turno: 'MANHA',
         endereco_embarque: { rua: 'Rua Araguaia', numero: '850', latitude: -22.9348, longitude: -43.3412 },
         endereco_desembarque: { rua: 'Colégio Santa Mônica', numero: '100', latitude: -22.9360, longitude: -43.3420 },
-        referencia_mascarada: paradaServidor.ponto_referencia || 'Rua A... - Próximo à Praça',
+        referencia_mascarada: paradaServidor.ponto_referencia || '',
         nome_mascarado_lgpd: paradaServidor.nome_sanitizado,
         data_nascimento: '2017-05-10',
         endereco_embarque_real: paradaServidor.endereco_real || '',
@@ -1463,6 +1463,16 @@ export const TransportRepository = {
     if (typeof window === 'undefined') return;
     localStorage.setItem(ALUNO_KEY, String(alunoId));
     window.dispatchEvent(new Event('van-token')); // reconecta a transmissão ao vivo com o filho escolhido
+  },
+
+  /** Endereço → coordenadas (OpenStreetMap, via servidor). Retorna null se não achar. */
+  async geocodificar(endereco: string): Promise<{ latitude: number; longitude: number; nome: string } | null> {
+    try {
+      const res = await fetch(`${getBaseUrl()}/api/geocodificar?q=${encodeURIComponent(endereco)}`, { headers: getAuthHeaders() });
+      if (!res.ok) return null;
+      const d = await res.json();
+      return d.encontrado ? { latitude: d.latitude, longitude: d.longitude, nome: d.nome } : null;
+    } catch { return null; }
   },
 
   async cadastrarFilho(params: {

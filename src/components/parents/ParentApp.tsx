@@ -320,12 +320,9 @@ export const ParentApp: React.FC<ParentAppProps> = ({
                 <h1 className="text-base font-bold text-slate-100 leading-tight">
                   {aluno.nome}
                 </h1>
-                <span className="bg-cyan-400/10 text-cyan-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-cyan-400/20">
-                  ALUNA
-                </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                Responsável: <strong className="text-slate-300">{responsavel.nome}</strong> ({responsavel.parentesco})
+                Responsável: <strong className="text-slate-300">{responsavel.nome}</strong>{responsavel.parentesco && responsavel.parentesco !== 'Responsável' ? ` (${responsavel.parentesco})` : ''}
               </p>
             </div>
           </div>
@@ -646,9 +643,6 @@ export const ParentApp: React.FC<ParentAppProps> = ({
             </div>
             <div>
               <h4 className="text-sm font-bold text-slate-100">{nomeEscola}</h4>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Turma: {aluno.turma || '4º Ano'} • Turno {aluno.turno === 'MANHA' ? 'Matutino' : 'Vespertino'}
-              </p>
             </div>
           </div>
         </div>

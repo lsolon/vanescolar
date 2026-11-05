@@ -733,13 +733,15 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                             {item.endereco_mascarado ? item.endereco_mascarado.replace(/\d+/g, '').replace(/(\.\.\.)\./g, '$1') : 'Endereço Restrito (LGPD)'}
                           </span>
                         </p>
-                        <p className="text-[11px] text-slate-400">
-                          Ref: <strong className="text-slate-300">{item.ponto_referencia_generico}</strong>
-                        </p>
+                        {item.ponto_referencia_generico && (
+                          <p className="text-[11px] text-slate-400">
+                            Ref: <strong className="text-slate-300">{item.ponto_referencia_generico}</strong>
+                          </p>
+                        )}
                       </div>
 
                       <p className="text-[11px] text-slate-400 mt-1">
-                        Contato Responsável: <span className="font-mono text-slate-300">{item.responsavel_contato_mascarado}</span>
+                        Contato Responsável: <span className="font-mono text-slate-300">{item.responsavel_contato_mascarado || 'não informado'}</span>
                       </p>
                     </div>
                   </div>
