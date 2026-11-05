@@ -761,7 +761,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     className="mt-0.5 rounded border-slate-700 bg-slate-900 text-amber-400 focus:ring-amber-400"
                   />
                   <span className="text-[11px] text-slate-300 leading-relaxed">
-                    Aceito os <strong>Termos Operacionais do Motorista</strong> e a <strong>Política de Privacidade LGPD</strong> para operadores de transporte.
+                    Aceito os <a href="/termos.html" target="_blank" rel="noreferrer" className="underline text-cyan-300"><strong>Termos de Uso</strong></a> e a <a href="/privacidade.html" target="_blank" rel="noreferrer" className="underline text-cyan-300"><strong>Política de Privacidade</strong></a>, incluindo os cuidados com os dados dos alunos.
                   </span>
                 </label>
               </div>
@@ -1114,7 +1114,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                     className="mt-0.5 rounded border-slate-700 bg-slate-900 text-cyan-400 focus:ring-cyan-400"
                   />
                   <span className="text-[11px] text-slate-300 leading-relaxed">
-                    Concordo com os <strong>Termos de Uso</strong> e dou meu consentimento específico para o tratamento de dados de menores sob minha responsabilidade conforme a <strong>LGPD (Art. 14)</strong>. (Versão do termo: v1.0-lgpd-art14)
+                    Concordo com os <a href="/termos.html" target="_blank" rel="noreferrer" className="underline text-cyan-300"><strong>Termos de Uso</strong></a> e a <a href="/privacidade.html" target="_blank" rel="noreferrer" className="underline text-cyan-300"><strong>Política de Privacidade</strong></a>, e dou meu consentimento específico para o tratamento de dados de menores sob minha responsabilidade conforme a <strong>LGPD (Art. 14)</strong>. (Versão do termo: v1.0-lgpd-art14)
                   </span>
                 </label>
               </div>
