@@ -777,3 +777,33 @@ test('Filhos: dois motoristas, troca de van, remoção pelo motorista e exclusã
   assert.equal((await jsonReq('DELETE', `/api/filhos/${b.alunoId}`, fam)).status, 200);
   assert.equal((await jsonReq('GET', '/api/estado', m2)).data.paradas.filter((p: any) => p.id_aluno === b.alunoId).length, 0);
 });
+
+test('ETA: com o local do aluno marcado, os minutos acompanham a distância da van (sem teto fixo)', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'Eta');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  const comLocal = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Com Local', latitude: -22.90, longitude: -43.20 })).data;
+  const respCom = await novoResponsavel(comLocal.codigoVinculo);
+  await jsonReq('POST', '/api/rotas/iniciar', mot);
+  const prox = async () => (await jsonReq('GET', '/api/proximidade', respCom)).data.proximidade;
+
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.95, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 }); // ~5,5 km
+  const longe = await prox();
+  assert.equal(longe.estimativaPrecisa, true);
+  assert.ok(longe.minutos > 8, `longe deve passar de 8 min, veio ${longe.minutos}`);
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.92, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 }); // ~2,2 km
+  const medio = await prox();
+  assert.ok(medio.minutos < longe.minutos && medio.minutos > 2, `${medio.minutos} < ${longe.minutos}`);
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.9005, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 }); // ~55 m
+  const perto = await prox();
+  assert.ok(perto.minutos <= 2, `perto: ${perto.minutos}`);
+
+  // sem local marcado: estimativa aproximada (por paradas), sinalizada ao responsável
+  const mot2 = await novoMotorista(adm, 'EtaSem');
+  const semLocal = (await jsonReq('POST', '/api/paradas/nova', mot2, { ...base, nomeAluno: 'Sem Local' })).data;
+  const respSem = await novoResponsavel(semLocal.codigoVinculo);
+  await jsonReq('POST', '/api/rotas/iniciar', mot2);
+  await jsonReq('POST', '/api/gps', mot2, { latitude: -22.95, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  const aprox = (await jsonReq('GET', '/api/proximidade', respSem)).data.proximidade;
+  assert.equal(aprox.estimativaPrecisa, false);
+});

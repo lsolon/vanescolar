@@ -123,6 +123,38 @@ export const BarraFilhos: React.FC<{ filhos: FilhoResumo[]; ativo: number | null
   </nav>
 );
 
+/** Aviso quando a estimativa é aproximada: o responsável marca o local de embarque para ela ficar precisa. */
+export const MarcarLocalFilho: React.FC<{ alunoId: number; onSalvo: () => void }> = ({ alunoId, onSalvo }) => {
+  const [aberto, setAberto] = useState(false);
+  const [local, setLocal] = useState<LocalMarcado | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+  const [salvando, setSalvando] = useState(false);
+  const salvar = async () => {
+    if (!local) return;
+    setSalvando(true); setErro(null);
+    try { await TransportRepository.definirLocalFilho(alunoId, local.latitude, local.longitude); setAberto(false); onSalvo(); }
+    catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao salvar.'); }
+    finally { setSalvando(false); }
+  };
+  return (
+    <section aria-label="Local de embarque" className="rounded-2xl p-3 border border-amber-400/40 bg-amber-400/10 text-xs space-y-2">
+      <p className="text-amber-100">O tempo de chegada está aproximado. Marque o ponto de embarque no mapa para ele acompanhar a van de verdade.</p>
+      {!aberto ? (
+        <button type="button" onClick={() => setAberto(true)} className="px-3 py-2 rounded-xl bg-amber-400 text-slate-950 font-bold min-h-[44px] cursor-pointer">Marcar local de embarque</button>
+      ) : (
+        <div className="space-y-2">
+          <SeletorLocal valor={local} onChange={setLocal} />
+          {erro && <p role="alert" className="text-rose-300">{erro}</p>}
+          <div className="flex gap-2">
+            <button type="button" disabled={!local || salvando} onClick={salvar} className="px-3 py-2 rounded-xl bg-cyan-500 text-slate-950 font-bold min-h-[44px] cursor-pointer disabled:opacity-50">{salvando ? 'Salvando…' : 'Salvar local'}</button>
+            <button type="button" onClick={() => setAberto(false)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 font-bold min-h-[44px] cursor-pointer">Cancelar</button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+};
+
 /** Situação do vínculo do filho em foco: aguardando, recusado (trocar de motorista) e excluir. */
 export const SituacaoVinculo: React.FC<{ filho: FilhoResumo; motoristas: Motorista[]; onMudou: () => void }> = ({ filho, motoristas, onMudou }) => {
   const [trocando, setTrocando] = useState(false);
