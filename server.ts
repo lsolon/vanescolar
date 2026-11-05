@@ -774,6 +774,8 @@ function getFilteredStateForUser(user: SessionPayload, pref?: number) {
       .map((p: any) => ({
         ...p,
         ordem_sequencia: ordemNo(p, sentidoAtivo),
+        ordem_ida: ordemNo(p, 'IDA'),
+        ordem_volta: ordemNo(p, 'VOLTA'),
         endereco_real: undefined,
         responsavel_telefone: undefined,
         responsavel_telefone_mascarado: p.responsavel_telefone ? `(${p.responsavel_telefone.slice(0,2)}) 9****-${p.responsavel_telefone.slice(-4)}` : undefined

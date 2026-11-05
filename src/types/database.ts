@@ -177,6 +177,8 @@ export interface ParadaMotoristaSanitizada {
   viagem_id: number | string;
   aluno_id: number | string;
   ordem_sequencia: number;
+  ordem_ida?: number;
+  ordem_volta?: number;
   nome_aluno_sanitizado: string; // Ex: "Maria C."
   nome_completo_para_chamada?: string; // Disponível em visualização restrita
   endereco_mascarado: string; // Ex: "Rua F... - Próximo à Praça"

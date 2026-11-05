@@ -44,9 +44,6 @@ import {
   ShieldAlert,
   Lock,
   Unlock,
-  Navigation,
-  Compass,
-  ExternalLink,
   EyeOff,
   Radio,
   FileCheck2,
@@ -110,6 +107,9 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   // Modal de Cadastro de Novo Aluno pelo Motorista
   const [aba, setAba] = useState<'diario' | 'mapa' | 'ajustes'>('diario');
   const [sentidoRota, setSentidoRota] = useState<'IDA' | 'VOLTA'>('IDA');
+  // Com a rota em andamento vale o sentido do servidor (sobrevive a recarregar a página); antes de iniciar, o escolhido no seletor.
+  const sentidoServidor: 'IDA' | 'VOLTA' | null = isRotaAtiva ? (String((viagemZeroCache?.viagem as any)?.sentido) === 'VOLTA' ? 'VOLTA' : 'IDA') : null;
+  useEffect(() => { if (sentidoServidor) setSentidoRota(sentidoServidor); }, [sentidoServidor]);
   // Ajuste manual dos horários previstos de uma parada
   const [paradaHorarios, setParadaHorarios] = useState<{ id: number | string; nome: string } | null>(null);
   const [horaIdaEdit, setHoraIdaEdit] = useState('');
@@ -393,7 +393,8 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const entregues = paradas.filter((p) => p.status_embarque === 'ENTREGUE').length;
   const ausentes = paradas.filter((p) => p.status_embarque === 'AUSENTE').length;
 
-  const paradasFiltradas = paradas.filter((p) => {
+  const ordemDoSentido = (p: any): number => (sentidoRota === 'VOLTA' ? (p.ordem_volta ?? p.ordem_sequencia) : (p.ordem_ida ?? p.ordem_sequencia)) ?? 0;
+  const paradasFiltradas = [...paradas].sort((a, b) => ordemDoSentido(a) - ordemDoSentido(b)).filter((p) => {
     if (filtroStatus === 'TODOS') return true;
     if (filtroStatus === 'PENDENTES') return p.status_embarque === 'PENDENTE';
     if (filtroStatus === 'A_BORDO') return p.status_embarque === 'EMBARCOU';
@@ -606,6 +607,13 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                 <span>Diário de Bordo da Rota</span>
                 <span className="text-xs font-normal text-slate-400">({paradasFiltradas.length} paradas)</span>
               </h2>
+              <p
+                data-testid="sentido-diario"
+                className={`mt-1 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-black ${sentidoRota === 'VOLTA' ? 'bg-amber-500/15 text-amber-200 border-amber-400/50' : 'bg-cyan-500/15 text-cyan-200 border-cyan-400/50'}`}
+              >
+                {sentidoRota === 'VOLTA' ? '↩ VOLTA · escola → casa' : '➜ IDA · casa → escola'}
+                <span className="font-semibold opacity-80">{isRotaAtiva ? '· em andamento' : '· rota não iniciada'}</span>
+              </p>
               <span className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
                 <EyeOff className="w-3 h-3 text-cyan-400" />
                 <span>Endereços completos mascarados (LGPD Menores)</span>
@@ -701,7 +709,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                         {item.nome_aluno_sanitizado.slice(0, 2)}
                       </div>
                       <span className="absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full bg-slate-800 border border-slate-700 text-[10px] font-bold text-amber-400 flex items-center justify-center">
-                        #{item.ordem_sequencia}
+                        #{ordemDoSentido(item)}
                       </span>
                     </div>
 
@@ -792,47 +800,16 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                   </button>
                 </div>
 
-                {/* BOTÃO DE NAVEGAÇÃO EXTERNA COM COORDENADAS PROTEGIDAS (WAZE / GOOGLE MAPS) */}
-                <div className="mt-3 p-2 bg-slate-950/60 rounded-xl border border-slate-800 flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <Compass className="w-4 h-4 text-cyan-400 shrink-0" />
-                    <span className="text-[11px] text-slate-300 font-medium">Navegação Protegida:</span>
-                  </div>
-
-                  {item.tem_localizacao === false ? (
-                    <button
-                      type="button"
-                      onClick={() => { setLocalMarcando(null); setErroLocal(null); setParadaMarcando({ id: item.parada_id, nome: item.nome_aluno_sanitizado }); }}
-                      className="px-2.5 py-1.5 rounded-lg bg-amber-400/10 hover:bg-amber-400/20 text-amber-300 border border-amber-400/30 text-[11px] font-bold cursor-pointer min-h-[36px]"
-                    >
-                      Marcar local de embarque
-                    </button>
-                  ) : (
-                  <div className="flex items-center gap-2">
-                    <a
-                      href={item.waze_nav_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-2.5 py-1 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 text-[11px] font-bold flex items-center gap-1 transition-colors"
-                      title="Navegar com Waze sem exibir endereço na tela"
-                    >
-                      <Navigation className="w-3 h-3" />
-                      <span>Waze</span>
-                    </a>
-
-                    <a
-                      href={item.google_maps_nav_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-2.5 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[11px] font-bold flex items-center gap-1 transition-colors"
-                      title="Navegar com Google Maps sem exibir endereço na tela"
-                    >
-                      <ExternalLink className="w-3 h-3" />
-                      <span>Maps</span>
-                    </a>
-                  </div>
-                  )}
-                </div>
+                {/* Navegação externa (Waze/Maps) oculta no Diário. Só aparece o aviso quando falta o ponto de embarque. */}
+                {item.tem_localizacao === false && (
+                  <button
+                    type="button"
+                    onClick={() => { setLocalMarcando(null); setErroLocal(null); setParadaMarcando({ id: item.parada_id, nome: item.nome_aluno_sanitizado }); }}
+                    className="mt-3 w-full px-2.5 py-1.5 rounded-lg bg-amber-400/10 hover:bg-amber-400/20 text-amber-300 border border-amber-400/30 text-[11px] font-bold cursor-pointer min-h-[36px]"
+                  >
+                    Marcar local de embarque
+                  </button>
+                )}
 
                 {/* BOTÕES DE AÇÃO GRANDES E RESPONSIVOS (EMBARCOU / ENTREGUE / AUSENTE) */}
                 <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-slate-800">
