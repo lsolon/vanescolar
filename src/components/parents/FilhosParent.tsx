@@ -58,11 +58,22 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
     if (!entrada || !saida) { setErro('Informe a entrada e a saída da escola.'); return; }
     setSalvando(true);
     try {
+      // O local de embarque é necessário para o tempo de chegada acompanhar a van: se não foi marcado, busca pelo endereço.
+      let pos = local;
+      if (!pos) {
+        const g = await TransportRepository.geocodificar(endereco);
+        if (g) pos = { latitude: g.latitude, longitude: g.longitude };
+      }
+      if (!pos) {
+        setErro('Não consegui achar o endereço no mapa. Use "Usar minha localização agora" ou toque no mapa para marcar o ponto de embarque.');
+        setSalvando(false);
+        return;
+      }
       await TransportRepository.cadastrarFilho({
         nomeAluno: nome.trim(), escola: escola.trim(), endereco: endereco.trim(), pontoReferencia: ref.trim(),
         escolaEntrada: entrada, escolaSaida: saida, telefone: tel.trim() || undefined,
         ...(motoristaId !== '' && motoristas.length > 0 ? { motoristaId } : { codigoMotorista: codigo.trim() }),
-        ...(local ? { latitude: local.latitude, longitude: local.longitude } : {})
+        latitude: pos.latitude, longitude: pos.longitude
       });
       onSalvo();
     } catch (err) {
@@ -96,8 +107,8 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
         <input value={tel} onChange={(e) => setTel(e.target.value)} inputMode="tel" maxLength={20} placeholder="(21) 98765-4321" className={`${campo} mt-1`} autoComplete="tel" />
       </label>
       <div>
-        <span className="text-[11px] text-slate-300 block mb-1">Local de embarque no mapa (opcional)</span>
-        <SeletorLocal valor={local} onChange={setLocal} />
+        <span className="text-[11px] text-slate-300 block mb-1">Local de embarque no mapa</span>
+        <SeletorLocal valor={local} onChange={setLocal} endereco={endereco} />
       </div>
       <EscolhaMotorista motoristas={motoristas} motoristaId={motoristaId} setMotoristaId={setMotoristaId} codigo={codigo} setCodigo={setCodigo} />
       {erro && <p role="alert" className="text-xs text-rose-300">{erro}</p>}

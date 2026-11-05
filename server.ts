@@ -509,6 +509,34 @@ interface Proximidade {
   posicao?: { latitude: number; longitude: number; heading: number };
   atualizadoEm: string;
 }
+// ---- Geocodificação (endereço → coordenadas) via OpenStreetMap/Nominatim, com cache e tempo limite ----
+const geoCache = new Map<string, { latitude: number; longitude: number; nome: string } | null>();
+async function geocodificar(consulta: string): Promise<{ latitude: number; longitude: number; nome: string } | null> {
+  const q = consulta.trim().replace(/\s+/g, ' ').slice(0, 200);
+  if (q.length < 5) return null;
+  const chave = q.toLowerCase();
+  if (geoCache.has(chave)) return geoCache.get(chave) ?? null;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 4000);
+  try {
+    // viewbox sobre o Rio de Janeiro apenas favorece resultados da região (bounded=0).
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&accept-language=pt-BR&viewbox=-43.9,-22.6,-42.7,-23.2&bounded=0&q=${encodeURIComponent(q)}`;
+    const r = await fetch(url, { signal: ctl.signal, headers: { 'User-Agent': 'VanEscolar/1.0 (contato@routinetech.com.br)' } });
+    if (!r.ok) return null;
+    const arr: any[] = await r.json();
+    const a = arr?.[0];
+    const lat = Number(a?.lat), lon = Number(a?.lon);
+    const out = Number.isFinite(lat) && Number.isFinite(lon) ? { latitude: Number(lat.toFixed(6)), longitude: Number(lon.toFixed(6)), nome: String(a.display_name || '').slice(0, 160) } : null;
+    if (geoCache.size > 500) geoCache.clear();
+    geoCache.set(chave, out);
+    return out;
+  } catch {
+    return null; // sem rede / tempo esgotado: o chamador segue sem coordenadas (não guarda no cache)
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function computeProximity(driverId: number, studentId: number | undefined, avisoMin: number): Proximidade | null {
   if (!studentId) return null;
   const trip = getTrip(driverId);
@@ -1428,7 +1456,13 @@ async function startServer() {
   };
 
   // Responsável cadastra um filho já ligando ao motorista; o motorista confirma o lugar na van.
-  app.post('/api/filhos', authenticate, rateLimiter(10, 60000), (req: Request, res: Response) => {
+  app.get('/api/geocodificar', authenticate, rateLimiter(20, 60000), async (req: Request, res: Response) => {
+    const g = await geocodificar(String(req.query.q ?? ''));
+    if (!g) return res.status(404).json({ encontrado: false, error: 'Não encontrei esse endereço no mapa.' });
+    res.json({ encontrado: true, ...g });
+  });
+
+  app.post('/api/filhos', authenticate, rateLimiter(10, 60000), async (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
     const rec = exigirResponsavelVerificado(user, res);
     if (!rec) return;
@@ -1441,10 +1475,12 @@ async function startServer() {
     const entrada = lerHorario(b.escolaEntrada), saida = lerHorario(b.escolaSaida);
     if (!entrada || !saida) return res.status(400).json({ error: 'Informe entrada e saída da escola no formato HH:MM.' });
     if (paraMin(saida) <= paraMin(entrada)) return res.status(400).json({ error: 'A saída precisa ser depois da entrada.' });
-    const local = lerLocal(b.latitude, b.longitude);
+    let local = lerLocal(b.latitude, b.longitude);
     if (b.latitude !== undefined && b.latitude !== null && !local) return res.status(400).json({ error: 'Localização inválida.' });
     const motorista = resolverMotorista(rec, b.codigoMotorista, b.motoristaId);
     if (typeof motorista === 'string') return res.status(typeof b.codigoMotorista === 'string' && b.codigoMotorista.trim() ? 404 : 400).json({ error: motorista });
+    // Sem local marcado: tenta achar pelo endereço, para o tempo de chegada acompanhar a van.
+    if (!local) { const g = await geocodificar(endereco); if (g) local = { latitude: g.latitude, longitude: g.longitude }; }
 
     const novoId = serverState.paradas.reduce((m: number, p: any) => Math.max(m, p.id % 1000, (p.id_aluno ?? 0) - 210), 0) + 1;
     const nova: any = {
@@ -1463,7 +1499,7 @@ async function startServer() {
       nome_sanitizado: `${nomeAluno.split(' ')[0]} ${nomeAluno.split(' ')[1]?.[0] || ''}.`,
       endereco_real: endereco,
       endereco_mascarado: mascararEnderecoSeguro(endereco),
-      ponto_referencia: texto(b.pontoReferencia, 120) || 'Próximo à via principal',
+      ponto_referencia: texto(b.pontoReferencia, 120),
       responsavel_nome: rec.fullName,
       responsavel_telefone: String(b.telefone ?? rec.phone ?? rec.whatsapp ?? '').replace(/\D/g, '').slice(0, 13),
       escola_destino: escola,
@@ -1862,7 +1898,7 @@ async function startServer() {
       nome_sanitizado: `${nomeAluno.split(' ')[0]} ${nomeAluno.split(' ')[1]?.[0] || ''}.`,
       endereco_real: endereco,
       endereco_mascarado: mascararEnderecoSeguro(endereco),
-      ponto_referencia: pontoReferencia || 'Próximo à via principal',
+      ponto_referencia: pontoReferencia || '',
       responsavel_nome: responsavelNome || 'Responsável Cadastrado',
       responsavel_telefone: telefone || '21999999999',
       escola_destino: escola || 'Colégio Santa Mônica',
