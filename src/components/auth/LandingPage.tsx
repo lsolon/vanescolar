@@ -248,9 +248,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         handleCarregarConvites();
         return;
       }
-      setIsEmailVerified(data.emailVerified ?? true);
       if (data.emailVerified) {
-        setSucessoReg('Autenticado com sucesso! Insira o código de vínculo abaixo.');
+        // Verificado: vai direto ao app (lá cadastra os filhos com o código do motorista).
+        onLoginParent();
       } else {
         setErroParent('E-mail não verificado. Por favor, verifique seu e-mail antes de continuar.');
       }
@@ -271,8 +271,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         handleCarregarConvites();
         return;
       }
-      setIsEmailVerified(true);
-      setSucessoReg('Conta Google autenticada com sucesso! Insira o código de vínculo.');
+      onLoginParent();
     } catch (err: any) {
       setErroParent(err.message || 'Falha na autenticação Google.');
     } finally {
@@ -320,19 +319,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     }
   };
 
-  const handleVinculoSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoadingVinculo(true);
-    setErroVinculo(null);
-    try {
-      await TransportRepository.vincularPaiPorCodigo(codigoVinculo);
-      onLoginParent(codigoVinculo);
-    } catch (err: any) {
-      setErroVinculo(err.message || 'Código de convite inválido ou e-mail não verificado.');
-    } finally {
-      setLoadingVinculo(false);
-    }
-  };
 
   const handleForgotSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -954,45 +940,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   {loadingParent ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Entrar</span>}
                 </button>
               </form>
-            ) : (
-              /* SE E-MAIL VERIFICADO: EXIBIR CAMPO DE CÓDIGO DE VÍNCULO */
-              <form onSubmit={handleVinculoSubmit} className="space-y-4">
-                <div className="p-3 bg-emerald-950/60 border border-emerald-500/40 rounded-xl text-xs text-emerald-300 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
-                  <span>E-mail verificado! Agora informe o código de convite enviado pelo motorista.</span>
-                </div>
-
-                <div>
-                  <label htmlFor="codigo-vinculo" className="block text-xs font-semibold text-cyan-300 mb-1">
-                    Código de Vínculo
-                  </label>
-                  <input
-                    id="codigo-vinculo"
-                    name="codigo"
-                    type="text"
-                    required
-                    value={codigoVinculo}
-                    onChange={(e) => setCodigoVinculo(e.target.value)}
-                    placeholder="Ex: VAN-201"
-                    className="w-full bg-slate-950 border border-cyan-500/40 rounded-xl px-3.5 py-2.5 text-xs text-white font-mono tracking-wider min-h-[44px]"
-                  />
-                </div>
-
-                {erroVinculo && (
-                  <div role="alert" className="p-3 bg-rose-950/60 border border-rose-500/40 rounded-xl text-xs text-rose-300">
-                    {erroVinculo}
-                  </div>
-                )}
-
-                <button
-                  type="submit"
-                  disabled={loadingVinculo}
-                  className="w-full py-3 px-4 bg-gradient-to-r from-cyan-400 to-indigo-400 text-slate-950 font-black rounded-xl text-sm flex items-center justify-center gap-2 transition-all shadow-md min-h-[44px] cursor-pointer disabled:opacity-50"
-                >
-                  {loadingVinculo ? <Loader2 className="w-4 h-4 animate-spin" /> : <span>Conectar ao Aluno</span>}
-                </button>
-              </form>
-            )}
+            ) : null}
 
             {/* BOTÃO CRIAR CONTA */}
             {!isEmailVerified && (

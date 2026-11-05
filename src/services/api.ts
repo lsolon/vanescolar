@@ -28,6 +28,18 @@ function getBaseUrl(): string {
   return 'http://localhost:3000';
 }
 
+/** Filho em foco no app do responsável (guardado no aparelho). */
+const ALUNO_KEY = 'van_aluno';
+function alunoSelecionado(): number | undefined {
+  if (typeof window === 'undefined') return undefined;
+  const n = parseInt(localStorage.getItem(ALUNO_KEY) || '', 10);
+  return Number.isFinite(n) ? n : undefined;
+}
+function qsAluno(prefixo: '?' | '&' = '?'): string {
+  const n = alunoSelecionado();
+  return n === undefined ? '' : `${prefixo}aluno=${n}`;
+}
+
 const ADMIN_TOKEN_KEY = 'adminToken';
 let memoryAdminToken: string | null = null;
 
@@ -368,6 +380,7 @@ export interface ProximidadeVan {
   posicao?: { latitude: number; longitude: number; heading: number };
   atualizadoEm: string;
 }
+export interface FilhoResumo { id_aluno: number; nome_aluno: string; escola_destino: string; vinculo: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO'; motorista: string | null }
 export interface PrefsProximidade { estilo: 'A' | 'B' | 'C'; avisoMin: number }
 
 type EventCallback = (eventType: string, payload: unknown) => void;
@@ -397,7 +410,7 @@ function conectarSSE() {
     if (sse) { sse.close(); sse = null; }
     const token = localStorage.getItem('van_token') || '';
     if (!token) return;
-    const conexao = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
+    const conexao = new EventSource(`/api/events?token=${encodeURIComponent(token)}${qsAluno('&')}`);
     sse = conexao;
     eventosMapeados.forEach((nomeEvento) => {
       conexao.addEventListener(nomeEvento, (e) => {
@@ -879,7 +892,7 @@ export const TransportRepository = {
 
   /** Resumo seguro da proximidade da van (sem coordenadas, exceto quando a próxima parada é a do aluno). */
   async getProximidade(): Promise<{ proximidade: ProximidadeVan | null; prefs: PrefsProximidade } | null> {
-    const res = await fetch(`${getBaseUrl()}/api/proximidade`, { headers: getAuthHeaders() });
+    const res = await fetch(`${getBaseUrl()}/api/proximidade${qsAluno()}`, { headers: getAuthHeaders() });
     if (!res.ok) return null;
     return res.json();
   },
@@ -993,6 +1006,8 @@ export const TransportRepository = {
             hora_volta: p.hora_volta,
             escola_entrada: p.escola_entrada,
             escola_saida: p.escola_saida,
+            vinculo: p.vinculo ?? 'CONFIRMADO',
+            escola_nome: p.escola_destino,
             hora_embarque: p.hora_embarque,
             hora_desembarque: p.hora_desembarque,
             motivo_ausencia: p.motivo_ausencia,
@@ -1120,7 +1135,7 @@ export const TransportRepository = {
     await sleep();
     if (typeof window !== 'undefined' || true) {
       try {
-        const res = await fetch(`${getBaseUrl()}/api/estado`, { headers: getAuthHeaders() });
+        const res = await fetch(`${getBaseUrl()}/api/estado${qsAluno()}`, { headers: getAuthHeaders() });
         if (res.ok) {
           const serverState = await res.json();
           const paradasServidor: any[] = serverState.paradas || [];
@@ -1182,6 +1197,7 @@ export const TransportRepository = {
               escola_entrada: paradaServidor.escola_entrada,
               escola_saida: paradaServidor.escola_saida,
               ausencia_trecho: paradaServidor.ausencia_trecho,
+              vinculo: paradaServidor.vinculo ?? 'CONFIRMADO',
               latitude: paradaServidor.latitude,
               longitude: paradaServidor.longitude,
               observacao: paradaServidor.observacao,
@@ -1401,6 +1417,77 @@ export const TransportRepository = {
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível salvar o ID.');
     return d.loginId as string;
+  },
+
+  /** Filhos do responsável e qual está em foco (null se o app não conseguir ler). */
+  async getFilhos(): Promise<{ filhos: FilhoResumo[]; filhoAtivo: number | null; motoristas: { id: number; nome: string }[] } | null> {
+    const res = await fetch(`${getBaseUrl()}/api/estado${qsAluno()}`, { headers: getAuthHeaders() });
+    if (!res.ok) return null;
+    const d = await res.json();
+    return { filhos: d.filhos || [], filhoAtivo: d.filhoAtivo ?? null, motoristas: d.motoristas || [] };
+  },
+
+  selecionarFilho(alunoId: number) {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem(ALUNO_KEY, String(alunoId));
+    window.dispatchEvent(new Event('van-token')); // reconecta a transmissão ao vivo com o filho escolhido
+  },
+
+  async cadastrarFilho(params: {
+    nomeAluno: string; escola: string; endereco: string; pontoReferencia?: string;
+    escolaEntrada: string; escolaSaida: string; telefone?: string;
+    codigoMotorista?: string; motoristaId?: number; latitude?: number; longitude?: number;
+  }): Promise<number> {
+    const res = await fetch(`${getBaseUrl()}/api/filhos`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(params) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível cadastrar o filho.');
+    if (d.token) AuthService.setSessionToken(d.token);
+    this.selecionarFilho(d.alunoId);
+    return d.alunoId as number;
+  },
+
+  async trocarMotoristaDoFilho(alunoId: number, v: { codigoMotorista?: string; motoristaId?: number }): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/filhos/${alunoId}/motorista`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(v) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível trocar o motorista.');
+  },
+
+  async excluirFilho(alunoId: number): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/filhos/${alunoId}`, { method: 'DELETE', headers: getAuthHeaders() });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || 'Não foi possível excluir.');
+    }
+    if (typeof window !== 'undefined' && alunoSelecionado() === alunoId) localStorage.removeItem(ALUNO_KEY);
+  },
+
+  async obterCodigoMotorista(): Promise<string> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/codigo`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível obter o código.');
+    return d.codigo as string;
+  },
+
+  async trocarCodigoMotorista(): Promise<string> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/codigo/trocar`, { method: 'POST', headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível trocar o código.');
+    return d.codigo as string;
+  },
+
+  async confirmarAluno(paradaId: number | string, posicao?: number): Promise<number> {
+    const res = await fetch(`${getBaseUrl()}/api/paradas/${paradaId}/confirmar`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(posicao ? { posicao } : {}) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível confirmar.');
+    return d.ordem as number;
+  },
+
+  async removerAlunoDaVan(paradaId: number | string): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/paradas/${paradaId}/remover`, { method: 'POST', headers: getAuthHeaders() });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.error || 'Não foi possível remover.');
+    }
   },
 
   async definirLocalParada(paradaId: number | string, latitude: number, longitude: number): Promise<void> {

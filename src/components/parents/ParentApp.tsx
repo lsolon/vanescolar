@@ -24,12 +24,13 @@ import {
   GPSCoordinate
 } from '../../types/database';
 import { TransportRepository, subscribeToDatabaseChanges } from '../../services/api';
-import type { ProximidadeVan, PrefsProximidade } from '../../services/api';
+import type { ProximidadeVan, PrefsProximidade, FilhoResumo } from '../../services/api';
 import { isDemoMode } from '../../services/demo';
 import { ProximidadeBar } from '../shared/ProximidadeBar';
 import { RealMap } from '../shared/RealMap';
 import { PreferenciasProximidade } from './PreferenciasProximidade';
 import { HorariosEscola } from './HorariosEscola';
+import { AdicionarFilho, BarraFilhos, SituacaoVinculo } from './FilhosParent';
 import { MeuIdAcesso } from '../shared/MeuIdAcesso';
 import {
   MapPin,
@@ -113,6 +114,8 @@ export const ParentApp: React.FC<ParentAppProps> = ({
     }
   }, [modoReal, prox]);
   const [erroCarga, setErroCarga] = useState<boolean>(false);
+  const [filhosInfo, setFilhosInfo] = useState<{ filhos: FilhoResumo[]; filhoAtivo: number | null; motoristas: { id: number; nome: string }[] }>({ filhos: [], filhoAtivo: null, motoristas: [] });
+  const [adicionando, setAdicionando] = useState(false);
 
   // No modo demonstração (?demo=true) usa o aluno de exemplo; em uso real, o aluno vinculado ao responsável.
   const isDemo = (typeof window !== 'undefined' && window.location.search.includes('demo=true'))
@@ -123,6 +126,10 @@ export const ParentApp: React.FC<ParentAppProps> = ({
   const carregarDados = async () => {
     try {
       const info = await TransportRepository.getDadosAlunoParaPais(alunoDemoId);
+      if (!isDemo) {
+        const f = await TransportRepository.getFilhos();
+        if (f) setFilhosInfo(f);
+      }
       setDados(info);
       setErroCarga(false);
     } catch (err) {
@@ -208,7 +215,19 @@ export const ParentApp: React.FC<ParentAppProps> = ({
     );
   }
 
-  // Sem aluno vinculado (primeiro acesso) ou falha de carga: tela amigável em vez de tela em branco
+  // Primeiro acesso: o responsável cadastra o filho com o código do motorista
+  if (!isDemo && !erroCarga && filhosInfo.filhos.length === 0) {
+    return (
+      <div className="h-full overflow-y-auto bg-slate-950 text-slate-200 p-4">
+        <div className="max-w-md mx-auto pb-10">
+          <AdicionarFilho primeiro motoristas={filhosInfo.motoristas} onSalvo={() => { setCarregando(true); carregarDados(); }} />
+          {onLogout && <button onClick={onLogout} className="mt-4 text-xs text-slate-400 underline cursor-pointer min-h-[44px]">Sair</button>}
+        </div>
+      </div>
+    );
+  }
+
+  // Falha de carga: tela amigável em vez de tela em branco
   if (!dados || !dados.parada || !dados.aluno) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 bg-slate-950 text-slate-200 p-6 text-center">
@@ -219,7 +238,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
         <p className="text-sm text-slate-400 max-w-xs">
           {erroCarga
             ? 'Verifique sua conexão e tente novamente.'
-            : 'Peça ao motorista o código de vínculo do seu filho(a) e use a opção de vincular para acompanhar a van.'}
+            : 'Escolha um filho na barra acima ou cadastre um novo.'}
         </p>
         <div className="flex gap-2">
           <button
@@ -354,6 +373,21 @@ export const ParentApp: React.FC<ParentAppProps> = ({
 
       {/* CONTEÚDO PRINCIPAL (SCROLLABLE) */}
       <main className="flex-1 overflow-y-auto p-4 space-y-4">
+        {modoReal && filhosInfo.filhos.length > 0 && (
+          <>
+            <BarraFilhos
+              filhos={filhosInfo.filhos}
+              ativo={filhosInfo.filhoAtivo}
+              onEscolher={(id) => { TransportRepository.selecionarFilho(id); setCarregando(true); carregarDados(); }}
+              onAdicionar={() => setAdicionando(true)}
+            />
+            {(() => {
+              const f = filhosInfo.filhos.find((x) => x.id_aluno === filhosInfo.filhoAtivo);
+              return f ? <SituacaoVinculo filho={f} motoristas={filhosInfo.motoristas} onMudou={() => { setCarregando(true); carregarDados(); }} /> : null;
+            })()}
+          </>
+        )}
+
         {modoReal && (
           <HorariosEscola
             alunoId={dados.aluno.id}
@@ -618,9 +652,17 @@ export const ParentApp: React.FC<ParentAppProps> = ({
       </main>
 
       {/* MODAL: AVISAR AUSÊNCIA (REQUISITO EXPLÍCITO) */}
+      {adicionando && (
+        <div className="fixed inset-0 z-50 bg-slate-950/90 overflow-y-auto overscroll-contain p-3" role="dialog" aria-modal="true">
+          <div className="max-w-md mx-auto bg-slate-900 border border-slate-800 rounded-2xl p-4 my-2">
+            <AdicionarFilho motoristas={filhosInfo.motoristas} onCancelar={() => setAdicionando(false)} onSalvo={() => { setAdicionando(false); setCarregando(true); carregarDados(); }} />
+          </div>
+        </div>
+      )}
+
       {modalAusenciaAberto && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4 max-h-[calc(100dvh-1.5rem)] overflow-y-auto overscroll-contain">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-xl bg-rose-500/10 text-rose-400 border border-rose-500/20">

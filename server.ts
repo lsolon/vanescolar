@@ -107,6 +107,10 @@ interface UserRecord {
   prefs?: { estilo: 'A' | 'B' | 'C'; avisoMin: number };
   phone?: string;
   whatsapp?: string;
+  /** Motorista: código que ele passa aos responsáveis (MOT-XXXXXX) */
+  codigoMotorista?: string;
+  /** Responsável: motoristas cujo código já foi informado (só pede uma vez) */
+  motoristasVinculados?: number[];
   veiculoModelo?: string;
   veiculoPlaca?: string;
   capacidade?: number;
@@ -242,6 +246,7 @@ interface SSEClient {
   role: 'motorista' | 'responsavel' | 'admin';
   studentId?: number;
   userId?: number;
+  alunoPref?: number;
 }
 
 let sseClients: SSEClient[] = [];
@@ -423,11 +428,30 @@ function donoDaParada(p: any): number {
   return p?.id_motorista ?? 1;
 }
 
+/** Aluno ainda não confirmado pelo motorista (ou recusado) não entra na rota. */
+const confirmada = (p: any) => p?.vinculo === undefined || p.vinculo === 'CONFIRMADO';
+
+/** Filhos (paradas) de um responsável. `legacy` = studentId antigo do token. */
+function filhosDe(userId?: number, legacy?: number): any[] {
+  return serverState.paradas.filter((p: any) => (userId !== undefined && p.vinculado_usuario_id === userId) || (legacy !== undefined && p.id_aluno === legacy));
+}
+const ehFilhoDe = (user: { userId?: number; studentId?: number }, alunoId: number) =>
+  filhosDe(user.userId, user.studentId).some((p: any) => p.id_aluno === alunoId);
+/** Filho em foco: o escolhido (se for dele), senão o primeiro confirmado, senão o primeiro. */
+function alunoAtivo(user: { userId?: number; studentId?: number }, pref?: number): number | undefined {
+  const f = filhosDe(user.userId, user.studentId);
+  return (f.find((p: any) => p.id_aluno === pref) ?? f.find(confirmada) ?? f[0])?.id_aluno;
+}
+function motoristasDoResponsavel(userId?: number, legacy?: number): Set<number> {
+  return new Set(filhosDe(userId, legacy).map((p: any) => donoDaParada(p)));
+}
+
 /** Qual motorista "enxerga" este usuário: motorista = ele mesmo; responsável = motorista do seu aluno; admin = motorista 1. */
-function driverIdFor(user: { role: string; userId?: number; studentId?: number }): number | null {
+function driverIdFor(user: { role: string; userId?: number; studentId?: number }, pref?: number): number | null {
   if (user.role === 'motorista') return user.userId ?? null;
   if (user.role === 'admin') return 1;
-  const parada = serverState.paradas.find((p: any) => p.id_aluno === user.studentId);
+  const ativo = alunoAtivo(user, pref);
+  const parada = serverState.paradas.find((p: any) => p.id_aluno === ativo);
   return parada ? donoDaParada(parada) : null;
 }
 
@@ -482,14 +506,15 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
   if (!studentId) return null;
   const trip = getTrip(driverId);
   const minhas = serverState.paradas
-    .filter((p: any) => donoDaParada(p) === driverId)
+    .filter((p: any) => donoDaParada(p) === driverId && confirmada(p))
     .sort((a: any, b: any) => (a.ordem_sequencia ?? 0) - (b.ordem_sequencia ?? 0));
-  const mine: any = minhas.find((p: any) => p.id_aluno === studentId);
+  const mine: any = serverState.paradas.find((p: any) => donoDaParada(p) === driverId && p.id_aluno === studentId);
   if (!mine) return null;
   const agora = new Date().toISOString();
   const st = String(trip.viagem.status);
   const rotaAtiva = st === 'EM_ANDAMENTO';
   const base = { rotaAtiva, mapaLiberado: false, avisoAtivo: false, atualizadoEm: agora };
+  if (!confirmada(mine)) return { ...base, estado: 'aguardando', progresso: 0, minutos: null };
   if (mine.status_embarque === 'AUSENTE') return { ...base, estado: 'ausente', progresso: 0, minutos: null };
   if (mine.status_embarque === 'ENTREGUE') return { ...base, estado: 'entregue', progresso: 1, minutos: 0 };
   if (mine.status_embarque === 'EMBARCOU') return { ...base, estado: 'embarcou', progresso: 1, minutos: 0 };
@@ -553,11 +578,12 @@ const deMin = (m: number) => {
 function horariosDaParada(p: any): { hora_ida: string | null; hora_volta: string | null } {
   const dono = donoDaParada(p);
   const grupo = serverState.paradas
-    .filter((x: any) => donoDaParada(x) === dono)
+    .filter((x: any) => donoDaParada(x) === dono && confirmada(x))
     .sort((a: any, b: any) => a.ordem_sequencia - b.ordem_sequencia);
-  const idx = Math.max(0, grupo.findIndex((x: any) => x.id === p.id));
+  const pos = grupo.findIndex((x: any) => x.id === p.id);
+  const idx = pos >= 0 ? pos : grupo.length;
   const ida = p.hora_ida_manual
-    ?? (p.escola_entrada ? deMin(paraMin(p.escola_entrada) - FOLGA_CHEGADA_MIN - TRAJETO_ESCOLA_MIN - (grupo.length - 1 - idx) * MIN_POR_PARADA) : null);
+    ?? (p.escola_entrada ? deMin(paraMin(p.escola_entrada) - FOLGA_CHEGADA_MIN - TRAJETO_ESCOLA_MIN - Math.max(0, grupo.length - 1 - idx) * MIN_POR_PARADA) : null);
   const volta = p.hora_volta_manual
     ?? (p.escola_saida ? deMin(paraMin(p.escola_saida) + APOS_SAIDA_MIN + idx * MIN_POR_PARADA) : null);
   return { hora_ida: ida, hora_volta: volta };
@@ -575,8 +601,8 @@ function lerLocal(lat: unknown, lng: unknown): { latitude: number; longitude: nu
   return { latitude: Number(lat.toFixed(5)), longitude: Number(lng.toFixed(5)) };
 }
 
-function getFilteredStateForUser(user: SessionPayload) {
-  const driverId = driverIdFor(user);
+function getFilteredStateForUser(user: SessionPayload, pref?: number) {
+  const driverId = driverIdFor(user, pref);
   const trip = driverId !== null ? getTrip(driverId) : makeTrip(0);
   const cloned = JSON.parse(JSON.stringify({
     motorista: serverState.motorista,
@@ -594,7 +620,7 @@ function getFilteredStateForUser(user: SessionPayload) {
   // Motorista vê EXCLUSIVAMENTE suas próprias paradas/alunos
   if (user.role === 'motorista') {
     cloned.paradas = cloned.paradas
-      .filter((p: any) => donoDaParada(p) === user.userId)
+      .filter((p: any) => donoDaParada(p) === user.userId && p.vinculo !== 'RECUSADO')
       .map((p: any) => ({
         ...p,
         endereco_real: undefined,
@@ -609,7 +635,18 @@ function getFilteredStateForUser(user: SessionPayload) {
       responsavel_telefone_mascarado: p.responsavel_telefone ? `(${p.responsavel_telefone.slice(0,2)}) 9****-${p.responsavel_telefone.slice(-4)}` : undefined
     }));
   } else if (user.role === 'responsavel') {
-    const studentId = user.studentId;
+    const studentId = alunoAtivo(user, pref);
+    cloned.filhos = filhosDe(user.userId, user.studentId).map((p: any) => ({
+      id_aluno: p.id_aluno,
+      nome_aluno: p.nome_aluno,
+      escola_destino: p.escola_destino,
+      vinculo: p.vinculo ?? 'CONFIRMADO',
+      motorista: perfilMotorista(donoDaParada(p))?.nome ?? null
+    }));
+    cloned.filhoAtivo = studentId ?? null;
+    const recResp = usersDB.find((u) => u.id === user.userId);
+    cloned.motoristas = Array.from(new Set([...(recResp?.motoristasVinculados || []), ...motoristasDoResponsavel(user.userId, user.studentId)]))
+      .map((id) => ({ id, nome: perfilMotorista(id)?.nome ?? 'Motorista' }));
     if (studentId) {
       cloned.paradas = cloned.paradas.filter((p: any) => p.id_aluno === studentId);
     } else {
@@ -639,10 +676,11 @@ function broadcast(event: string, data: any, driverId?: number | null) {
   sseClients.forEach((client) => {
     // Eventos de um motorista só chegam a ele, aos responsáveis dos seus alunos e a administradores.
     if (driverId !== undefined && driverId !== null && client.role !== 'admin') {
-      if (driverIdFor({ role: client.role, userId: client.userId, studentId: client.studentId }) !== driverId) return;
+      const meus = client.role === 'responsavel' ? motoristasDoResponsavel(client.userId, client.studentId) : new Set([driverIdFor({ role: client.role, userId: client.userId, studentId: client.studentId })]);
+      if (!meus.has(driverId)) return;
     }
     try {
-      const filteredData = getFilteredStateForUser({ role: client.role, userId: client.userId || 1, email: '', studentId: client.studentId, exp: Date.now() + 99999 });
+      const filteredData = getFilteredStateForUser({ role: client.role, userId: client.userId || 1, email: '', studentId: client.studentId, exp: Date.now() + 99999 }, client.alunoPref);
       if (client.role === 'responsavel' && event === 'GPS_ATUALIZADO') {
         // Responsável não recebe coordenadas: só o resumo de proximidade calculado no servidor.
         client.res.write(`event: PROXIMIDADE_ATUALIZADA\ndata: ${JSON.stringify({ proximidade: filteredData.proximidade, estado: filteredData })}\n\n`);
@@ -1151,13 +1189,13 @@ async function startServer() {
     const responsaveis = usersDB
       .filter(u => u.role === 'responsavel')
       .map(u => {
-        const student = serverState.paradas.find(p => p.id_aluno === u.studentId);
+        const filhos = filhosDe(u.id, u.studentId);
         return {
           id: u.id,
           fullName: u.fullName,
           email: u.email,
           emailVerified: u.emailVerified,
-          studentName: student ? student.nome_aluno : null
+          studentName: filhos.length ? filhos.map((f: any) => f.nome_aluno).join(', ') : null
         };
       });
     res.json({ sucesso: true, responsaveis });
@@ -1280,6 +1318,181 @@ async function startServer() {
   });
 
   // PREFERÊNCIAS DO RESPONSÁVEL: estilo da barra de proximidade e antecedência do aviso.
+  // ---------------------------------------------------------------------------
+  // CÓDIGO DO MOTORISTA, FILHOS E CONFIRMAÇÃO
+  // ---------------------------------------------------------------------------
+  const novoCodigoMotorista = () => {
+    for (;;) {
+      const c = `MOT-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+      if (!usersDB.some((u) => u.codigoMotorista === c)) return c;
+    }
+  };
+
+  app.get('/api/motorista/codigo', authenticate, requireDriver, (req: Request, res: Response) => {
+    const rec = usersDB.find((u) => u.id === ((req as any).user as SessionPayload).userId);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    if (!rec.codigoMotorista) { rec.codigoMotorista = novoCodigoMotorista(); persistence.scheduleSave(); }
+    res.json({ codigo: rec.codigoMotorista });
+  });
+
+  // Trocar o código não desfaz os vínculos já feitos: só impede novos cadastros com o código antigo.
+  app.post('/api/motorista/codigo/trocar', authenticate, requireDriver, rateLimiter(5, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const rec = usersDB.find((u) => u.id === user.userId);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    rec.codigoMotorista = novoCodigoMotorista();
+    auditLog('CODIGO_MOTORISTA_TROCADO', rec.email, 'Código do motorista renovado');
+    res.json({ codigo: rec.codigoMotorista });
+  });
+
+  /** Acha o motorista pelo código (1ª vez) ou entre os já vinculados (sem pedir o código de novo). */
+  const resolverMotorista = (rec: UserRecord, codigo: unknown, motoristaId: unknown): number | string => {
+    const cod = String(codigo ?? '').trim().toUpperCase();
+    if (cod) {
+      const mot = usersDB.find((u) => u.role === 'motorista' && u.codigoMotorista === cod);
+      if (!mot) return 'Código do motorista inválido.';
+      rec.motoristasVinculados = Array.from(new Set([...(rec.motoristasVinculados || []), mot.id]));
+      return mot.id;
+    }
+    const id = Number(motoristaId);
+    const ja = new Set([...(rec.motoristasVinculados || []), ...motoristasDoResponsavel(rec.id, rec.studentId)]);
+    if (Number.isFinite(id) && ja.has(id)) return id;
+    return 'Informe o código do motorista.';
+  };
+
+  const exigirResponsavelVerificado = (user: SessionPayload, res: Response) => {
+    if (user.role !== 'responsavel') { res.status(403).json({ error: 'Apenas responsáveis cadastram filhos.' }); return null; }
+    const rec = usersDB.find((u) => u.id === user.userId);
+    if (!rec) { res.status(404).json({ error: 'Conta não encontrada.' }); return null; }
+    if (!rec.emailVerified && !user.emailVerified) { res.status(403).json({ error: 'E-mail não verificado. Verifique seu e-mail para continuar.' }); return null; }
+    return rec;
+  };
+
+  // Responsável cadastra um filho já ligando ao motorista; o motorista confirma o lugar na van.
+  app.post('/api/filhos', authenticate, rateLimiter(10, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const rec = exigirResponsavelVerificado(user, res);
+    if (!rec) return;
+    const b = req.body || {};
+    const texto = (v: unknown, max: number) => String(v ?? '').trim().slice(0, max);
+    const nomeAluno = texto(b.nomeAluno, 80), escola = texto(b.escola, 120), endereco = texto(b.endereco, 200);
+    if (nomeAluno.length < 2 || escola.length < 2 || endereco.length < 3) {
+      return res.status(400).json({ error: 'Informe nome do filho, escola e endereço de embarque.' });
+    }
+    const entrada = lerHorario(b.escolaEntrada), saida = lerHorario(b.escolaSaida);
+    if (!entrada || !saida) return res.status(400).json({ error: 'Informe entrada e saída da escola no formato HH:MM.' });
+    if (paraMin(saida) <= paraMin(entrada)) return res.status(400).json({ error: 'A saída precisa ser depois da entrada.' });
+    const local = lerLocal(b.latitude, b.longitude);
+    if (b.latitude !== undefined && b.latitude !== null && !local) return res.status(400).json({ error: 'Localização inválida.' });
+    const motorista = resolverMotorista(rec, b.codigoMotorista, b.motoristaId);
+    if (typeof motorista === 'string') return res.status(typeof b.codigoMotorista === 'string' && b.codigoMotorista.trim() ? 404 : 400).json({ error: motorista });
+
+    const novoId = serverState.paradas.reduce((m: number, p: any) => Math.max(m, p.id % 1000, (p.id_aluno ?? 0) - 210), 0) + 1;
+    const nova: any = {
+      id: 1000 + novoId,
+      id_viagem: 1000 + motorista,
+      id_motorista: motorista,
+      id_aluno: 210 + novoId,
+      ordem_sequencia: 0,
+      vinculo: 'PENDENTE',
+      status_embarque: 'PENDENTE',
+      escola_entrada: entrada,
+      escola_saida: saida,
+      latitude: local ? local.latitude : null,
+      longitude: local ? local.longitude : null,
+      nome_aluno: nomeAluno,
+      nome_sanitizado: `${nomeAluno.split(' ')[0]} ${nomeAluno.split(' ')[1]?.[0] || ''}.`,
+      endereco_real: endereco,
+      endereco_mascarado: mascararEnderecoSeguro(endereco),
+      ponto_referencia: texto(b.pontoReferencia, 120) || 'Próximo à via principal',
+      responsavel_nome: rec.fullName,
+      responsavel_telefone: String(b.telefone ?? rec.phone ?? rec.whatsapp ?? '').replace(/\D/g, '').slice(0, 13),
+      escola_destino: escola,
+      vinculado_usuario_id: rec.id
+    };
+    serverState.paradas.push(nova);
+    if (rec.studentId === undefined) rec.studentId = nova.id_aluno;
+    auditLog('FILHO_CADASTRADO', rec.email, `Filho ${nova.id_aluno} solicitado ao motorista ${motorista}`);
+    broadcast('NOVA_PARADA_CADASTRADA', { paradaId: nova.id }, motorista);
+    const token = signToken({ role: 'responsavel', userId: rec.id, email: rec.email, studentId: rec.studentId, emailVerified: true });
+    res.json({ sucesso: true, token, alunoId: nova.id_aluno });
+  });
+
+  // Muda o filho de van (precisa do código do novo motorista, ou de um já vinculado) — volta a ficar pendente.
+  app.post('/api/filhos/:id/motorista', authenticate, rateLimiter(10, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const rec = exigirResponsavelVerificado(user, res);
+    if (!rec) return;
+    const alunoId = parseInt(req.params.id, 10);
+    const filho: any = filhosDe(rec.id, rec.studentId).find((p: any) => p.id_aluno === alunoId);
+    if (!filho) return res.status(404).json({ error: 'Filho não encontrado.' });
+    const motorista = resolverMotorista(rec, req.body?.codigoMotorista, req.body?.motoristaId);
+    if (typeof motorista === 'string') return res.status(typeof req.body?.codigoMotorista === 'string' && req.body.codigoMotorista.trim() ? 404 : 400).json({ error: motorista });
+    const antes = donoDaParada(filho);
+    filho.id_motorista = motorista;
+    filho.id_viagem = 1000 + motorista;
+    filho.vinculo = 'PENDENTE';
+    filho.ordem_sequencia = 0;
+    filho.status_embarque = 'PENDENTE';
+    delete filho.hora_ida_manual; delete filho.hora_volta_manual;
+    broadcast('NOVA_PARADA_CADASTRADA', { paradaId: filho.id }, motorista);
+    broadcast('STATUS_EMBARQUE_ATUALIZADO', { paradaId: filho.id }, antes);
+    res.json({ sucesso: true });
+  });
+
+  app.delete('/api/filhos/:id', authenticate, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    if (user.role !== 'responsavel') return res.status(403).json({ error: 'Acesso negado.' });
+    const alunoId = parseInt(req.params.id, 10);
+    const filho: any = filhosDe(user.userId, user.studentId).find((p: any) => p.id_aluno === alunoId);
+    if (!filho) return res.status(404).json({ error: 'Filho não encontrado.' });
+    const dono = donoDaParada(filho);
+    serverState.paradas = serverState.paradas.filter((p: any) => p !== filho);
+    reordenar(dono);
+    broadcast('STATUS_EMBARQUE_ATUALIZADO', { paradaId: filho.id }, dono);
+    res.json({ sucesso: true });
+  });
+
+  /** Renumera 1..n as paradas confirmadas do motorista, mantendo a ordem atual. */
+  const reordenar = (driverId: number) => {
+    serverState.paradas
+      .filter((p: any) => donoDaParada(p) === driverId && confirmada(p))
+      .sort((a: any, b: any) => (a.ordem_sequencia ?? 0) - (b.ordem_sequencia ?? 0))
+      .forEach((p: any, i: number) => { p.ordem_sequencia = i + 1; });
+  };
+
+  // Motorista confirma o aluno e define o lugar na van (posicao opcional; padrão: no fim).
+  app.post('/api/paradas/:id/confirmar', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const parada: any = serverState.paradas.find((p: any) => p.id === parseInt(req.params.id, 10));
+    if (!parada || donoDaParada(parada) !== user.userId) return res.status(404).json({ error: 'Parada não encontrada' });
+    if (parada.vinculo !== 'PENDENTE') return res.status(400).json({ error: 'Este aluno não está aguardando confirmação.' });
+    const confirmadas = serverState.paradas.filter((p: any) => donoDaParada(p) === user.userId && confirmada(p));
+    const pedida = Number(req.body?.posicao);
+    const pos = Number.isInteger(pedida) && pedida >= 1 ? Math.min(pedida, confirmadas.length + 1) : confirmadas.length + 1;
+    confirmadas.forEach((p: any) => { if ((p.ordem_sequencia ?? 0) >= pos) p.ordem_sequencia = (p.ordem_sequencia ?? 0) + 1; });
+    parada.vinculo = 'CONFIRMADO';
+    parada.ordem_sequencia = pos;
+    reordenar(user.userId);
+    auditLog('ALUNO_CONFIRMADO', user.email, `Aluno ${parada.id_aluno} confirmado na posição ${parada.ordem_sequencia}`);
+    broadcast('STATUS_EMBARQUE_ATUALIZADO', { paradaId: parada.id, alunoId: parada.id_aluno }, user.userId);
+    res.json({ sucesso: true, ordem: parada.ordem_sequencia });
+  });
+
+  // Motorista recusa a solicitação ou tira o aluno da van (o cadastro do responsável é mantido).
+  app.post('/api/paradas/:id/remover', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const parada: any = serverState.paradas.find((p: any) => p.id === parseInt(req.params.id, 10));
+    if (!parada || donoDaParada(parada) !== user.userId) return res.status(404).json({ error: 'Parada não encontrada' });
+    parada.vinculo = 'RECUSADO';
+    parada.ordem_sequencia = 0;
+    parada.status_embarque = 'PENDENTE';
+    reordenar(user.userId);
+    auditLog('ALUNO_REMOVIDO_VAN', user.email, `Aluno ${parada.id_aluno} removido/recusado`);
+    broadcast('STATUS_EMBARQUE_ATUALIZADO', { paradaId: parada.id, alunoId: parada.id_aluno }, user.userId);
+    res.json({ sucesso: true });
+  });
+
   // ID de acesso (alternativa ao e-mail no login)
   app.get('/api/conta', authenticate, (req: Request, res: Response) => {
     const u = usersDB.find((x) => x.id === ((req as any).user as SessionPayload).userId);
@@ -1304,7 +1517,7 @@ async function startServer() {
   app.put('/api/alunos/:id/escola-horarios', authenticate, (req: Request, res: Response) => {
     const alunoId = parseInt(req.params.id, 10);
     const user = (req as any).user as SessionPayload;
-    if (user.role === 'responsavel' && user.studentId !== alunoId) {
+    if (user.role === 'responsavel' && !ehFilhoDe(user, alunoId)) {
       return res.status(403).json({ error: 'Acesso negado para este aluno.' });
     }
     if (user.role !== 'responsavel' && user.role !== 'motorista') return res.status(403).json({ error: 'Acesso negado.' });
@@ -1359,8 +1572,10 @@ async function startServer() {
   app.get('/api/proximidade', authenticate, (req: Request, res: Response) => {
     const u = (req as any).user as SessionPayload;
     if (u.role !== 'responsavel') return res.status(403).json({ error: 'Disponível apenas para responsáveis.' });
-    const driverId = driverIdFor(u);
-    const prox = driverId !== null ? computeProximity(driverId, u.studentId, prefsDe(u.userId).avisoMin) : null;
+    const pref = parseInt(String(req.query.aluno ?? ''), 10);
+    const prefOk = Number.isFinite(pref) ? pref : undefined;
+    const driverId = driverIdFor(u, prefOk);
+    const prox = driverId !== null ? computeProximity(driverId, alunoAtivo(u, prefOk), prefsDe(u.userId).avisoMin) : null;
     res.json({ proximidade: prox, prefs: prefsDe(u.userId) });
   });
 
@@ -1414,11 +1629,12 @@ async function startServer() {
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders?.();
 
+    const alunoPref = parseInt(String(req.query.aluno ?? ''), 10);
     const clientId = Math.random().toString(36).substring(2);
-    const client: SSEClient = { id: clientId, res, role, studentId, userId };
+    const client: SSEClient = { id: clientId, res, role, studentId, userId, alunoPref: Number.isFinite(alunoPref) ? alunoPref : undefined };
     sseClients.push(client);
 
-    const initialFiltered = getFilteredStateForUser({ role, userId, email: payload.email || '', studentId, exp: Date.now() + 99999 });
+    const initialFiltered = getFilteredStateForUser({ role, userId, email: payload.email || '', studentId, exp: Date.now() + 99999 }, client.alunoPref);
     res.write(`event: INIT_STATE\ndata: ${JSON.stringify(initialFiltered)}\n\n`);
 
     req.on('close', () => {
@@ -1431,7 +1647,8 @@ async function startServer() {
     if (user.role === 'motorista' && !user.emailVerified) {
       return res.status(403).json({ error: 'E-mail do motorista não verificado. Verifique seu e-mail para acessar o painel.' });
     }
-    const filtered = getFilteredStateForUser(user);
+    const pref = parseInt(String(req.query.aluno ?? ''), 10);
+    const filtered = getFilteredStateForUser(user, Number.isFinite(pref) ? pref : undefined);
     res.json(filtered);
   });
 
@@ -1457,7 +1674,7 @@ async function startServer() {
   app.post('/api/alunos/:id/ausencia', authenticate, (req: Request, res: Response) => {
     const alunoId = parseInt(req.params.id, 10);
     const user = (req as any).user as SessionPayload;
-    if (user.role === 'responsavel' && user.studentId !== alunoId) {
+    if (user.role === 'responsavel' && !ehFilhoDe(user, alunoId)) {
       return res.status(403).json({ error: 'Acesso negado para este aluno.' });
     }
     const { motivo, observacao } = req.body;
@@ -1478,7 +1695,7 @@ async function startServer() {
   app.post('/api/alunos/:id/desfazer-ausencia', authenticate, (req: Request, res: Response) => {
     const alunoId = parseInt(req.params.id, 10);
     const user = (req as any).user as SessionPayload;
-    if (user.role === 'responsavel' && user.studentId !== alunoId) {
+    if (user.role === 'responsavel' && !ehFilhoDe(user, alunoId)) {
       return res.status(403).json({ error: 'Acesso negado para este aluno.' });
     }
     const parada = serverState.paradas.find((p) => p.id_aluno === alunoId || p.id === alunoId);
@@ -1542,7 +1759,9 @@ async function startServer() {
     res.json({ sucesso: true });
   });
 
+  // Cadastro de aluno pelo motorista: desativado (agora o responsável cadastra o filho). Só existe no modo demonstração.
   app.post('/api/paradas/nova', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
+    if (!DEMO_MODE) return res.status(404).json({ error: 'Não encontrado.' });
     const user = (req as any).user as SessionPayload;
     const { nomeAluno, endereco, pontoReferencia, escola } = req.body;
     const telefone = req.body.telefone ?? req.body.telefoneResponsavel;
