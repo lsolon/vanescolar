@@ -227,12 +227,24 @@ function mascararEnderecoSeguro(rawAddress: string): string {
 }
 
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
+// Limpa registros vencidos para o mapa não crescer sem limite.
+setInterval(() => {
+  const agora = Date.now();
+  for (const [ip, r] of rateLimitMap) if (agora > r.resetTime) rateLimitMap.delete(ip);
+}, 5 * 60 * 1000).unref();
+
+/**
+ * Atrás de proxy (nginx no VPS, Cloud Run no AI Studio) todo pedido chega pelo endereço do proxy.
+ * Com `trust proxy` o Express usa o IP real do cliente (X-Forwarded-For). Só pulamos o limite para
+ * conexões locais SEM X-Forwarded-For (testes na própria máquina): um pedido vindo do nginx tem o
+ * cabeçalho e continua limitado.
+ */
 function rateLimiter(limit: number, windowMs: number) {
   return (req: Request, res: Response, next: NextFunction) => {
-    // Bypass em modo demonstração ou requisições locais (testes)
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    if (DEMO_MODE || ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return next();
-    
+    const local = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+    if (DEMO_MODE || (local && !req.headers['x-forwarded-for'])) return next();
+
     const now = Date.now();
     const record = rateLimitMap.get(ip);
 
@@ -395,6 +407,9 @@ interface Trip {
   /** maior distância (km) vista por aluno desde o início da rota: base da barra de deslocamento */
   refKm?: Record<string, number>;
 }
+// Fora do modo demo o app começa sem alunos de exemplo (Maria Clara, Enzo etc.): só entram famílias reais.
+if (!DEMO_MODE) serverState.paradas = [];
+
 const tripsDB = new Map<number, Trip>();
 tripsDB.set(1, { viagem: serverState.viagem, gpsAtual: serverState.gpsAtual, mensagens: serverState.mensagens });
 
@@ -915,6 +930,9 @@ async function startServer() {
   const iniciadoEm = new Date().toISOString();
   const app = express();
   app.disable('x-powered-by');
+  // Quantos proxies existem na frente do servidor (nginx = 1; Cloud Run/AI Studio = 1). 0 desliga. Padrão: 1 em produção.
+  const trustProxyHops = Number.parseInt(process.env.TRUST_PROXY_HOPS ?? (process.env.NODE_ENV === 'production' ? '1' : '0'), 10);
+  if (Number.isInteger(trustProxyHops) && trustProxyHops > 0) app.set('trust proxy', trustProxyHops);
   app.use(express.json({ limit: '100kb' }));
 
   // VÁRIAS INSTÂNCIAS: o estado fica em memória e só era lido do armazenamento na partida. Se a hospedagem roda
