@@ -906,3 +906,35 @@ test('Sugerir rota: ordena pelas distâncias, o motorista reordena à mão e apl
   assert.equal((await jsonReq('POST', '/api/rotas/ordem', outro, { ids })).status, 400, 'outro motorista não reordena a van alheia');
   assert.equal((await jsonReq('GET', '/api/rotas/sugestao', undefined)).status, 401);
 });
+
+test('Horário combinado: se a van está adiantada (ex.: aluno anterior faltou), o tempo e o aviso não prometem antes dele', async () => {
+  const partes = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date());
+  const agora = (Number(partes.find((x) => x.type === 'hour')!.value) % 24) * 60 + Number(partes.find((x) => x.type === 'minute')!.value);
+  if (agora < 60 || agora > 22 * 60) return; // evita virada de dia
+  const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'Piso');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola Piso', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  const ausente = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Faltou', latitude: -22.92, longitude: -43.20 })).data;
+  const aluno = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Segue', latitude: -22.90, longitude: -43.20 })).data;
+  const resp = await novoResponsavel(aluno.codigoVinculo);
+  await jsonReq('POST', '/api/rotas/iniciar', mot);
+  await jsonReq('POST', `/api/paradas/${ausente.novaParada.id}/status`, mot, { status: 'AUSENTE' });
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.9005, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 }); // quase lá
+  const prox = async () => (await jsonReq('GET', '/api/proximidade', resp)).data.proximidade;
+
+  // horário combinado daqui a 40 min: a van chegaria em ~1 min, mas o combinado é o que vale
+  assert.equal((await jsonReq('PUT', `/api/paradas/${aluno.novaParada.id}/horarios`, mot, { horaIda: hhmm(agora + 40) })).status, 200);
+  const cedo = await prox();
+  assert.equal(cedo.adiantada, true);
+  assert.equal(cedo.horarioPrevisto, hhmm(agora + 40));
+  assert.ok(cedo.minutos >= 38 && cedo.minutos <= 40, `minutos=${cedo.minutos}`);
+  assert.equal(cedo.avisoAtivo, false, 'sem aviso de chegada antes do horário combinado');
+  assert.ok(cedo.progresso <= 0.9);
+
+  // horário já passou: vale a estimativa real
+  await jsonReq('PUT', `/api/paradas/${aluno.novaParada.id}/horarios`, mot, { horaIda: hhmm(agora - 10) });
+  const tarde = await prox();
+  assert.equal(tarde.adiantada, false);
+  assert.ok(tarde.minutos <= 2, `minutos=${tarde.minutos}`);
+});

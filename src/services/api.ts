@@ -387,6 +387,8 @@ export interface ProximidadeVan {
   avisoAtivo: boolean;
   estimativaPrecisa?: boolean;
   destino?: 'escola' | 'casa';
+  horarioPrevisto?: string;
+  adiantada?: boolean;
   posicao?: { latitude: number; longitude: number; heading: number };
   atualizadoEm: string;
 }

@@ -510,6 +510,10 @@ interface Proximidade {
   avisoAtivo: boolean;
   /** true quando a estimativa usa a distância real até o aluno (local de embarque marcado) */
   estimativaPrecisa?: boolean;
+  /** horário combinado de passagem (ida); o tempo mostrado nunca promete antes dele */
+  horarioPrevisto?: string;
+  /** a van está adiantada em relação ao horário combinado */
+  adiantada?: boolean;
   /** a bordo: para onde a van segue (escola na ida, casa na volta) */
   destino?: 'escola' | 'casa';
   posicao?: { latitude: number; longitude: number; heading: number };
@@ -541,6 +545,13 @@ function progressoPorDistancia(trip: Trip, chave: string, km: number): number | 
 function minutosPorKm(km: number, speedKmH: number, paradas: number): number {
   const v = (speedKmH || 0) >= 8 ? Math.max(15, Math.min(50, speedKmH)) : 25;
   return Math.max(1, Math.round((km * 1.3 / v) * 60 + paradas));
+}
+
+/** Minutos desde 00:00 no horário de Brasília (o servidor pode estar em UTC). */
+function agoraMinutosSP(): number {
+  const partes = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date());
+  const h = Number(partes.find((x) => x.type === 'hour')?.value) % 24, m = Number(partes.find((x) => x.type === 'minute')?.value);
+  return h * 60 + m;
 }
 
 function computeProximity(driverId: number, studentId: number | undefined, avisoMin: number): Proximidade | null {
@@ -596,8 +607,17 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
     const porDistancia = progressoPorDistancia(trip, `a${studentId}`, km);
     if (porDistancia !== null) progresso = porDistancia;
   }
+  // Horário combinado com o responsável: ele tem a sua programação. Se a van estiver adiantada (por exemplo, o aluno
+  // anterior faltou), o tempo mostrado e o aviso nunca prometem antes do horário combinado.
+  let horarioPrevisto: string | undefined, adiantada = false;
+  const prevista = horariosDaParada(mine).hora_ida;
+  if (prevista) {
+    horarioPrevisto = prevista;
+    const ate = paraMin(prevista) - agoraMinutosSP();
+    if (ate > minutos && ate <= 120) { minutos = ate; adiantada = true; progresso = Math.min(progresso, 0.9); }
+  }
   const proxima = faltam === 0;
-  return { ...base, estado: proxima ? 'proxima' : 'a_caminho', progresso, minutos, mapaLiberado: false, avisoAtivo: minutos <= avisoMin, estimativaPrecisa: precisa };
+  return { ...base, estado: proxima ? 'proxima' : 'a_caminho', progresso, minutos, mapaLiberado: false, avisoAtivo: minutos <= avisoMin, estimativaPrecisa: precisa, ...(horarioPrevisto ? { horarioPrevisto, adiantada } : {}) };
 }
 
 /**
