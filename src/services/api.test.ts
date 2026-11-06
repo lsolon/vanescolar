@@ -1417,3 +1417,31 @@ test('Privacidade: o estado do responsável não traz coordenadas, endereço, te
   assert.equal(est.paradas[0].nome_aluno, 'Aluno Sigilo');
   assert.equal(est.paradas[0].status_embarque, 'PENDENTE');
 });
+
+test('Previsão: GPS ou ponto a milhares de km não vira "21855 min"; cai em "sem localização exata"', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const mot = await novoMotorista(adm.data.token, 'PrevLonge');
+  const nova = (await jsonReq('POST', '/api/paradas/nova', mot, {
+    nomeAluno: 'Aluno Longe', endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777'
+  })).data;
+  await jsonReq('PUT', `/api/paradas/${nova.novaParada.id}/local`, mot, { latitude: -22.9000, longitude: -43.2 });
+  const resp = await novoResponsavel(nova.codigoVinculo);
+  await jsonReq('POST', '/api/rotas/iniciar', mot);
+  const prox = async () => (await jsonReq('GET', '/api/proximidade', resp)).data.proximidade;
+
+  // GPS em Lisboa (~7.700 km do ponto, no Rio)
+  await jsonReq('POST', '/api/gps', mot, { latitude: 38.72, longitude: -9.14, speedKmH: 0, accuracyMeters: 10 });
+  let p = await prox();
+  assert.ok(p.minutos <= 60, `minutos absurdos: ${p.minutos}`);
+  assert.equal(p.avisoAtivo, false);
+  assert.ok(!p.estimativaPrecisa, 'sem estimativa precisa');
+  assert.equal(p.semaforo, undefined);
+  assert.equal(p.chegadaPrevista, undefined);
+  assert.equal(p.minutosAtePonto, undefined);
+
+  // GPS perto do ponto: volta a ter previsão real
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.8995, longitude: -43.2, speedKmH: 30, accuracyMeters: 8 });
+  p = await prox();
+  assert.equal(p.estimativaPrecisa, true);
+  assert.ok(p.minutos >= 1 && p.minutos <= 10);
+});
