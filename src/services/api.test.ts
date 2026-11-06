@@ -1445,3 +1445,23 @@ test('Previsão: GPS ou ponto a milhares de km não vira "21855 min"; cai em "se
   assert.equal(p.estimativaPrecisa, true);
   assert.ok(p.minutos >= 1 && p.minutos <= 10);
 });
+
+test('Status da parada: só PENDENTE, EMBARCOU, ENTREGUE ou AUSENTE; observação limitada', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const mot = await novoMotorista(adm.data.token, 'StatusValido');
+  const nova = (await jsonReq('POST', '/api/paradas/nova', mot, {
+    nomeAluno: 'Aluno Status', endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777'
+  })).data;
+  const id = nova.novaParada.id;
+  for (const ruim of ['QUALQUER_COISA', '', null, 7, 'embarcou', { a: 1 }]) {
+    assert.equal((await jsonReq('POST', `/api/paradas/${id}/status`, mot, { status: ruim })).status, 400, `status ${JSON.stringify(ruim)}`);
+  }
+  assert.equal((await jsonReq('POST', `/api/paradas/${id}/status`, mot)).status, 400, 'sem status');
+  const ok = await jsonReq('POST', `/api/paradas/${id}/status`, mot, { status: 'EMBARCOU', observacao: 'x'.repeat(5000) });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.data.parada.status_embarque, 'EMBARCOU');
+  assert.equal(ok.data.parada.observacao.length, 300, 'observação cortada em 300');
+  for (const bom of ['ENTREGUE', 'AUSENTE', 'PENDENTE']) {
+    assert.equal((await jsonReq('POST', `/api/paradas/${id}/status`, mot, { status: bom })).status, 200, bom);
+  }
+});
