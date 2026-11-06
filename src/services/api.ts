@@ -405,6 +405,12 @@ export interface SugestaoRota {
   kmSugerido?: number;
   mudou: boolean;
 }
+export interface RotaAutomaticaResultado {
+  sentido: 'IDA' | 'VOLTA';
+  paradas: { id: number; nome: string; trechoMin: number; horario: string | null }[];
+  escolaMin?: number;
+  totalMin: number;
+}
 export interface EscolaMotorista { nome: string; local: { latitude: number; longitude: number } | null }
 export interface FilhoResumo { id_aluno: number; nome_aluno: string; escola_destino: string; vinculo: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO'; motorista: string | null }
 export interface PrefsProximidade { estilo: 'A' | 'B' | 'C'; avisoMin: number }
@@ -1551,6 +1557,13 @@ export const TransportRepository = {
     const res = await fetch(`${getBaseUrl()}/api/rotas/sugestao?sentido=${sentido}&modo=${modo}`, { headers: getAuthHeaders() });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível sugerir a rota.');
+    return d;
+  },
+
+  async criarRotaAutomatica(sentido: 'IDA' | 'VOLTA'): Promise<RotaAutomaticaResultado> {
+    const res = await fetch(`${getBaseUrl()}/api/rotas/automatica`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ sentido }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível criar a rota automática.');
     return d;
   },
 

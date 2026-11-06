@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { TransportRepository } from '../../services/api';
-import type { SugestaoRota, EscolaMotorista } from '../../services/api';
+import type { SugestaoRota, EscolaMotorista, RotaAutomaticaResultado } from '../../services/api';
 import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 
 /** O motorista define onde fica cada escola: é o destino da barra de deslocamento do aluno a bordo. */
@@ -101,7 +101,19 @@ export const RotasIdaVolta: React.FC<{ sentidoAtivo?: Sent; versao?: number; onA
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
+  const [auto, setAuto] = useState<RotaAutomaticaResultado | null>(null);
+  const [confirmaAuto, setConfirmaAuto] = useState(false);
+  const [criandoAuto, setCriandoAuto] = useState(false);
   const t = TEMA[aba];
+
+  const criarAuto = async () => {
+    setCriandoAuto(true); setErro(null); setOk(null); setAuto(null);
+    try {
+      const r = await TransportRepository.criarRotaAutomatica(aba);
+      setAuto(r); setConfirmaAuto(false); setOk(`Rota de ${t.nome.toLowerCase()} criada pelas ruas.`); await carregar('atual'); onAplicado();
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao criar a rota.'); setConfirmaAuto(false); }
+    finally { setCriandoAuto(false); }
+  };
 
   const carregar = async (modo: 'atual' | 'sugestao') => {
     setCarregando(true); setErro(null); setOk(null);
@@ -161,11 +173,31 @@ export const RotasIdaVolta: React.FC<{ sentidoAtivo?: Sent; versao?: number; onA
             </li>
           ))}
         </ol>
+        {confirmaAuto && (
+          <div role="alertdialog" aria-label="Criar rota automática" className="rounded-xl bg-slate-950 border border-amber-400/40 p-3 space-y-2">
+            <p className="text-[11px] text-amber-200">Para calcular o caminho pelas ruas, o app usa o endereço de cada aluno <strong>uma única vez</strong>, apenas para achar o ponto no mapa. O endereço não fica guardado nesse serviço pelo app, e o responsável nunca vê mapa nem localização — só o horário aproximado. Isso muda a ordem da rota de {t.nome.toLowerCase()}.</p>
+            <div className="flex gap-2">
+              <button type="button" onClick={criarAuto} disabled={criandoAuto} className={`px-4 py-2 rounded-xl text-xs font-black min-h-[44px] cursor-pointer disabled:opacity-50 ${t.btn}`}>{criandoAuto ? 'Calculando…' : 'Criar rota'}</button>
+              <button type="button" onClick={() => setConfirmaAuto(false)} disabled={criandoAuto} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Cancelar</button>
+            </div>
+          </div>
+        )}
+        {auto && auto.sentido === aba && (
+          <div className="rounded-xl bg-slate-950 border border-emerald-400/30 p-3 space-y-1">
+            <p className="text-[11px] font-bold text-emerald-300">Horários aproximados (já aparecem para os responsáveis) — total ~{auto.totalMin} min</p>
+            <ul className="text-[11px] text-slate-300 space-y-0.5">
+              {auto.paradas.map((p, i) => <li key={p.id}>{i + 1}. {p.nome} — {p.horario ?? 'sem horário da escola'} <span className="text-slate-500">({p.trechoMin} min de trajeto)</span></li>)}
+              {typeof auto.escolaMin === 'number' && <li className="text-slate-500">Do último aluno até a escola: {auto.escolaMin} min</li>}
+            </ul>
+            <p className="text-[11px] text-amber-200">Na primeira viagem, confira se esses horários batem com a realidade. Se mudar a ordem à mão, os horários voltam à estimativa padrão.</p>
+          </div>
+        )}
         {erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
         {ok && <p role="status" className="text-[11px] text-emerald-300">{ok}</p>}
         <div className="flex gap-2 flex-wrap">
           <button type="button" onClick={() => carregar('sugestao')} disabled={carregando || ordem.length < 2} className={`px-3 py-2 rounded-xl border text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50 ${t.sec}`}>{carregando ? 'Calculando…' : 'Sugerir rota'}</button>
           <button type="button" onClick={aplicar} disabled={salvando || !editado} className={`px-4 py-2 rounded-xl text-xs font-black min-h-[44px] cursor-pointer disabled:opacity-40 ${t.btn}`}>{salvando ? 'Salvando…' : 'Salvar esta ordem'}</button>
+          <button type="button" onClick={() => setConfirmaAuto(true)} disabled={criandoAuto || ordem.length < 1 || confirmaAuto} className={`px-3 py-2 rounded-xl border text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50 ${t.sec}`}>Criar rota automática (pelas ruas)</button>
           {editado && <button type="button" onClick={() => carregar('atual')} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Descartar</button>}
         </div>
       </div>

@@ -931,6 +931,20 @@ test('Aluno a bordo: o tempo até a escola soma as paradas pendentes mesmo longe
   assert.ok(prox.minutos > 60, `deveria somar o trecho até a parada distante, veio ${prox.minutos} min`);
 });
 
+test('Rota automática: exige escola marcada, não roda com a rota em andamento e não altera nada em caso de falha', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'RotaAuto');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola RA', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno A' });
+  const semEscola = await jsonReq('POST', '/api/rotas/automatica', mot, { sentido: 'IDA' });
+  assert.equal(semEscola.status, 400);
+  assert.match(String(semEscola.data.error), /escola/i);
+  await jsonReq('PUT', '/api/motorista/escolas', mot, { nome: 'Escola RA', latitude: -22.85, longitude: -43.20 });
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
+  const andando = await jsonReq('POST', '/api/rotas/automatica', mot, { sentido: 'IDA' });
+  assert.equal(andando.status, 409);
+});
+
 test('Sugerir rota: ordena pelas distâncias, o motorista reordena à mão e aplica; ordem inválida é recusada', async () => {
   const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
   const mot = await novoMotorista(adm, 'Sug');
