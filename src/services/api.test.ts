@@ -694,7 +694,7 @@ test('Filhos: código do motorista é pedido uma vez; motorista confirma o lugar
   // 1º filho com o código; 2º filho sem código (mesmo motorista já vinculado)
   const f1 = await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: 'Ana Luz', codigoMotorista: codigo.toLowerCase(), telefone: '(21) 98888-7777' });
   assert.equal(f1.status, 200, JSON.stringify(f1.data));
-  const motId = (await jsonReq('GET', '/api/estado', fam)).data.paradas[0].id_motorista;
+  const motId = (await jsonReq('GET', '/api/estado', fam)).data.motoristas[0].id;
   const f2 = await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: 'Beto Luz', motoristaId: motId });
   assert.equal(f2.status, 200, JSON.stringify(f2.data));
   // motorista de outro código não vinculado exige o código
@@ -1395,4 +1395,25 @@ test('Segurança: o atalho verify-email-sim não existe; responsável não se au
   assert.equal(r.status, 404);
   const v = await jsonReq('POST', '/api/vincular', reg.data.token, { codigoVinculo: 'QUALQUER' });
   assert.ok(v.status === 403 || v.status === 400, `esperava bloqueio, veio ${v.status}`);
+});
+
+test('Privacidade: o estado do responsável não traz coordenadas, endereço, telefone nem código de vínculo', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const mot = await novoMotorista(adm.data.token, 'PrivEstado');
+  const nova = (await jsonReq('POST', '/api/paradas/nova', mot, {
+    nomeAluno: 'Aluno Sigilo', endereco: 'Rua Secretissima, 4242', pontoReferencia: 'Portao Azul', escola: 'Escola Sigilo', nomeResponsavel: 'Resp', telefoneResponsavel: '21977776666'
+  })).data;
+  await jsonReq('PUT', `/api/paradas/${nova.novaParada.id}/local`, mot, { latitude: -22.91234, longitude: -43.21234 });
+  const resp = await novoResponsavel(nova.codigoVinculo);
+  const est = (await jsonReq('GET', '/api/estado', resp)).data;
+  assert.equal(est.paradas.length, 1);
+  const texto = JSON.stringify(est);
+  for (const proibido of ['-22.91234', '-43.21234', 'Secretissima', 'Portao Azul', '21977776666', '977776666', nova.codigoVinculo]) {
+    assert.equal(texto.includes(proibido), false, `não pode vazar: ${proibido}`);
+  }
+  for (const campo of ['latitude', 'longitude', 'endereco_real', 'ponto_referencia', 'responsavel_telefone', 'codigo_vinculo', 'id_motorista']) {
+    assert.equal(campo in est.paradas[0], false, `campo proibido: ${campo}`);
+  }
+  assert.equal(est.paradas[0].nome_aluno, 'Aluno Sigilo');
+  assert.equal(est.paradas[0].status_embarque, 'PENDENTE');
 });
