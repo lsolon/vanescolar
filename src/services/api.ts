@@ -1005,19 +1005,6 @@ export const TransportRepository = {
     return 'As instruções de redefinição foram enviadas para o seu e-mail.';
   },
 
-  async simularVerificacaoEmail() {
-    const res = await fetch(`${getBaseUrl()}/api/auth/verify-email-sim`, {
-      method: 'POST',
-      headers: getAuthHeaders()
-    });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.token) AuthService.setSessionToken(data.token);
-      return data;
-    }
-    throw new Error('Falha na verificação');
-  },
-
   /** Resumo seguro da proximidade da van (sem coordenadas, exceto quando a próxima parada é a do aluno). */
   async getProximidade(): Promise<{ proximidade: ProximidadeVan | null; prefs: PrefsProximidade } | null> {
     const res = await fetch(`${getBaseUrl()}/api/proximidade${qsAluno()}`, { headers: getAuthHeaders() });
