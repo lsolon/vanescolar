@@ -761,6 +761,12 @@ test('Filhos: dois motoristas, troca de van, remoção pelo motorista e exclusã
   await jsonReq('POST', `/api/paradas/${p1.id}/confirmar`, m1);
   await jsonReq('POST', `/api/paradas/${p2.id}/confirmar`, m2);
 
+  // ausência: motorista só mexe em aluno da própria van
+  assert.equal((await jsonReq('POST', `/api/alunos/${a.alunoId}/ausencia`, m2, { motivo: 'x' })).status, 404, 'outro motorista não marca ausência');
+  assert.equal((await jsonReq('POST', `/api/alunos/${a.alunoId}/desfazer-ausencia`, m2)).status, 404, 'outro motorista não desfaz ausência');
+  assert.equal((await jsonReq('POST', `/api/alunos/${a.alunoId}/ausencia`, m1, { motivo: 'x' })).status, 200, 'o próprio motorista marca');
+  assert.equal((await jsonReq('POST', `/api/alunos/${a.alunoId}/desfazer-ausencia`, m1)).status, 200, 'o próprio motorista desfaz');
+
   // cada filho aponta para o seu motorista
   const e1 = (await jsonReq('GET', `/api/estado?aluno=${a.alunoId}`, fam)).data;
   const e2 = (await jsonReq('GET', `/api/estado?aluno=${b.alunoId}`, fam)).data;
