@@ -621,6 +621,31 @@ function progressoPorDistancia(trip: Trip, chave: string, km: number): number | 
   return maior;
 }
 
+/**
+ * Parada pendente que a van já PASSOU (chegou a menos de 300 m e agora está a mais de 600 m) sem recolher o aluno:
+ * sai do cálculo, para não esticar o tempo. Paradas que a van ainda não visitou contam sempre, mesmo longe da escola.
+ */
+function deixadaParaTras(trip: Trip, p: any, gps: { latitude: number; longitude: number }): boolean {
+  if (!temLocalP(p)) return false;
+  const t = trip as any;
+  t.menorDist = t.menorDist || {};
+  t.ultimoGps = t.ultimoGps || {};
+  const ant = t.ultimoGps[p.id] as { latitude: number; longitude: number } | undefined;
+  // Menor distância até o trecho percorrido entre as duas últimas posições (o GPS pode "pular" por cima da parada).
+  let d = haversineKm(gps, p);
+  if (ant) {
+    const k = 111.32, cx = Math.cos(p.latitude * Math.PI / 180);
+    const ax = (ant.longitude - p.longitude) * k * cx, ay = (ant.latitude - p.latitude) * k;
+    const bx = (gps.longitude - p.longitude) * k * cx, by = (gps.latitude - p.latitude) * k;
+    const dx = bx - ax, dy = by - ay, len2 = dx * dx + dy * dy;
+    const u = len2 > 0 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len2)) : 0;
+    d = Math.min(d, Math.hypot(ax + u * dx, ay + u * dy));
+  }
+  t.ultimoGps[p.id] = { latitude: gps.latitude, longitude: gps.longitude };
+  t.menorDist[p.id] = Math.min(t.menorDist[p.id] ?? Infinity, d);
+  return t.menorDist[p.id] < 0.3 && haversineKm(gps, p) > 0.6;
+}
+
 function minutosPorKm(km: number, speedKmH: number, paradas: number): number {
   const v = (speedKmH || 0) >= 8 ? Math.max(15, Math.min(50, speedKmH)) : 25;
   return Math.max(1, Math.round((km * 1.3 / v) * 60 + paradas));
@@ -655,13 +680,16 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
     // A bordo: a barra volta a acompanhar a van até o destino (escola na ida, casa na volta), sem mapa.
     const destino = sentido === 'VOLTA' ? (temLocalP(mine) ? mine : null) : localDaEscola(driverId, mine.escola_destino);
     if (rotaAtiva && gpsOk && destino) {
-      const paradasAteLa = sentido === 'VOLTA'
-        ? minhas.filter((p: any) => ordemNo(p, sentido) < ordemNo(mine, sentido) && p.status_embarque === 'EMBARCOU' && temLocalP(p))
-        // Na ida só contam as paradas pendentes que ainda estão no caminho até a escola: as que a van já deixou para trás não esticam o tempo.
-        : minhas.filter((p: any) => p.status_embarque === 'PENDENTE' && temLocalP(p) && haversineKm(gps, p) + haversineKm(p, destino) <= haversineKm(gps, destino) * 1.5);
+      // Ida: soma TODOS os trechos que ainda faltam, na ordem da rota: van → cada parada pendente → escola.
+      // (Antes, paradas fora da linha reta até a escola eram descartadas e a previsão despencava.)
+      const pendentes = sentido === 'VOLTA'
+        ? minhas.filter((p: any) => ordemNo(p, sentido) < ordemNo(mine, sentido) && p.status_embarque === 'EMBARCOU')
+        : minhas.filter((p: any) => p.status_embarque === 'PENDENTE' && !deixadaParaTras(trip, p, gps));
+      const paradasAteLa = pendentes.filter(temLocalP);
+      const semLocal = pendentes.length - paradasAteLa.length; // sem ponto marcado: conta o tempo médio de uma parada
       const km = caminhoKm(gps, paradasAteLa, destino);
       const prog = progressoPorDistancia(trip, `e${studentId}`, km) ?? 0;
-      const minutos = minutosPorKm(km, gps.speedKmH, paradasAteLa.length);
+      const minutos = minutosPorKm(km, gps.speedKmH, pendentes.length + semLocal * (MIN_POR_PARADA - 1));
       return { ...base, estado: 'embarcou', progresso: prog, minutos, destino: sentido === 'VOLTA' ? 'casa' : 'escola', estimativaPrecisa: true, avisoAtivo: false };
     }
     return { ...base, estado: 'embarcou', progresso: 1, minutos: 0 };

@@ -913,6 +913,24 @@ test('Tempo a bordo nunca sobe quando a van segue para a escola, mesmo passando 
   }
 });
 
+test('Aluno a bordo: o tempo até a escola soma as paradas pendentes mesmo longe da linha reta até a escola', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'TrechosLonge');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola TL', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  const A = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno A', latitude: -22.95, longitude: -43.20 })).data;
+  const B = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno B', latitude: -22.94, longitude: -43.20 })).data;
+  const C = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno C', latitude: -22.94, longitude: -43.00 })).data;
+  await jsonReq('PUT', '/api/motorista/escolas', mot, { nome: 'Escola TL', latitude: -22.85, longitude: -43.20 });
+  await jsonReq('POST', '/api/rotas/ordem', mot, { ids: [A.novaParada.id, B.novaParada.id, C.novaParada.id], sentido: 'IDA' });
+  const resp = await novoResponsavel(A.codigoVinculo);
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.95, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  await jsonReq('POST', `/api/paradas/${A.novaParada.id}/status`, mot, { status: 'EMBARCOU' });
+  const prox = (await jsonReq('GET', '/api/proximidade', resp)).data.proximidade;
+  // Direto até a escola seriam ~10 min; passando por B e depois pela parada distante C passa de 1 hora.
+  assert.ok(prox.minutos > 60, `deveria somar o trecho até a parada distante, veio ${prox.minutos} min`);
+});
+
 test('Sugerir rota: ordena pelas distâncias, o motorista reordena à mão e aplica; ordem inválida é recusada', async () => {
   const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
   const mot = await novoMotorista(adm, 'Sug');
