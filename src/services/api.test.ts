@@ -992,6 +992,31 @@ test('Semáforo: verde no horário, amarelo adiantada, vermelho atrasada; sem co
   assert.ok(!/latitude|longitude|posicao/i.test(txt), 'responsável não pode receber coordenadas');
 });
 
+test('Card de horários: minutos reais até o ponto antes do embarque e até a escola depois; horário limite = entrada − 15', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'CardHorarios');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola CH', nomeResponsavel: 'R', telefoneResponsavel: '21988887777', escolaEntrada: '12:00', escolaSaida: '16:00' };
+  const A = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno A', latitude: -22.90, longitude: -43.20 })).data;
+  const B = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno B', latitude: -22.88, longitude: -43.20 })).data;
+  await jsonReq('PUT', '/api/motorista/escolas', mot, { nome: 'Escola CH', latitude: -22.85, longitude: -43.20 });
+  await jsonReq('POST', '/api/rotas/ordem', mot, { ids: [A.novaParada.id, B.novaParada.id], sentido: 'IDA' });
+  const resp = await novoResponsavel(A.codigoVinculo);
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.95, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  const antes = (await jsonReq('GET', '/api/proximidade', resp)).data.proximidade;
+  assert.equal(antes.sentido, 'IDA');
+  assert.equal(antes.chegarEscolaAte, '11:45');
+  assert.ok(typeof antes.minutosAtePonto === 'number' && antes.minutosAtePonto >= 1, 'tempo real até o ponto antes do embarque');
+  await jsonReq('POST', `/api/paradas/${A.novaParada.id}/status`, mot, { status: 'EMBARCOU' });
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.90, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  const depois = (await jsonReq('GET', '/api/proximidade', resp)).data.proximidade;
+  assert.equal(depois.estado, 'embarcou');
+  assert.equal(depois.destino, 'escola');
+  // a bordo: passa por B (ainda pendente) e segue à escola; sempre maior que o trecho direto
+  assert.ok(depois.minutos >= 1);
+  assert.ok(!/latitude|longitude|posicao/i.test(JSON.stringify(depois)));
+});
+
 test('Sugerir rota: ordena pelas distâncias, o motorista reordena à mão e aplica; ordem inválida é recusada', async () => {
   const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
   const mot = await novoMotorista(adm, 'Sug');

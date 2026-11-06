@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { TransportRepository } from '../../services/api';
 import { CampoHora } from '../shared/CampoHora';
+import type { ProximidadeVan } from '../../services/api';
+import { sentidoPorHorario, minutosAgoraBrasil } from '../../services/sentidoAuto';
+
+const FOLGA_CHEGADA_MIN = 15; // mesma folga do servidor: a van chega à escola 15 min antes da entrada
+const hhmm = (m: number) => { const x = ((Math.round(m) % 1440) + 1440) % 1440; return `${String(Math.floor(x / 60)).padStart(2, '0')}:${String(x % 60).padStart(2, '0')}`; };
+const chegarAte = (entrada?: string) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(entrada ?? '')); return m ? hhmm(Number(m[1]) * 60 + Number(m[2]) - FOLGA_CHEGADA_MIN) : null; };
 
 interface Props {
   alunoId: number | string;
@@ -8,11 +14,13 @@ interface Props {
   saida?: string;
   horaIda?: string | null;
   horaVolta?: string | null;
+  /** situação da van calculada no servidor (sem coordenadas) */
+  prox?: ProximidadeVan | null;
   onSalvo: () => void;
 }
 
 /** O responsável informa a entrada e a saída da escola; a van calcula os horários de ida e de volta. */
-export const HorariosEscola: React.FC<Props> = ({ alunoId, entrada, saida, horaIda, horaVolta, onSalvo }) => {
+export const HorariosEscola: React.FC<Props> = ({ alunoId, entrada, saida, horaIda, horaVolta, prox, onSalvo }) => {
   const informado = !!(entrada && saida);
   const [editando, setEditando] = useState(!informado);
   const [e, setE] = useState(entrada || '');
@@ -61,18 +69,40 @@ export const HorariosEscola: React.FC<Props> = ({ alunoId, entrada, saida, horaI
         </form>
       ) : (
         <div className="mt-2 space-y-2">
-          <div className="grid grid-cols-2 gap-2 text-center">
-            <div className="rounded-xl bg-slate-950/70 border border-slate-800 p-2">
-              <div className="text-[10px] text-slate-400">Van passa (ida)</div>
-              <div className="text-lg font-black font-mono text-amber-400">{horaIda || '--:--'}</div>
-              <div className="text-[10px] text-slate-500">Escola entra {entrada}</div>
-            </div>
-            <div className="rounded-xl bg-slate-950/70 border border-slate-800 p-2">
-              <div className="text-[10px] text-slate-400">Van chega (volta)</div>
-              <div className="text-lg font-black font-mono text-amber-400">{horaVolta || '--:--'}</div>
-              <div className="text-[10px] text-slate-500">Escola sai {saida}</div>
-            </div>
-          </div>
+          {(() => {
+            const sentido = prox?.rotaAtiva && prox.sentido ? prox.sentido : sentidoPorHorario([{ escola_entrada: entrada, escola_saida: saida }], minutosAgoraBrasil());
+            const ida = sentido === 'IDA';
+            const aBordo = prox?.estado === 'embarcou';
+            const antes = prox?.rotaAtiva && (prox.estado === 'a_caminho' || prox.estado === 'proxima') && ida;
+            const linhas: { rot: string; val: string; dest?: boolean; sub?: string }[] = [];
+            if (ida) {
+              linhas.push({ rot: 'Entrada na escola', val: entrada || '--:--' });
+              linhas.push({ rot: 'Horário para chegar na escola', val: prox?.chegarEscolaAte || chegarAte(entrada) || '--:--' });
+              if (aBordo && prox?.destino === 'escola') linhas.push({ rot: 'Tempo para chegada na escola', val: prox.minutos != null ? `${prox.minutos} min` : '–', dest: true, sub: 'Tempo real da van até a escola' });
+              else if (antes) {
+                linhas.push({ rot: 'Horário combinado no seu ponto', val: prox?.horarioPrevisto || horaIda || '--:--' });
+                linhas.push({ rot: 'Tempo até o seu ponto', val: prox?.chegou ? 'No ponto' : prox?.minutosAtePonto != null ? `${prox.minutosAtePonto} min` : '–', dest: true, sub: prox?.minutosAtePonto == null && !prox?.chegou ? 'Sem localização exata da van agora' : 'Tempo real da van até o seu ponto' });
+              } else linhas.push({ rot: 'Horário combinado no seu ponto', val: horaIda || '--:--' });
+            } else {
+              linhas.push({ rot: 'Saída da escola', val: saida || '--:--' });
+              linhas.push({ rot: 'Chegada prevista em casa', val: horaVolta || '--:--' });
+              if (aBordo && prox?.destino === 'casa') linhas.push({ rot: 'Tempo até a sua casa', val: prox.minutos != null ? `${prox.minutos} min` : '–', dest: true, sub: 'Tempo real da van até a sua casa' });
+            }
+            return (
+              <div className="space-y-2" aria-live="polite" data-sentido={sentido}>
+                <p className="text-[10px] text-slate-400">{ida ? '➜ Ida (casa → escola)' : '↩ Volta (escola → casa)'}</p>
+                {linhas.map((l) => (
+                  <div key={l.rot} className={`flex items-center justify-between gap-3 rounded-xl border px-3 py-2 ${l.dest ? 'bg-cyan-500/10 border-cyan-400/40' : 'bg-slate-950/70 border-slate-800'}`}>
+                    <div className="min-w-0">
+                      <div className="text-[11px] text-slate-300">{l.rot}</div>
+                      {l.sub && <div className="text-[10px] text-slate-500">{l.sub}</div>}
+                    </div>
+                    <div className={`text-lg font-black font-mono shrink-0 ${l.dest ? 'text-cyan-300' : 'text-amber-400'}`}>{l.val}</div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
           <button type="button" onClick={() => setEditando(true)} className="text-[11px] text-cyan-300 underline cursor-pointer">Alterar horários da escola</button>
         </div>
       )}
