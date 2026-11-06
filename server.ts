@@ -888,6 +888,23 @@ function lerLocal(lat: unknown, lng: unknown): { latitude: number; longitude: nu
   return { latitude: Number(lat.toFixed(5)), longitude: Number(lng.toFixed(5)) };
 }
 
+/**
+ * PRIVACIDADE (LGPD de menores): o responsável recebe só os campos que a tela dele precisa.
+ * Nunca saem daqui coordenadas do ponto de embarque, endereço, ponto de referência, telefone, código de vínculo nem ids internos.
+ * (Lista de campos PERMITIDOS: um campo novo na parada não vaza por esquecimento.)
+ */
+const CAMPOS_PARADA_RESPONSAVEL = [
+  'id', 'id_aluno', 'nome_aluno', 'nome_sanitizado', 'status_embarque', 'vinculo',
+  'escola_destino', 'escola_entrada', 'escola_saida',
+  'hora_ida', 'hora_volta', 'hora_prevista', 'hora_ida_manual', 'hora_volta_manual',
+  'hora_embarque', 'hora_desembarque', 'motivo_ausencia', 'ausencia_trecho'
+];
+function paradaParaResponsavel(p: any) {
+  const out: any = {};
+  for (const k of CAMPOS_PARADA_RESPONSAVEL) if (p[k] !== undefined) out[k] = p[k];
+  return out;
+}
+
 function getFilteredStateForUser(user: SessionPayload, pref?: number) {
   const driverId = driverIdFor(user, pref);
   const trip = driverId !== null ? getTrip(driverId) : makeTrip(0);
@@ -940,7 +957,7 @@ function getFilteredStateForUser(user: SessionPayload, pref?: number) {
     cloned.motoristas = Array.from(new Set([...(recResp?.motoristasVinculados || []), ...motoristasDoResponsavel(user.userId, user.studentId)]))
       .map((id) => ({ id, nome: perfilMotorista(id)?.nome ?? 'Motorista' }));
     if (studentId) {
-      cloned.paradas = cloned.paradas.filter((p: any) => p.id_aluno === studentId);
+      cloned.paradas = cloned.paradas.filter((p: any) => p.id_aluno === studentId).map(paradaParaResponsavel);
     } else {
       cloned.paradas = [];
     }
