@@ -434,7 +434,28 @@ test('Proximidade: sem coordenadas para o responsável até a próxima parada se
   assert.equal(p.mapaLiberado, false, 'o responsável nunca recebe o mapa');
   assert.equal(p.posicao, undefined, 'nem a posição da van, mesmo quando é a próxima parada');
   assert.equal(JSON.stringify(p).includes('-22.95'), false);
-  assert.ok(p.avisoAtivo, 'com 1 parada e aviso padrão de 10 min, o aviso deve estar ativo');
+  assert.equal(p.avisoAtivo, false, 'sem local de embarque marcado, a estimativa é só por paradas e não dispara o aviso');
+});
+
+test('Aviso "a van chega em ~N min": só para o aluno cuja van está perto do ponto marcado', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const mot = await novoMotorista(adm.data.token, 'AvisoPorAluno');
+  const nova = async (n: string) => (await jsonReq('POST', '/api/paradas/nova', mot, {
+    nomeAluno: n, endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777'
+  })).data;
+  const a = await nova('Perto'), b = await nova('Longe'), c = await nova('Sem ponto');
+  await jsonReq('PUT', `/api/paradas/${a.novaParada.id}/local`, mot, { latitude: -22.9000, longitude: -43.2 });
+  await jsonReq('PUT', `/api/paradas/${b.novaParada.id}/local`, mot, { latitude: -22.9810, longitude: -43.2 });
+  const ra = await novoResponsavel(a.codigoVinculo);
+  const rb = await novoResponsavel(b.codigoVinculo);
+  const rc = await novoResponsavel(c.codigoVinculo);
+
+  await jsonReq('POST', '/api/rotas/iniciar', mot);
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.8995, longitude: -43.2, speedKmH: 30, accuracyMeters: 8 });
+  const prox = async (r: any) => (await jsonReq('GET', '/api/proximidade', r)).data.proximidade;
+  assert.equal((await prox(ra)).avisoAtivo, true, 'van pertinho do ponto do aluno A');
+  assert.equal((await prox(rb)).avisoAtivo, false, 'van longe do ponto do aluno B');
+  assert.equal((await prox(rc)).avisoAtivo, false, 'aluno sem ponto marcado não recebe aviso por estimativa');
 });
 
 test('Preferências: responsável escolhe estilo e antecedência do aviso (valores validados)', async () => {

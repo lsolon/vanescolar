@@ -697,7 +697,9 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
     if (ate > minutos && ate <= 120) { minutos = ate; adiantada = true; progresso = Math.min(progresso, 0.9); }
   }
   const proxima = faltam === 0;
-  return { ...base, estado: proxima ? 'proxima' : 'a_caminho', progresso, minutos, mapaLiberado: false, avisoAtivo: minutos <= avisoMin, estimativaPrecisa: precisa, ...(horarioPrevisto ? { horarioPrevisto, adiantada } : {}) };
+  // O aviso "a van chega em ~N min" só dispara com a distância real (GPS da van + local de embarque marcado):
+  // estimativa por número de paradas serve só para a barra, nunca para avisar a família.
+  return { ...base, estado: proxima ? 'proxima' : 'a_caminho', progresso, minutos, mapaLiberado: false, avisoAtivo: precisa && minutos <= avisoMin, estimativaPrecisa: precisa, ...(horarioPrevisto ? { horarioPrevisto, adiantada } : {}) };
 }
 
 /**
@@ -867,6 +869,16 @@ function getFilteredStateForUser(user: SessionPayload, pref?: number) {
   return cloned;
 }
 
+/** Eventos sobre um aluno específico (embarque, ausência, cadastro) só devem chegar à família dele. */
+const EVENTOS_DE_UM_ALUNO = new Set(['STATUS_EMBARQUE_ATUALIZADO', 'NOVA_PARADA_CADASTRADA', 'AUSENCIA_NOTIFICADA', 'AUSENCIA_CANCELADA', 'HORARIOS_ATUALIZADOS']);
+function eventoEhDaFamilia(client: { role: string; userId?: number; studentId?: number }, event: string, data: any): boolean {
+  if (client.role !== 'responsavel' || !EVENTOS_DE_UM_ALUNO.has(event)) return true;
+  const paradaId = data?.paradaId ?? data?.novaParada?.id;
+  const alunoId = data?.alunoId;
+  if (paradaId === undefined && alunoId === undefined) return true; // evento geral da van
+  return filhosDe(client.userId, client.studentId).some((p: any) => (paradaId !== undefined && p.id === paradaId) || (alunoId !== undefined && p.id_aluno === alunoId));
+}
+
 function broadcast(event: string, data: any, driverId?: number | null) {
   sseClients.forEach((client) => {
     // Eventos de um motorista só chegam a ele, aos responsáveis dos seus alunos e a administradores.
@@ -881,8 +893,11 @@ function broadcast(event: string, data: any, driverId?: number | null) {
         client.res.write(`event: PROXIMIDADE_ATUALIZADA\ndata: ${JSON.stringify({ proximidade: filteredData.proximidade, estado: filteredData })}\n\n`);
         return;
       }
-      const payload = `event: ${event}\ndata: ${JSON.stringify({ ...data, estado: filteredData })}\n\n`;
-      client.res.write(payload);
+      // Outras famílias não recebem o evento (nem o aviso na tela) sobre o aluno alheio; só recalculam a previsão abaixo.
+      if (eventoEhDaFamilia(client, event, data)) {
+        const payload = `event: ${event}\ndata: ${JSON.stringify({ ...data, estado: filteredData })}\n\n`;
+        client.res.write(payload);
+      }
       if (client.role === 'responsavel' && (event === 'STATUS_EMBARQUE_ATUALIZADO' || event === 'ROTA_STATUS_ALTERADO' || event === 'AUSENCIA_NOTIFICADA' || event === 'AUSENCIA_CANCELADA')) {
         client.res.write(`event: PROXIMIDADE_ATUALIZADA\ndata: ${JSON.stringify({ proximidade: filteredData.proximidade, estado: filteredData })}\n\n`);
       }
