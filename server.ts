@@ -2441,6 +2441,23 @@ async function startServer() {
 
     parada.status_embarque = status;
     if (observacao !== undefined) (parada as any).observacao = observacao;
+    // Aprende o ponto pelo GPS da van: ao embarcar (ida) ou entregar (volta) um aluno sem ponto marcado, grava onde a van está.
+    // O endereço nunca sai do app; o motorista pode corrigir depois marcando o ponto à mão.
+    try {
+      const tripAtual = getTrip(donoDaParada(parada) as number);
+      const sentidoAtual = sentidoDaViagem(tripAtual);
+      const gpsAgora = tripAtual.gpsAtual;
+      const evento = (sentidoAtual === 'IDA' && status === 'EMBARCOU') || (sentidoAtual === 'VOLTA' && status === 'ENTREGUE');
+      if (evento && tripAtual.viagem.status === 'EM_ANDAMENTO' && !temLocalP(parada) && gpsAgora.accuracyMeters > 0 && gpsAgora.accuracyMeters <= 50 && Date.now() - new Date(gpsAgora.timestamp).getTime() < 120000) {
+        const local = lerLocal(gpsAgora.latitude, gpsAgora.longitude);
+        if (local) {
+          (parada as any).latitude = local.latitude;
+          (parada as any).longitude = local.longitude;
+          (parada as any).local_aprendido_gps = true;
+          auditLog('LOCAL_PARADA_APRENDIDO_GPS', userMot.email, `Local da parada ${parada.id} aprendido pelo GPS da van`);
+        }
+      }
+    } catch { /* o aprendizado do ponto nunca impede marcar o aluno */ }
     const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
     broadcast('STATUS_EMBARQUE_ATUALIZADO', { paradaId: parada.id, status, timestamp, alunoId: parada.id_aluno }, donoDaParada(parada));
@@ -2589,6 +2606,7 @@ async function startServer() {
     if (!local) return res.status(400).json({ error: 'Localização inválida.' });
     parada.latitude = local.latitude;
     parada.longitude = local.longitude;
+    delete parada.local_aprendido_gps;
     auditLog('LOCAL_PARADA_DEFINIDO', user.email, `Local de embarque definido para a parada ${parada.id}`);
     res.json({ sucesso: true });
   });

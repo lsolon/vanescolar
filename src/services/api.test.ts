@@ -931,6 +931,23 @@ test('Aluno a bordo: o tempo até a escola soma as paradas pendentes mesmo longe
   assert.ok(prox.minutos > 60, `deveria somar o trecho até a parada distante, veio ${prox.minutos} min`);
 });
 
+test('Parada sem ponto aprende o local pelo GPS ao embarcar; ponto já marcado não é sobrescrito', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'AprendeGps');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola AG', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  const A = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno A' })).data;
+  const B = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno B', latitude: -22.90, longitude: -43.10 })).data;
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.95, longitude: -43.20, speedKmH: 20, accuracyMeters: 8 });
+  await jsonReq('POST', `/api/paradas/${A.novaParada.id}/status`, mot, { status: 'EMBARCOU' });
+  await jsonReq('POST', `/api/paradas/${B.novaParada.id}/status`, mot, { status: 'EMBARCOU' });
+  const lista = (await jsonReq('GET', '/api/estado', mot)).data;
+  const arr: any[] = Array.isArray(lista) ? lista : (lista.paradas ?? []);
+  const a = arr.find((p) => p.id === A.novaParada.id), b = arr.find((p) => p.id === B.novaParada.id);
+  assert.equal(a?.latitude, -22.95);
+  assert.equal(b?.latitude, -22.90);
+});
+
 test('Sugerir rota: ordena pelas distâncias, o motorista reordena à mão e aplica; ordem inválida é recusada', async () => {
   const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
   const mot = await novoMotorista(adm, 'Sug');
