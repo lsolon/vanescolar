@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { TransportRepository } from '../../services/api';
-import type { SugestaoRota, EscolaMotorista, RotaAutomaticaResultado } from '../../services/api';
+import type { SugestaoRota, EscolaMotorista, PropostaCronograma } from '../../services/api';
 import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 
 /** O motorista define onde fica cada escola: é o destino da barra de deslocamento do aluno a bordo. */
@@ -101,17 +101,24 @@ export const RotasIdaVolta: React.FC<{ sentidoAtivo?: Sent; versao?: number; onA
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
-  const [auto, setAuto] = useState<RotaAutomaticaResultado | null>(null);
+  const [prop, setProp] = useState<PropostaCronograma | null>(null);
   const [confirmaAuto, setConfirmaAuto] = useState(false);
   const [criandoAuto, setCriandoAuto] = useState(false);
   const t = TEMA[aba];
 
-  const criarAuto = async () => {
-    setCriandoAuto(true); setErro(null); setOk(null); setAuto(null);
+  const propor = async () => {
+    setCriandoAuto(true); setErro(null); setOk(null); setProp(null);
+    try { setProp(await TransportRepository.proporCronograma(aba)); setConfirmaAuto(false); }
+    catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao montar o cronograma.'); setConfirmaAuto(false); }
+    finally { setCriandoAuto(false); }
+  };
+  const fixar = async () => {
+    if (!prop) return;
+    setCriandoAuto(true); setErro(null);
     try {
-      const r = await TransportRepository.criarRotaAutomatica(aba);
-      setAuto(r); setConfirmaAuto(false); setOk(`Rota de ${t.nome.toLowerCase()} criada pelas ruas.`); await carregar('atual'); onAplicado();
-    } catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao criar a rota.'); setConfirmaAuto(false); }
+      await TransportRepository.fixarCronograma(aba, prop.avisos.length > 0);
+      setOk(`Cronograma de ${t.nome.toLowerCase()} fixado. Os responsáveis já veem os horários.`); setProp(null); await carregar('atual'); onAplicado();
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao fixar.'); }
     finally { setCriandoAuto(false); }
   };
 
@@ -174,22 +181,31 @@ export const RotasIdaVolta: React.FC<{ sentidoAtivo?: Sent; versao?: number; onA
           ))}
         </ol>
         {confirmaAuto && (
-          <div role="alertdialog" aria-label="Criar rota automática" className="rounded-xl bg-slate-950 border border-amber-400/40 p-3 space-y-2">
-            <p className="text-[11px] text-amber-200">Para calcular o caminho pelas ruas, o app usa o endereço de cada aluno <strong>uma única vez</strong>, apenas para achar o ponto no mapa. O endereço não fica guardado nesse serviço pelo app, e o responsável nunca vê mapa nem localização — só o horário aproximado. Isso muda a ordem da rota de {t.nome.toLowerCase()}.</p>
+          <div role="alertdialog" aria-label="Montar cronograma" className="rounded-xl bg-slate-950 border border-amber-400/40 p-3 space-y-2">
+            <p className="text-[11px] text-amber-200">Para calcular o caminho pelas ruas, o app usa o endereço de cada aluno <strong>uma única vez</strong>, apenas para achar o ponto no mapa. O endereço não fica guardado nesse serviço pelo app, e o responsável nunca vê mapa nem localização — só o horário aproximado. O app só mostra uma proposta: nada muda até você tocar em Fixar. Horários que você já fixou nunca são alterados.</p>
             <div className="flex gap-2">
-              <button type="button" onClick={criarAuto} disabled={criandoAuto} className={`px-4 py-2 rounded-xl text-xs font-black min-h-[44px] cursor-pointer disabled:opacity-50 ${t.btn}`}>{criandoAuto ? 'Calculando…' : 'Criar rota'}</button>
+              <button type="button" onClick={propor} disabled={criandoAuto} className={`px-4 py-2 rounded-xl text-xs font-black min-h-[44px] cursor-pointer disabled:opacity-50 ${t.btn}`}>{criandoAuto ? 'Calculando…' : 'Calcular proposta'}</button>
               <button type="button" onClick={() => setConfirmaAuto(false)} disabled={criandoAuto} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Cancelar</button>
             </div>
           </div>
         )}
-        {auto && auto.sentido === aba && (
-          <div className="rounded-xl bg-slate-950 border border-emerald-400/30 p-3 space-y-1">
-            <p className="text-[11px] font-bold text-emerald-300">Horários aproximados (já aparecem para os responsáveis) — total ~{auto.totalMin} min</p>
-            <ul className="text-[11px] text-slate-300 space-y-0.5">
-              {auto.paradas.map((p, i) => <li key={p.id}>{i + 1}. {p.nome} — {p.horario ?? 'sem horário da escola'} <span className="text-slate-500">({p.trechoMin} min de trajeto)</span></li>)}
-              {typeof auto.escolaMin === 'number' && <li className="text-slate-500">Do último aluno até a escola: {auto.escolaMin} min</li>}
-            </ul>
-            <p className="text-[11px] text-amber-200">Na primeira viagem, confira se esses horários batem com a realidade. Se mudar a ordem à mão, os horários voltam à estimativa padrão.</p>
+        {prop && prop.sentido === aba && (
+          <div className="rounded-xl bg-slate-950 border border-emerald-400/30 p-3 space-y-2">
+            <p className="text-[11px] font-bold text-emerald-300">
+              {prop.modo === 'montar' ? 'Proposta de cronograma' : prop.modo === 'encaixar' ? 'Proposta para encaixar alunos novos (horários fixos não mudam)' : 'Conferência do cronograma fixado'}
+              {' — '}{aba === 'IDA' ? `chegada à escola até ${prop.limite}` : `primeiro desembarque a partir de ${prop.limite}`}
+            </p>
+            <ol className="text-[11px] text-slate-300 space-y-0.5">
+              {prop.paradas.map((p, i) => <li key={p.id}>{i + 1}. <strong>{p.horario}</strong> — {p.nome} <span className="text-slate-500">{p.fixo ? '(horário já fixado)' : '(novo horário)'}</span></li>)}
+            </ol>
+            {prop.avisos.map((a, i) => <p key={i} role="alert" className="text-[11px] text-rose-300">⚠ {a}</p>)}
+            {prop.modo !== 'verificar' && (
+              <div className="flex gap-2 flex-wrap">
+                <button type="button" onClick={fixar} disabled={criandoAuto} className={`px-4 py-2 rounded-xl text-xs font-black min-h-[44px] cursor-pointer disabled:opacity-50 ${t.btn}`}>{criandoAuto ? 'Fixando…' : prop.avisos.length ? 'Fixar mesmo assim' : 'Fixar cronograma'}</button>
+                <button type="button" onClick={() => setProp(null)} disabled={criandoAuto} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Descartar</button>
+              </div>
+            )}
+            <p className="text-[11px] text-amber-200">Os tempos de trajeto são os de via livre. Na primeira semana, confira se os horários batem com a realidade e, se precisar, ajuste o horário de cada aluno à mão.</p>
           </div>
         )}
         {erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
@@ -197,7 +213,7 @@ export const RotasIdaVolta: React.FC<{ sentidoAtivo?: Sent; versao?: number; onA
         <div className="flex gap-2 flex-wrap">
           <button type="button" onClick={() => carregar('sugestao')} disabled={carregando || ordem.length < 2} className={`px-3 py-2 rounded-xl border text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50 ${t.sec}`}>{carregando ? 'Calculando…' : 'Sugerir rota'}</button>
           <button type="button" onClick={aplicar} disabled={salvando || !editado} className={`px-4 py-2 rounded-xl text-xs font-black min-h-[44px] cursor-pointer disabled:opacity-40 ${t.btn}`}>{salvando ? 'Salvando…' : 'Salvar esta ordem'}</button>
-          <button type="button" onClick={() => setConfirmaAuto(true)} disabled={criandoAuto || ordem.length < 1 || confirmaAuto} className={`px-3 py-2 rounded-xl border text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50 ${t.sec}`}>Criar rota automática (pelas ruas)</button>
+          <button type="button" onClick={() => setConfirmaAuto(true)} disabled={criandoAuto || ordem.length < 1 || confirmaAuto} className={`px-3 py-2 rounded-xl border text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50 ${t.sec}`}>Montar / encaixar cronograma (pelas ruas)</button>
           {editado && <button type="button" onClick={() => carregar('atual')} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Descartar</button>}
         </div>
       </div>

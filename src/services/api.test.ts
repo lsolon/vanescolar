@@ -943,6 +943,8 @@ test('Rota automática: exige escola marcada, não roda com a rota em andamento 
   await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
   const andando = await jsonReq('POST', '/api/rotas/automatica', mot, { sentido: 'IDA' });
   assert.equal(andando.status, 409);
+  const semProposta = await jsonReq('POST', '/api/rotas/fixar', mot, { sentido: 'IDA' });
+  assert.equal(semProposta.status, 409); // nada a fixar sem proposta: o cronograma existente fica intacto
 });
 
 test('Parada sem ponto aprende o local pelo GPS ao embarcar; ponto já marcado não é sobrescrito', async () => {
@@ -960,6 +962,34 @@ test('Parada sem ponto aprende o local pelo GPS ao embarcar; ponto já marcado n
   const a = arr.find((p) => p.id === A.novaParada.id), b = arr.find((p) => p.id === B.novaParada.id);
   assert.equal(a?.latitude, -22.95);
   assert.equal(b?.latitude, -22.90);
+});
+
+test('Semáforo: verde no horário, amarelo adiantada, vermelho atrasada; sem coordenadas para o responsável', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'Semaforo');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola SM', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  const A = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno A', latitude: -22.90, longitude: -43.20 })).data;
+  const resp = await novoResponsavel(A.codigoVinculo);
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.95, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 }); // ~5,5 km do ponto
+  const agoraSP = () => { const f = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date()); return (Number(f.find((x) => x.type === 'hour')!.value) % 24) * 60 + Number(f.find((x) => x.type === 'minute')!.value); };
+  const hm = (m: number) => { const x = ((m % 1440) + 1440) % 1440; return `${String(Math.floor(x / 60)).padStart(2, '0')}:${String(x % 60).padStart(2, '0')}`; };
+  const fixar = (m: number) => jsonReq('PUT', `/api/paradas/${A.novaParada.id}/horarios`, mot, { horaIda: hm(m) });
+  const prox = async () => (await jsonReq('GET', '/api/proximidade', resp)).data.proximidade;
+  await fixar(agoraSP() + 120);
+  const adiantada = await prox();
+  assert.equal(adiantada.semaforo, 'amarelo');
+  assert.ok(adiantada.diferencaMin < -3);
+  await fixar(agoraSP() - 30);
+  const atrasada = await prox();
+  assert.equal(atrasada.semaforo, 'vermelho');
+  assert.ok(atrasada.diferencaMin > 3);
+  await fixar(agoraSP() + (await prox()).minutos + 1);
+  const ok = await prox();
+  assert.equal(ok.semaforo, 'verde');
+  assert.match(String(ok.chegadaPrevista), /^\d\d:\d\d$/);
+  const txt = JSON.stringify(ok);
+  assert.ok(!/latitude|longitude|posicao/i.test(txt), 'responsável não pode receber coordenadas');
 });
 
 test('Sugerir rota: ordena pelas distâncias, o motorista reordena à mão e aplica; ordem inválida é recusada', async () => {
