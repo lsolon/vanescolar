@@ -22,13 +22,32 @@ const __dirname = path.dirname(__filename);
 
 const DEMO_MODE = process.env.DEMO_MODE === 'true' || (process.env.DEMO_MODE !== 'false' && process.env.NODE_ENV !== 'production');
 // SEGURANÇA: o segredo de sessão NUNCA pode ser um valor público (o repositório é público).
-// Em produção é obrigatório definir SESSION_SECRET; em desenvolvimento gera um segredo aleatório por execução.
+// Fora do modo demo (produção) é obrigatório definir SESSION_SECRET com 32+ caracteres: sem ele cada instância/reinício
+// geraria um segredo próprio e derrubaria todas as sessões. Só no modo demo/desenvolvimento gera um aleatório por execução.
 const SESSION_SECRET = (() => {
   const fromEnv = process.env.SESSION_SECRET;
   if (fromEnv && fromEnv.length >= 32) return fromEnv;
+  if (!DEMO_MODE) {
+    console.error('[VanEscolar] ERRO: defina o Secret SESSION_SECRET (mínimo 32 caracteres aleatórios) para rodar fora do modo demo.');
+    process.exit(1);
+  }
   return crypto.randomBytes(48).toString('hex');
 })();
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'senha-de-teste-admin';
+// Senhas que existem no código público: nunca valem como senha de admin fora do modo demo.
+const SENHAS_PUBLICAS = ['senha-de-teste-admin', '123456abcd'];
+const ADMIN_PASSWORD = (() => {
+  const p = process.env.ADMIN_PASSWORD || '';
+  if (DEMO_MODE) return p || 'senha-de-teste-admin';
+  if (!p || SENHAS_PUBLICAS.includes(p)) {
+    console.warn('[VanEscolar] ADMIN_PASSWORD ausente ou igual a uma senha pública: login de admin por senha DESATIVADO (só por Google verificado).');
+    return '';
+  }
+  if (p.length < 12) console.warn('[VanEscolar] ADMIN_PASSWORD curta (menos de 12 caracteres): use uma senha mais forte.');
+  return p;
+})();
+if (DEMO_MODE && process.env.DEMO_MODE !== 'true') {
+  console.warn('[VanEscolar] AVISO: modo demonstração ligado por padrão (DEMO_MODE não definido e NODE_ENV != production). Em produção defina DEMO_MODE=false.');
+}
 // Contas de demonstração (senhas conhecidas, públicas no repositório) só existem com DEMO_MODE=true explícito.
 const SEED_LOGIN_ENABLED = DEMO_MODE;
 const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || 'vanescolar-9afde';
@@ -1103,7 +1122,7 @@ async function startServer() {
 
   // Saúde do servidor (não expõe dados): útil para conferir se a persistência está ativa.
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ ok: true, modoTeste: MODO_TESTE_SEM_LOGIN, persistence: persistence.kind, instancia: instanciaId, iniciadoEm, ...(persistence.reason ? { motivo: persistence.reason } : {}) });
+    res.json({ ok: true, demoMode: DEMO_MODE, modoTeste: MODO_TESTE_SEM_LOGIN, persistence: persistence.kind, instancia: instanciaId, iniciadoEm, ...(persistence.reason ? { motivo: persistence.reason } : {}) });
   });
 
   app.use((_req: Request, res: Response, next: NextFunction) => {
