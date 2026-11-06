@@ -389,6 +389,10 @@ export interface ProximidadeVan {
   destino?: 'escola' | 'casa';
   horarioPrevisto?: string;
   adiantada?: boolean;
+  semaforo?: 'verde' | 'amarelo' | 'vermelho';
+  diferencaMin?: number;
+  chegadaPrevista?: string;
+  chegou?: boolean;
   posicao?: { latitude: number; longitude: number; heading: number };
   atualizadoEm: string;
 }
@@ -405,11 +409,14 @@ export interface SugestaoRota {
   kmSugerido?: number;
   mudou: boolean;
 }
-export interface RotaAutomaticaResultado {
+export interface PropostaCronograma {
   sentido: 'IDA' | 'VOLTA';
-  paradas: { id: number; nome: string; trechoMin: number; horario: string | null }[];
-  escolaMin?: number;
-  totalMin: number;
+  /** montar: ninguém tem horário fixo ainda; encaixar: há alunos novos entre horários fixos; verificar: todos já têm horário fixo */
+  modo: 'montar' | 'encaixar' | 'verificar';
+  /** limite: ida = hora em que a van deve chegar à escola; volta = hora do primeiro desembarque após a saída */
+  limite: string;
+  paradas: { id: number; nome: string; horario: string; fixo: boolean }[];
+  avisos: string[];
 }
 export interface EscolaMotorista { nome: string; local: { latitude: number; longitude: number } | null }
 export interface FilhoResumo { id_aluno: number; nome_aluno: string; escola_destino: string; vinculo: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO'; motorista: string | null }
@@ -1560,11 +1567,17 @@ export const TransportRepository = {
     return d;
   },
 
-  async criarRotaAutomatica(sentido: 'IDA' | 'VOLTA'): Promise<RotaAutomaticaResultado> {
+  async proporCronograma(sentido: 'IDA' | 'VOLTA'): Promise<PropostaCronograma> {
     const res = await fetch(`${getBaseUrl()}/api/rotas/automatica`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ sentido }) });
     const d = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(d.error || 'Não foi possível criar a rota automática.');
+    if (!res.ok) throw new Error(d.error || 'Não foi possível montar o cronograma.');
     return d;
+  },
+
+  async fixarCronograma(sentido: 'IDA' | 'VOLTA', confirmarAvisos = false): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/rotas/fixar`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ sentido, confirmarAvisos }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível fixar o cronograma.');
   },
 
   async aplicarOrdemRota(ids: number[], sentido: 'IDA' | 'VOLTA' = 'IDA'): Promise<void> {

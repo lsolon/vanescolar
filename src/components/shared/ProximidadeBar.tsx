@@ -36,6 +36,47 @@ export function textoProximidade(p: ProximidadeVan | null): { titulo: string; su
 
 const SEGMENTOS = 4;
 
+/** Semáforo da chegada: cor + ícone + texto (a cor nunca é a única informação). Sem mapa nem localização. */
+export function textoSemaforo(p: ProximidadeVan | null): { cor: 'verde' | 'amarelo' | 'vermelho' | 'cinza'; icone: string; titulo: string; detalhe: string } | null {
+  if (!p || !p.rotaAtiva) return null;
+  const abs = Math.abs(p.diferencaMin ?? 0);
+  if (p.estado === 'proxima' && p.chegou) return { cor: 'verde', icone: '●', titulo: 'A van chegou ao seu ponto', detalhe: p.horarioPrevisto ? `Horário combinado: ${p.horarioPrevisto}` : '' };
+  if ((p.estado === 'a_caminho' || p.estado === 'proxima') && p.semaforo) {
+    const comb = p.horarioPrevisto ? `combinado ${p.horarioPrevisto}` : '';
+    const chega = p.chegadaPrevista ? `Chega por volta das ${p.chegadaPrevista}` : '';
+    if (p.semaforo === 'verde') return { cor: 'verde', icone: '●', titulo: 'No horário', detalhe: [chega, comb].filter(Boolean).join(' · ') };
+    if (p.semaforo === 'amarelo') return { cor: 'amarelo', icone: '▲', titulo: `Adiantada (~${abs} min antes)`, detalhe: [chega, comb].filter(Boolean).join(' · ') + ' — esteja pronto antes do horário' };
+    return { cor: 'vermelho', icone: '■', titulo: `Atrasada (~${abs} min)`, detalhe: [chega, comb].filter(Boolean).join(' · ') };
+  }
+  if ((p.estado === 'a_caminho' || p.estado === 'proxima') && !p.estimativaPrecisa) return { cor: 'cinza', icone: '○', titulo: 'Previsão ainda sem localização exata', detalhe: 'O motorista ainda não marcou o ponto de embarque ou o GPS não está ativo.' };
+  if (p.estado === 'embarcou' && p.destino && p.chegadaPrevista) {
+    const alvo = p.destino === 'casa' ? 'em casa' : 'na escola';
+    if (p.semaforo === 'vermelho') return { cor: 'vermelho', icone: '■', titulo: `Pode chegar depois da entrada (~${abs} min)`, detalhe: `Chega ${alvo} por volta das ${p.chegadaPrevista}` };
+    return { cor: p.semaforo === 'verde' ? 'verde' : 'cinza', icone: p.semaforo === 'verde' ? '●' : '○', titulo: `Chega ${alvo} por volta das ${p.chegadaPrevista}`, detalhe: `~${p.minutos} min de viagem` };
+  }
+  return null;
+}
+const COR_SEMAFORO = {
+  verde: 'bg-emerald-500/15 border-emerald-400/50 text-emerald-200',
+  amarelo: 'bg-amber-500/15 border-amber-400/50 text-amber-200',
+  vermelho: 'bg-rose-500/15 border-rose-400/50 text-rose-200',
+  cinza: 'bg-slate-800/60 border-slate-600 text-slate-300'
+} as const;
+
+export const SemaforoChegada: React.FC<{ proximidade: ProximidadeVan | null }> = ({ proximidade }) => {
+  const s = textoSemaforo(proximidade);
+  if (!s) return null;
+  return (
+    <div role="status" aria-label={`Semáforo da van: ${s.titulo}`} data-semaforo={s.cor} className={`mt-3 flex items-start gap-3 rounded-xl border px-3 py-2 ${COR_SEMAFORO[s.cor]}`}>
+      <span aria-hidden="true" className="text-lg leading-none mt-0.5">{s.icone}</span>
+      <div className="min-w-0">
+        <p className="text-sm font-black leading-tight">{s.titulo}</p>
+        {s.detalhe && <p className="text-xs opacity-90 mt-0.5">{s.detalhe}</p>}
+      </div>
+    </div>
+  );
+};
+
 export const ProximidadeBar: React.FC<{ proximidade: ProximidadeVan | null; estilo: Estilo }> = ({ proximidade, estilo }) => {
   const prog = proximidade ? ((proximidade.estado === 'entregue' || (proximidade.estado === 'embarcou' && !proximidade.destino)) ? 1 : proximidade.progresso) : 0;
   const { titulo, sub } = textoProximidade(proximidade);
@@ -113,6 +154,7 @@ export const ProximidadeBar: React.FC<{ proximidade: ProximidadeVan | null; esti
 
       <p className={`mt-3 text-sm font-semibold ${ativa ? 'text-slate-100' : 'text-slate-300'}`}>{titulo}</p>
       <p className="text-xs text-slate-400 mt-0.5">{sub}</p>
+      <SemaforoChegada proximidade={proximidade} />
     </div>
   );
 };

@@ -120,8 +120,8 @@ interface UserRecord {
   veiculoPlaca?: string;
   /** Motorista: local de cada escola atendida (chave = nome normalizado) */
   escolasLocal?: Record<string, { latitude: number; longitude: number }>;
-  /** rota criada automaticamente por ruas: por sentido, a ordem, os minutos de cada trecho e o fator ruas/linha reta */
-  rotaAuto?: Partial<Record<'IDA' | 'VOLTA', { ordem: number[]; trechosMin: number[]; fatorRuas: number; criadaEm: string }>>;
+  /** rota por ruas: por sentido, o fator ruas/linha reta medido (usado na previsão ao vivo) */
+  rotaAuto?: Partial<Record<'IDA' | 'VOLTA', { fatorRuas: number; criadaEm: string }>>;
   capacidade?: number;
   horarios?: string[];
   lgpdConsent: {
@@ -514,6 +514,7 @@ function perfilMotorista(driverId: number) {
 // (estado, progresso, minutos). Coordenadas da van só saem quando a próxima parada é a do aluno.
 // ============================================================================
 const MIN_POR_PARADA = 4;
+const TOLERANCIA_SEMAFORO_MIN = 3; // até 3 min de diferença ainda é "no horário"
 const AVISOS_VALIDOS = [3, 5, 10, 15, 20, 30];
 const ESTILOS_VALIDOS = ['A', 'B', 'C'];
 const PREFS_PADRAO = { estilo: 'C' as 'A' | 'B' | 'C', avisoMin: 10 };
@@ -542,6 +543,14 @@ interface Proximidade {
   adiantada?: boolean;
   /** a bordo: para onde a van segue (escola na ida, casa na volta) */
   destino?: 'escola' | 'casa';
+  /** semáforo da chegada: verde = no horário combinado, amarelo = adiantada, vermelho = atrasada (a bordo: vermelho se passar da entrada) */
+  semaforo?: 'verde' | 'amarelo' | 'vermelho';
+  /** minutos de diferença entre a chegada prevista e o horário de referência (negativo = antes) */
+  diferencaMin?: number;
+  /** hora prevista de chegada (ao ponto do aluno; a bordo, ao destino), HH:MM de Brasília */
+  chegadaPrevista?: string;
+  /** a van está no ponto do aluno (a menos de ~80 m) */
+  chegou?: boolean;
   posicao?: { latitude: number; longitude: number; heading: number };
   atualizadoEm: string;
 }
@@ -658,16 +667,6 @@ function fatorRuasDe(driverId: number, sentido: string): number {
   const r = usersDB.find((u) => u.id === driverId)?.rotaAuto;
   return r?.[sentido === 'VOLTA' ? 'VOLTA' : 'IDA']?.fatorRuas ?? r?.IDA?.fatorRuas ?? r?.VOLTA?.fatorRuas ?? 1.3;
 }
-/** A rota automática vale enquanto a ordem dos alunos for exatamente a que ela criou. */
-function rotaAutoValida(driverId: number, sentido: 'IDA' | 'VOLTA') {
-  const r = usersDB.find((u) => u.id === driverId)?.rotaAuto?.[sentido];
-  if (!r) return null;
-  const atual = serverState.paradas
-    .filter((q: any) => donoDaParada(q) === driverId && confirmada(q))
-    .sort((a: any, b: any) => ordemNo(a, sentido) - ordemNo(b, sentido))
-    .map((q: any) => q.id);
-  return atual.length === r.ordem.length && atual.every((id: number, i: number) => id === r.ordem[i]) ? r : null;
-}
 
 /** Minutos desde 00:00 no horário de Brasília (o servidor pode estar em UTC). */
 function agoraMinutosSP(): number {
@@ -708,7 +707,11 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
       const km = caminhoKm(gps, paradasAteLa, destino);
       const prog = progressoPorDistancia(trip, `e${studentId}`, km) ?? 0;
       const minutos = minutosPorKm(km, gps.speedKmH, pendentes.length + semLocal * (MIN_POR_PARADA - 1), fatorRuasDe(driverId, sentido));
-      return { ...base, estado: 'embarcou', progresso: prog, minutos, destino: sentido === 'VOLTA' ? 'casa' : 'escola', estimativaPrecisa: true, avisoAtivo: false };
+      const chegada = agoraMinutosSP() + minutos;
+      // Ida: vermelho se a previsão passa da entrada da escola; verde caso contrário. Na volta só informa a hora.
+      const entradaMin = sentido === 'IDA' && lerHorario(mine.escola_entrada) ? paraMin(mine.escola_entrada) : null;
+      const sem = entradaMin !== null ? (chegada > entradaMin ? 'vermelho' as const : 'verde' as const) : undefined;
+      return { ...base, estado: 'embarcou', progresso: prog, minutos, destino: sentido === 'VOLTA' ? 'casa' : 'escola', estimativaPrecisa: true, avisoAtivo: false, chegadaPrevista: deMin(chegada), ...(sem ? { semaforo: sem, diferencaMin: chegada - (entradaMin as number) } : {}) };
     }
     return { ...base, estado: 'embarcou', progresso: 1, minutos: 0 };
   }
@@ -721,6 +724,7 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
   const faltam = antes.filter((p: any) => p.status_embarque === 'PENDENTE').length; // paradas antes da dele ainda não atendidas
   let minutos = (faltam + 1) * MIN_POR_PARADA;
   let precisa = false;
+  let chegou = false;
   let progresso = Math.max(0, Math.min(0.97, (antes.length - faltam) / (antes.length + 1)));
   if (gpsOk && temLocalP(mine)) {
     // Caminho da van: posição atual → paradas pendentes antes do aluno (as que têm local) → aluno.
@@ -728,6 +732,7 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
     const comLocal = pendentesAntes.filter(temLocalP);
     const semLocal = pendentesAntes.length - comLocal.length;
     const km = caminhoKm(gps, comLocal, mine);
+    chegou = comLocal.length === 0 && km < 0.08;
     minutos = minutosPorKm(km, gps.speedKmH, pendentesAntes.length + semLocal * (MIN_POR_PARADA - 1), fatorRuasDe(driverId, sentido));
     precisa = true;
     const porDistancia = progressoPorDistancia(trip, `a${studentId}`, km);
@@ -737,6 +742,16 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
   // anterior faltou), o tempo mostrado e o aviso nunca prometem antes do horário combinado.
   let horarioPrevisto: string | undefined, adiantada = false;
   const prevista = horariosDaParada(mine).hora_ida;
+  // Semáforo: compara a chegada REAL prevista (distância pelas ruas) com o horário combinado. Só com GPS e ponto marcado.
+  let semaforo: 'verde' | 'amarelo' | 'vermelho' | undefined, diferencaMin: number | undefined, chegadaPrevista: string | undefined;
+  if (precisa) {
+    const chegadaMin = agoraMinutosSP() + minutos;
+    chegadaPrevista = deMin(chegadaMin);
+    if (prevista) {
+      diferencaMin = chegadaMin - paraMin(prevista);
+      semaforo = diferencaMin > TOLERANCIA_SEMAFORO_MIN ? 'vermelho' : diferencaMin < -TOLERANCIA_SEMAFORO_MIN ? 'amarelo' : 'verde';
+    }
+  }
   if (prevista) {
     horarioPrevisto = prevista;
     const ate = paraMin(prevista) - agoraMinutosSP();
@@ -745,7 +760,7 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
   const proxima = faltam === 0;
   // O aviso "a van chega em ~N min" só dispara com a distância real (GPS da van + local de embarque marcado):
   // estimativa por número de paradas serve só para a barra, nunca para avisar a família.
-  return { ...base, estado: proxima ? 'proxima' : 'a_caminho', progresso, minutos, mapaLiberado: false, avisoAtivo: precisa && minutos <= avisoMin, estimativaPrecisa: precisa, ...(horarioPrevisto ? { horarioPrevisto, adiantada } : {}) };
+  return { ...base, estado: proxima ? 'proxima' : 'a_caminho', progresso, minutos, mapaLiberado: false, avisoAtivo: precisa && minutos <= avisoMin, estimativaPrecisa: precisa, ...(horarioPrevisto ? { horarioPrevisto, adiantada } : {}), ...(chegadaPrevista ? { chegadaPrevista } : {}), ...(semaforo ? { semaforo, diferencaMin } : {}), ...(chegou ? { chegou: true } : {}) };
 }
 
 /**
@@ -820,17 +835,9 @@ function horariosDaParada(p: any): { hora_ida: string | null; hora_volta: string
     return { n: grupo.length, idx: pos >= 0 ? pos : grupo.length };
   };
   const gi = posNo('IDA'), gv = posNo('VOLTA');
-  // Rota automática por ruas (enquanto a ordem não foi mudada): horário = soma dos trechos reais.
-  const rIda = rotaAutoValida(dono, 'IDA'), rVolta = rotaAutoValida(dono, 'VOLTA');
-  const porRuasIda = rIda && p.escola_entrada && rIda.ordem.includes(p.id)
-    ? deMin(RR.horariosDaRota('IDA', rIda.trechosMin, paraMin(p.escola_entrada) - FOLGA_CHEGADA_MIN, 0)[rIda.ordem.indexOf(p.id)]) : null;
-  const porRuasVolta = rVolta && p.escola_saida && rVolta.ordem.includes(p.id)
-    ? deMin(RR.horariosDaRota('VOLTA', rVolta.trechosMin, 0, paraMin(p.escola_saida) + APOS_SAIDA_MIN)[rVolta.ordem.indexOf(p.id)]) : null;
   const ida = p.hora_ida_manual
-    ?? porRuasIda
     ?? (p.escola_entrada ? deMin(paraMin(p.escola_entrada) - FOLGA_CHEGADA_MIN - TRAJETO_ESCOLA_MIN - Math.max(0, gi.n - 1 - gi.idx) * MIN_POR_PARADA) : null);
   const volta = p.hora_volta_manual
-    ?? porRuasVolta
     ?? (p.escola_saida ? deMin(paraMin(p.escola_saida) + APOS_SAIDA_MIN + gv.idx * MIN_POR_PARADA) : null);
   return { hora_ida: ida, hora_volta: volta };
 }
@@ -2243,19 +2250,26 @@ async function startServer() {
     });
   });
 
-  // ---- Rota automática por RUAS: converte os endereços em pontos (uma vez), ordena e mede cada trecho pelo mapa viário ----
+  // ---- Cronograma por RUAS: o app PROPÕE (monta / encaixa aluno novo / verifica) e o motorista FIXA ----
+  // O cronograma é combinado com as famílias uma vez e fica valendo: horários já fixados (âncoras) nunca são alterados pelo cálculo.
+  type PropostaRota = { sentido: 'IDA' | 'VOLTA'; ids: number[]; horarios: Record<number, number>; avisos: RR.AvisoPlano[]; fator: number | null; confirmados: number[]; criadaEm: number };
+  const propostasRota = new Map<string, PropostaRota>();
   app.post('/api/rotas/automatica', authenticate, requireDriver, requireTripOwnership, rateLimiter(4, 60000), async (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
     const driverId = driverIdFor(user) as number;
     const trip = getTrip(driverId);
     const sentido: 'IDA' | 'VOLTA' = String(req.body?.sentido).toUpperCase() === 'VOLTA' ? 'VOLTA' : 'IDA';
-    if (trip.viagem.status === 'EM_ANDAMENTO') return res.status(409).json({ error: 'Encerre a rota em andamento antes de criar uma nova.' });
-    const alunos: any[] = serverState.paradas.filter((p: any) => donoDaParada(p) === driverId && confirmada(p));
+    if (trip.viagem.status === 'EM_ANDAMENTO') return res.status(409).json({ error: 'Encerre a rota em andamento antes de montar o cronograma.' });
+    const alunos: any[] = serverState.paradas
+      .filter((p: any) => donoDaParada(p) === driverId && confirmada(p))
+      .sort((a: any, b: any) => ordemNo(a, sentido) - ordemNo(b, sentido));
     if (alunos.length === 0) return res.status(400).json({ error: 'Não há alunos confirmados na van.' });
     const escolas = new Set(alunos.map((p) => chaveEscola(p.escola_destino)));
-    if (escolas.size !== 1) return res.status(400).json({ error: 'A rota automática funciona com uma escola por vez. Use a ordem manual para várias escolas.' });
+    if (escolas.size !== 1) return res.status(400).json({ error: 'O cronograma automático funciona com uma escola por vez. Use a ordem manual para várias escolas.' });
     const escola = localDaEscola(driverId, alunos[0].escola_destino);
     if (!escola) return res.status(400).json({ error: 'Marque primeiro o local da escola.' });
+    const entrada = alunos.map((p) => p.escola_entrada).find((h) => lerHorario(h)), saida = alunos.map((p) => p.escola_saida).find((h) => lerHorario(h));
+    if (sentido === 'IDA' ? !entrada : !saida) return res.status(400).json({ error: `Informe o horário de ${sentido === 'IDA' ? 'entrada' : 'saída'} da escola.` });
     // 1) Endereço → ponto, só para quem ainda não tem ponto marcado. Nada do endereço é guardado em cache ou log.
     const naoAchados: string[] = [];
     let primeiro = true;
@@ -2270,18 +2284,63 @@ async function startServer() {
     if (naoAchados.length) {
       return res.status(422).json({ error: 'Não consegui localizar o endereço de: ' + naoAchados.join(', ') + '. Marque o ponto desses alunos no mapa e tente de novo.', naoEncontrados: naoAchados });
     }
-    // 2) Ordem e tempo de cada trecho pelas ruas.
-    const calc = await RR.calcularRotaPorRuas(alunos.map((p) => ({ latitude: p.latitude, longitude: p.longitude })), escola, sentido, fetch as any);
-    if (!calc) return res.status(502).json({ error: 'O serviço de rotas não respondeu. Tente de novo em instantes.' });
-    const ids = calc.ordem.map((i) => alunos[i].id as number);
-    ids.forEach((id, i) => { const p: any = alunos.find((x) => x.id === id); if (sentido === 'VOLTA') p.ordem_volta = i + 1; else p.ordem_sequencia = i + 1; });
+    // 2) Tempos reais entre todos os pontos (pelas ruas).
+    const pts = alunos.map((p) => ({ latitude: p.latitude as number, longitude: p.longitude as number }));
+    const D = await RR.matrizTempos([...pts, escola], fetch as any);
+    if (!D) return res.status(502).json({ error: 'O serviço de rotas não respondeu. Tente de novo em instantes.' });
+    // 3) Âncoras = horários já fixados. Sem âncoras, a ordem base vem da otimização pelas ruas.
+    const campo = sentido === 'IDA' ? 'hora_ida_manual' : 'hora_volta_manual';
+    const plano: RR.AlunoPlano[] = alunos.map((p) => ({ nome: String(p.nome_sanitizado || `Aluno ${p.id_aluno}`), ancoraMin: lerHorario(p[campo]) ? paraMin(p[campo]) : null }));
+    const temAncora = plano.some((a) => a.ancoraMin !== null), todosFixos = plano.every((a) => a.ancoraMin !== null);
+    let base: number[], fator: number | null = null;
+    if (temAncora) base = RR.ordemDasAncoras(plano);
+    else {
+      const calc = await RR.calcularRotaPorRuas(pts, escola, sentido, fetch as any);
+      if (!calc) return res.status(502).json({ error: 'O serviço de rotas não respondeu. Tente de novo em instantes.' });
+      base = calc.ordem; fator = calc.fatorRuas;
+    }
+    const limite = sentido === 'IDA' ? paraMin(entrada as string) - FOLGA_CHEGADA_MIN : paraMin(saida as string) + APOS_SAIDA_MIN;
+    const r = RR.encaixarAlunos(sentido, plano, D, limite, base);
+    const ids = r.ordem.map((i) => alunos[i].id as number);
+    const horarios: Record<number, number> = {};
+    r.ordem.forEach((i) => { horarios[alunos[i].id] = r.horarios[i]; });
+    propostasRota.set(`${driverId}:${sentido}`, { sentido, ids, horarios, avisos: r.avisos, fator, confirmados: alunos.map((p) => p.id).sort((a, b) => a - b), criadaEm: Date.now() });
+    const modo = !temAncora ? 'montar' : todosFixos ? 'verificar' : 'encaixar';
+    auditLog('CRONOGRAMA_PROPOSTO', user.email, `Proposta (${sentido}, ${modo}) com ${ids.length} aluno(s)`);
+    res.json({
+      sucesso: true, sentido, modo,
+      limite: deMin(limite),
+      paradas: r.ordem.map((i) => ({ id: alunos[i].id, nome: plano[i].nome, horario: deMin(r.horarios[i]), fixo: plano[i].ancoraMin !== null })),
+      avisos: r.avisos.map((a) => a.texto)
+    });
+  });
+
+  // O motorista aprova a proposta: grava a ordem e os horários como o cronograma fixo combinado com as famílias.
+  app.post('/api/rotas/fixar', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const sentido: 'IDA' | 'VOLTA' = String(req.body?.sentido).toUpperCase() === 'VOLTA' ? 'VOLTA' : 'IDA';
+    const prop = propostasRota.get(`${driverId}:${sentido}`);
+    const atuais = serverState.paradas.filter((p: any) => donoDaParada(p) === driverId && confirmada(p)).map((p: any) => p.id as number).sort((a: number, b: number) => a - b);
+    if (!prop || Date.now() - prop.criadaEm > 30 * 60000 || prop.confirmados.length !== atuais.length || !prop.confirmados.every((id, i) => id === atuais[i])) {
+      return res.status(409).json({ error: 'A proposta ficou desatualizada. Monte o cronograma de novo.' });
+    }
+    if (prop.avisos.length && req.body?.confirmarAvisos !== true) {
+      return res.status(409).json({ error: 'A proposta tem avisos de horário. Confirme para fixar mesmo assim.', precisaConfirmar: true, avisos: prop.avisos.map((a) => a.texto) });
+    }
+    const campo = sentido === 'IDA' ? 'hora_ida_manual' : 'hora_volta_manual';
+    prop.ids.forEach((id, i) => {
+      const p: any = serverState.paradas.find((x: any) => x.id === id);
+      if (!p) return;
+      if (sentido === 'VOLTA') p.ordem_volta = i + 1; else p.ordem_sequencia = i + 1;
+      p[campo] = deMin(prop.horarios[id]);
+    });
     const rec = usersDB.find((u) => u.id === driverId);
-    if (rec) rec.rotaAuto = { ...(rec.rotaAuto || {}), [sentido]: { ordem: ids, trechosMin: calc.trechosMin, fatorRuas: calc.fatorRuas, criadaEm: new Date().toISOString() } };
-    auditLog('ROTA_AUTOMATICA', user.email, `Rota por ruas criada (${sentido}) com ${ids.length} aluno(s)`);
+    if (rec && prop.fator) rec.rotaAuto = { ...(rec.rotaAuto || {}), [sentido]: { fatorRuas: prop.fator, criadaEm: new Date().toISOString() } };
+    propostasRota.delete(`${driverId}:${sentido}`);
+    auditLog('CRONOGRAMA_FIXADO', user.email, `Cronograma (${sentido}) fixado para ${prop.ids.length} aluno(s)`);
     broadcast('HORARIOS_ATUALIZADOS', {}, driverId);
-    const resultado = ids.map((id, i) => { const p: any = alunos.find((x) => x.id === id); const h = horariosDaParada(p); return { id, nome: p.nome_sanitizado, trechoMin: calc.trechosMin[i], horario: sentido === 'VOLTA' ? h.hora_volta : h.hora_ida }; });
-    const final = sentido === 'IDA' ? { escolaMin: calc.trechosMin[calc.trechosMin.length - 1] } : {};
-    res.json({ sucesso: true, sentido, paradas: resultado, ...final, totalMin: calc.trechosMin.reduce((a, b) => a + b, 0) + ids.length * RR.PARADA_EMBARQUE_MIN });
+    res.json({ sucesso: true, sentido, paradas: prop.ids.map((id) => ({ id, horario: deMin(prop.horarios[id]) })) });
   });
 
   // Aplica a ordem final escolhida pelo motorista (a sugerida, ou a que ele reordenou à mão).
