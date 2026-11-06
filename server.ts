@@ -15,6 +15,7 @@ import { createPersistence } from './persistence';
 import * as M from './mensalidades';
 import * as F from './financeiro';
 import * as G from './mensagens';
+import * as RR from './src/services/rotaRuas';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -119,6 +120,8 @@ interface UserRecord {
   veiculoPlaca?: string;
   /** Motorista: local de cada escola atendida (chave = nome normalizado) */
   escolasLocal?: Record<string, { latitude: number; longitude: number }>;
+  /** rota criada automaticamente por ruas: por sentido, a ordem, os minutos de cada trecho e o fator ruas/linha reta */
+  rotaAuto?: Partial<Record<'IDA' | 'VOLTA', { ordem: number[]; trechosMin: number[]; fatorRuas: number; criadaEm: string }>>;
   capacidade?: number;
   horarios?: string[];
   lgpdConsent: {
@@ -646,9 +649,24 @@ function deixadaParaTras(trip: Trip, p: any, gps: { latitude: number; longitude:
   return t.menorDist[p.id] < 0.3 && haversineKm(gps, p) > 0.6;
 }
 
-function minutosPorKm(km: number, speedKmH: number, paradas: number): number {
+function minutosPorKm(km: number, speedKmH: number, paradas: number, fator = 1.3): number {
   const v = (speedKmH || 0) >= 8 ? Math.max(15, Math.min(50, speedKmH)) : 25;
-  return Math.max(1, Math.round((km * 1.3 / v) * 60 + paradas));
+  return Math.max(1, Math.round((km * fator / v) * 60 + paradas));
+}
+/** Relação ruas/linha reta medida na rota automática do motorista (1,3 se ele nunca criou uma). */
+function fatorRuasDe(driverId: number, sentido: string): number {
+  const r = usersDB.find((u) => u.id === driverId)?.rotaAuto;
+  return r?.[sentido === 'VOLTA' ? 'VOLTA' : 'IDA']?.fatorRuas ?? r?.IDA?.fatorRuas ?? r?.VOLTA?.fatorRuas ?? 1.3;
+}
+/** A rota automática vale enquanto a ordem dos alunos for exatamente a que ela criou. */
+function rotaAutoValida(driverId: number, sentido: 'IDA' | 'VOLTA') {
+  const r = usersDB.find((u) => u.id === driverId)?.rotaAuto?.[sentido];
+  if (!r) return null;
+  const atual = serverState.paradas
+    .filter((q: any) => donoDaParada(q) === driverId && confirmada(q))
+    .sort((a: any, b: any) => ordemNo(a, sentido) - ordemNo(b, sentido))
+    .map((q: any) => q.id);
+  return atual.length === r.ordem.length && atual.every((id: number, i: number) => id === r.ordem[i]) ? r : null;
 }
 
 /** Minutos desde 00:00 no horário de Brasília (o servidor pode estar em UTC). */
@@ -689,7 +707,7 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
       const semLocal = pendentes.length - paradasAteLa.length; // sem ponto marcado: conta o tempo médio de uma parada
       const km = caminhoKm(gps, paradasAteLa, destino);
       const prog = progressoPorDistancia(trip, `e${studentId}`, km) ?? 0;
-      const minutos = minutosPorKm(km, gps.speedKmH, pendentes.length + semLocal * (MIN_POR_PARADA - 1));
+      const minutos = minutosPorKm(km, gps.speedKmH, pendentes.length + semLocal * (MIN_POR_PARADA - 1), fatorRuasDe(driverId, sentido));
       return { ...base, estado: 'embarcou', progresso: prog, minutos, destino: sentido === 'VOLTA' ? 'casa' : 'escola', estimativaPrecisa: true, avisoAtivo: false };
     }
     return { ...base, estado: 'embarcou', progresso: 1, minutos: 0 };
@@ -710,7 +728,7 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
     const comLocal = pendentesAntes.filter(temLocalP);
     const semLocal = pendentesAntes.length - comLocal.length;
     const km = caminhoKm(gps, comLocal, mine);
-    minutos = minutosPorKm(km, gps.speedKmH, pendentesAntes.length + semLocal * (MIN_POR_PARADA - 1));
+    minutos = minutosPorKm(km, gps.speedKmH, pendentesAntes.length + semLocal * (MIN_POR_PARADA - 1), fatorRuasDe(driverId, sentido));
     precisa = true;
     const porDistancia = progressoPorDistancia(trip, `a${studentId}`, km);
     if (porDistancia !== null) progresso = porDistancia;
@@ -802,9 +820,17 @@ function horariosDaParada(p: any): { hora_ida: string | null; hora_volta: string
     return { n: grupo.length, idx: pos >= 0 ? pos : grupo.length };
   };
   const gi = posNo('IDA'), gv = posNo('VOLTA');
+  // Rota automática por ruas (enquanto a ordem não foi mudada): horário = soma dos trechos reais.
+  const rIda = rotaAutoValida(dono, 'IDA'), rVolta = rotaAutoValida(dono, 'VOLTA');
+  const porRuasIda = rIda && p.escola_entrada && rIda.ordem.includes(p.id)
+    ? deMin(RR.horariosDaRota('IDA', rIda.trechosMin, paraMin(p.escola_entrada) - FOLGA_CHEGADA_MIN, 0)[rIda.ordem.indexOf(p.id)]) : null;
+  const porRuasVolta = rVolta && p.escola_saida && rVolta.ordem.includes(p.id)
+    ? deMin(RR.horariosDaRota('VOLTA', rVolta.trechosMin, 0, paraMin(p.escola_saida) + APOS_SAIDA_MIN)[rVolta.ordem.indexOf(p.id)]) : null;
   const ida = p.hora_ida_manual
+    ?? porRuasIda
     ?? (p.escola_entrada ? deMin(paraMin(p.escola_entrada) - FOLGA_CHEGADA_MIN - TRAJETO_ESCOLA_MIN - Math.max(0, gi.n - 1 - gi.idx) * MIN_POR_PARADA) : null);
   const volta = p.hora_volta_manual
+    ?? porRuasVolta
     ?? (p.escola_saida ? deMin(paraMin(p.escola_saida) + APOS_SAIDA_MIN + gv.idx * MIN_POR_PARADA) : null);
   return { hora_ida: ida, hora_volta: volta };
 }
@@ -2217,6 +2243,47 @@ async function startServer() {
     });
   });
 
+  // ---- Rota automática por RUAS: converte os endereços em pontos (uma vez), ordena e mede cada trecho pelo mapa viário ----
+  app.post('/api/rotas/automatica', authenticate, requireDriver, requireTripOwnership, rateLimiter(4, 60000), async (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const trip = getTrip(driverId);
+    const sentido: 'IDA' | 'VOLTA' = String(req.body?.sentido).toUpperCase() === 'VOLTA' ? 'VOLTA' : 'IDA';
+    if (trip.viagem.status === 'EM_ANDAMENTO') return res.status(409).json({ error: 'Encerre a rota em andamento antes de criar uma nova.' });
+    const alunos: any[] = serverState.paradas.filter((p: any) => donoDaParada(p) === driverId && confirmada(p));
+    if (alunos.length === 0) return res.status(400).json({ error: 'Não há alunos confirmados na van.' });
+    const escolas = new Set(alunos.map((p) => chaveEscola(p.escola_destino)));
+    if (escolas.size !== 1) return res.status(400).json({ error: 'A rota automática funciona com uma escola por vez. Use a ordem manual para várias escolas.' });
+    const escola = localDaEscola(driverId, alunos[0].escola_destino);
+    if (!escola) return res.status(400).json({ error: 'Marque primeiro o local da escola.' });
+    // 1) Endereço → ponto, só para quem ainda não tem ponto marcado. Nada do endereço é guardado em cache ou log.
+    const naoAchados: string[] = [];
+    let primeiro = true;
+    for (const p of alunos) {
+      if (temLocalP(p)) continue;
+      if (!primeiro) await new Promise((r) => setTimeout(r, 1100)); // regra do Nominatim: 1 consulta por segundo
+      primeiro = false;
+      const pt = await RR.geocodificarEndereco(String(p.endereco_real || ''), escola, fetch as any);
+      if (pt) { p.latitude = pt.latitude; p.longitude = pt.longitude; p.local_automatico = true; }
+      else naoAchados.push(String(p.nome_sanitizado || `Aluno ${p.id_aluno}`));
+    }
+    if (naoAchados.length) {
+      return res.status(422).json({ error: 'Não consegui localizar o endereço de: ' + naoAchados.join(', ') + '. Marque o ponto desses alunos no mapa e tente de novo.', naoEncontrados: naoAchados });
+    }
+    // 2) Ordem e tempo de cada trecho pelas ruas.
+    const calc = await RR.calcularRotaPorRuas(alunos.map((p) => ({ latitude: p.latitude, longitude: p.longitude })), escola, sentido, fetch as any);
+    if (!calc) return res.status(502).json({ error: 'O serviço de rotas não respondeu. Tente de novo em instantes.' });
+    const ids = calc.ordem.map((i) => alunos[i].id as number);
+    ids.forEach((id, i) => { const p: any = alunos.find((x) => x.id === id); if (sentido === 'VOLTA') p.ordem_volta = i + 1; else p.ordem_sequencia = i + 1; });
+    const rec = usersDB.find((u) => u.id === driverId);
+    if (rec) rec.rotaAuto = { ...(rec.rotaAuto || {}), [sentido]: { ordem: ids, trechosMin: calc.trechosMin, fatorRuas: calc.fatorRuas, criadaEm: new Date().toISOString() } };
+    auditLog('ROTA_AUTOMATICA', user.email, `Rota por ruas criada (${sentido}) com ${ids.length} aluno(s)`);
+    broadcast('HORARIOS_ATUALIZADOS', {}, driverId);
+    const resultado = ids.map((id, i) => { const p: any = alunos.find((x) => x.id === id); const h = horariosDaParada(p); return { id, nome: p.nome_sanitizado, trechoMin: calc.trechosMin[i], horario: sentido === 'VOLTA' ? h.hora_volta : h.hora_ida }; });
+    const final = sentido === 'IDA' ? { escolaMin: calc.trechosMin[calc.trechosMin.length - 1] } : {};
+    res.json({ sucesso: true, sentido, paradas: resultado, ...final, totalMin: calc.trechosMin.reduce((a, b) => a + b, 0) + ids.length * RR.PARADA_EMBARQUE_MIN });
+  });
+
   // Aplica a ordem final escolhida pelo motorista (a sugerida, ou a que ele reordenou à mão).
   app.post('/api/rotas/ordem', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
@@ -2441,6 +2508,23 @@ async function startServer() {
 
     parada.status_embarque = status;
     if (observacao !== undefined) (parada as any).observacao = observacao;
+    // Aprende o ponto pelo GPS da van: ao embarcar (ida) ou entregar (volta) um aluno sem ponto marcado, grava onde a van está.
+    // O endereço nunca sai do app; o motorista pode corrigir depois marcando o ponto à mão.
+    try {
+      const tripAtual = getTrip(donoDaParada(parada) as number);
+      const sentidoAtual = sentidoDaViagem(tripAtual);
+      const gpsAgora = tripAtual.gpsAtual;
+      const evento = (sentidoAtual === 'IDA' && status === 'EMBARCOU') || (sentidoAtual === 'VOLTA' && status === 'ENTREGUE');
+      if (evento && tripAtual.viagem.status === 'EM_ANDAMENTO' && !temLocalP(parada) && gpsAgora.accuracyMeters > 0 && gpsAgora.accuracyMeters <= 50 && Date.now() - new Date(gpsAgora.timestamp).getTime() < 120000) {
+        const local = lerLocal(gpsAgora.latitude, gpsAgora.longitude);
+        if (local) {
+          (parada as any).latitude = local.latitude;
+          (parada as any).longitude = local.longitude;
+          (parada as any).local_aprendido_gps = true;
+          auditLog('LOCAL_PARADA_APRENDIDO_GPS', userMot.email, `Local da parada ${parada.id} aprendido pelo GPS da van`);
+        }
+      }
+    } catch { /* o aprendizado do ponto nunca impede marcar o aluno */ }
     const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
     broadcast('STATUS_EMBARQUE_ATUALIZADO', { paradaId: parada.id, status, timestamp, alunoId: parada.id_aluno }, donoDaParada(parada));
@@ -2589,6 +2673,7 @@ async function startServer() {
     if (!local) return res.status(400).json({ error: 'Localização inválida.' });
     parada.latitude = local.latitude;
     parada.longitude = local.longitude;
+    delete parada.local_aprendido_gps;
     auditLog('LOCAL_PARADA_DEFINIDO', user.email, `Local de embarque definido para a parada ${parada.id}`);
     res.json({ sucesso: true });
   });
