@@ -2610,9 +2610,14 @@ async function startServer() {
     if (user.role === 'responsavel' && !ehFilhoDe(user, alunoId)) {
       return res.status(403).json({ error: 'Acesso negado para este aluno.' });
     }
+    if (user.role !== 'responsavel' && user.role !== 'motorista') return res.status(403).json({ error: 'Acesso negado.' });
     const { motivo, observacao } = req.body;
     const trecho = ['IDA', 'VOLTA'].includes(req.body?.trecho) ? req.body.trecho : 'AMBOS';
     const parada = serverState.paradas.find((p) => p.id_aluno === alunoId || p.id === alunoId);
+    // Motorista só mexe em aluno da própria van (mesma regra do escola-horarios).
+    if (user.role === 'motorista' && parada && donoDaParada(parada) !== user.userId) {
+      return res.status(404).json({ error: 'Aluno não encontrado.' });
+    }
     if (parada) {
       (parada as any).ausencia_trecho = trecho;
       // Só vale já se a viagem em andamento for do mesmo sentido (ou a ausência for dos dois).
@@ -2631,7 +2636,11 @@ async function startServer() {
     if (user.role === 'responsavel' && !ehFilhoDe(user, alunoId)) {
       return res.status(403).json({ error: 'Acesso negado para este aluno.' });
     }
+    if (user.role !== 'responsavel' && user.role !== 'motorista') return res.status(403).json({ error: 'Acesso negado.' });
     const parada = serverState.paradas.find((p) => p.id_aluno === alunoId || p.id === alunoId);
+    if (user.role === 'motorista' && parada && donoDaParada(parada) !== user.userId) {
+      return res.status(404).json({ error: 'Aluno não encontrado.' });
+    }
     if (parada) {
       parada.status_embarque = 'PENDENTE';
       delete (parada as any).motivo_ausencia;
