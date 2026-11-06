@@ -1204,12 +1204,10 @@ async function startServer() {
 
   const requireAdmin = (req: Request, res: Response, next: NextFunction) => {
     const user = (req as any).user as SessionPayload;
-    if (!user || (user.role !== 'admin' && !ADMIN_EMAILS.includes(user.email.toLowerCase()))) {
+    // SEGURANÇA: só vale o papel 'admin' assinado no token (emitido após Google verificado ou ADMIN_PASSWORD).
+    // Ter um e-mail da lista de administradores NÃO basta: qualquer pessoa pode cadastrar um e-mail com a própria senha.
+    if (!user || user.role !== 'admin') {
       return res.status(403).json({ error: 'Acesso restrito a administradores do sistema.' });
-    }
-    // Garante que o role esteja correto no payload caso venha apenas pelo email
-    if (user.role !== 'admin') {
-      user.role = 'admin';
     }
     next();
   };
@@ -1263,6 +1261,10 @@ async function startServer() {
 
     if (!fullName || !email || !invitationCode || !lgpdConsent) {
       return res.status(400).json({ error: 'Todos os campos obrigatórios e o código de convite devem ser fornecidos.' });
+    }
+
+    if (ADMIN_EMAILS.includes(String(email).trim().toLowerCase())) {
+      return res.status(400).json({ error: 'Não foi possível completar o cadastro com este e-mail.' });
     }
 
     // Valida código de convite de motorista
@@ -1344,7 +1346,8 @@ async function startServer() {
       upgradePasswordHash(user, password);
     }
 
-    const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
+    // Admin só com e-mail verificado (Google/Firebase ou confirmado): cadastro com senha própria nunca vira admin.
+    const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase()) && (!!verified || user.emailVerified === true);
     const role = isAdmin ? 'admin' : 'motorista';
 
     const token = signToken({ role, userId: user.id, email: user.email, emailVerified: user.emailVerified }, 12);
@@ -1386,7 +1389,7 @@ async function startServer() {
       upgradePasswordHash(user, password);
     }
 
-    const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
+    const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase()) && (!!verified || user.emailVerified === true);
     const role = isAdmin ? 'admin' : user.role;
     const token = signToken({ role, userId: user.id, email: user.email, studentId: user.studentId, emailVerified: user.emailVerified });
     auditLog('LOGIN_SUCESSO', user.email, `Login realizado como ${role}`);
@@ -1695,6 +1698,10 @@ async function startServer() {
       return res.status(400).json({ error: 'A senha deve ter no mínimo 10 caracteres.' });
     }
 
+    // E-mails de administrador não se cadastram por aqui (o admin entra pelo Google verificado ou pela ADMIN_PASSWORD).
+    if (ADMIN_EMAILS.includes(String(email).trim().toLowerCase())) {
+      return res.status(400).json({ error: 'Não foi possível completar o cadastro com este e-mail.' });
+    }
     const existing = usersDB.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
     if (existing) {
       return res.status(400).json({ error: 'Não foi possível completar o cadastro com este e-mail.' });
