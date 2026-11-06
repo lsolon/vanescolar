@@ -534,6 +534,10 @@ function perfilMotorista(driverId: number) {
 // (estado, progresso, minutos). Coordenadas da van só saem quando a próxima parada é a do aluno.
 // ============================================================================
 const MIN_POR_PARADA = 4;
+/** GPS parado há mais que isso não vale como posição atual da van (celular sem sinal, app fechado). */
+const GPS_VALIDADE_MS = Number(process.env.GPS_VALIDADE_MS) > 0 ? Number(process.env.GPS_VALIDADE_MS) : 10 * 60 * 1000;
+/** Distância (em linha reta) acima da qual a previsão não faz sentido para van escolar: trata como "sem localização exata". */
+const DISTANCIA_MAX_KM = 100;
 const TOLERANCIA_SEMAFORO_MIN = 3; // até 3 min de diferença ainda é "no horário"
 const AVISOS_VALIDOS = [3, 5, 10, 15, 20, 30];
 const ESTILOS_VALIDOS = ['A', 'B', 'C'];
@@ -721,7 +725,7 @@ function computeProximityBase(driverId: number, studentId: number | undefined, a
   const st = String(trip.viagem.status);
   const rotaAtiva = st === 'EM_ANDAMENTO';
   const gps = trip.gpsAtual;
-  const gpsOk = gps.accuracyMeters > 0;
+  const gpsOk = gps.accuracyMeters > 0 && Date.now() - new Date(gps.timestamp).getTime() <= GPS_VALIDADE_MS;
   const base = { rotaAtiva, mapaLiberado: false, avisoAtivo: false, atualizadoEm: agora };
   if (!confirmada(mine)) return { ...base, estado: 'aguardando', progresso: 0, minutos: null };
   if (mine.status_embarque === 'AUSENTE') return { ...base, estado: 'ausente', progresso: 0, minutos: null };
@@ -738,13 +742,15 @@ function computeProximityBase(driverId: number, studentId: number | undefined, a
       const paradasAteLa = pendentes.filter(temLocalP);
       const semLocal = pendentes.length - paradasAteLa.length; // sem ponto marcado: conta o tempo médio de uma parada
       const km = caminhoKm(gps, paradasAteLa, destino);
-      const prog = progressoPorDistancia(trip, `e${studentId}`, km) ?? 0;
-      const minutos = minutosPorKm(km, gps.speedKmH, pendentes.length + semLocal * (MIN_POR_PARADA - 1), fatorRuasDe(driverId, sentido));
-      const chegada = agoraMinutosSP() + minutos;
-      // Ida: vermelho se a previsão passa da entrada da escola; verde caso contrário. Na volta só informa a hora.
-      const entradaMin = sentido === 'IDA' && lerHorario(mine.escola_entrada) ? paraMin(mine.escola_entrada) : null;
-      const sem = entradaMin !== null ? (chegada > entradaMin ? 'vermelho' as const : 'verde' as const) : undefined;
-      return { ...base, estado: 'embarcou', progresso: prog, minutos, destino: sentido === 'VOLTA' ? 'casa' : 'escola', estimativaPrecisa: true, avisoAtivo: false, chegadaPrevista: deMin(chegada), ...(sem ? { semaforo: sem, diferencaMin: chegada - (entradaMin as number) } : {}) };
+      if (km <= DISTANCIA_MAX_KM) { // acima disso a posição/ponto está errado: cai no retorno "sem localização exata" abaixo
+        const prog = progressoPorDistancia(trip, `e${studentId}`, km) ?? 0;
+        const minutos = minutosPorKm(km, gps.speedKmH, pendentes.length + semLocal * (MIN_POR_PARADA - 1), fatorRuasDe(driverId, sentido));
+        const chegada = agoraMinutosSP() + minutos;
+        // Ida: vermelho se a previsão passa da entrada da escola; verde caso contrário. Na volta só informa a hora.
+        const entradaMin = sentido === 'IDA' && lerHorario(mine.escola_entrada) ? paraMin(mine.escola_entrada) : null;
+        const sem = entradaMin !== null ? (chegada > entradaMin ? 'vermelho' as const : 'verde' as const) : undefined;
+        return { ...base, estado: 'embarcou', progresso: prog, minutos, destino: sentido === 'VOLTA' ? 'casa' : 'escola', estimativaPrecisa: true, avisoAtivo: false, chegadaPrevista: deMin(chegada), ...(sem ? { semaforo: sem, diferencaMin: chegada - (entradaMin as number) } : {}) };
+      }
     }
     return { ...base, estado: 'embarcou', progresso: 1, minutos: 0 };
   }
@@ -765,11 +771,13 @@ function computeProximityBase(driverId: number, studentId: number | undefined, a
     const comLocal = pendentesAntes.filter(temLocalP);
     const semLocal = pendentesAntes.length - comLocal.length;
     const km = caminhoKm(gps, comLocal, mine);
-    chegou = comLocal.length === 0 && km < 0.08;
-    minutos = minutosPorKm(km, gps.speedKmH, pendentesAntes.length + semLocal * (MIN_POR_PARADA - 1), fatorRuasDe(driverId, sentido));
-    precisa = true;
-    const porDistancia = progressoPorDistancia(trip, `a${studentId}`, km);
-    if (porDistancia !== null) progresso = porDistancia;
+    if (km <= DISTANCIA_MAX_KM) { // acima disso a posição/ponto está errado: fica só a estimativa por paradas, sem aviso nem semáforo
+      chegou = comLocal.length === 0 && km < 0.08;
+      minutos = minutosPorKm(km, gps.speedKmH, pendentesAntes.length + semLocal * (MIN_POR_PARADA - 1), fatorRuasDe(driverId, sentido));
+      precisa = true;
+      const porDistancia = progressoPorDistancia(trip, `a${studentId}`, km);
+      if (porDistancia !== null) progresso = porDistancia;
+    }
   }
   // Horário combinado com o responsável: ele tem a sua programação. Se a van estiver adiantada (por exemplo, o aluno
   // anterior faltou), o tempo mostrado e o aviso nunca prometem antes do horário combinado.
