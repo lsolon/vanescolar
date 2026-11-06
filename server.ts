@@ -551,6 +551,12 @@ interface Proximidade {
   chegadaPrevista?: string;
   /** a van está no ponto do aluno (a menos de ~80 m) */
   chegou?: boolean;
+  /** sentido da viagem em andamento */
+  sentido?: 'IDA' | 'VOLTA';
+  /** tempo REAL (pelas ruas) da van até o ponto do aluno, sem o piso do horário combinado; só antes do embarque */
+  minutosAtePonto?: number;
+  /** ida: hora em que a van deve chegar à escola (entrada − folga) */
+  chegarEscolaAte?: string;
   posicao?: { latitude: number; longitude: number; heading: number };
   atualizadoEm: string;
 }
@@ -676,6 +682,13 @@ function agoraMinutosSP(): number {
 }
 
 function computeProximity(driverId: number, studentId: number | undefined, avisoMin: number): Proximidade | null {
+  const r = computeProximityBase(driverId, studentId, avisoMin);
+  if (!r || !studentId) return r;
+  const mine: any = serverState.paradas.find((p: any) => donoDaParada(p) === driverId && p.id_aluno === studentId);
+  const entrada = lerHorario(mine?.escola_entrada);
+  return { ...r, sentido: sentidoDaViagem(getTrip(driverId)), ...(entrada ? { chegarEscolaAte: deMin(paraMin(entrada) - FOLGA_CHEGADA_MIN) } : {}) };
+}
+function computeProximityBase(driverId: number, studentId: number | undefined, avisoMin: number): Proximidade | null {
   if (!studentId) return null;
   const trip = getTrip(driverId);
   const sentido = sentidoDaViagem(trip);
@@ -752,6 +765,7 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
       semaforo = diferencaMin > TOLERANCIA_SEMAFORO_MIN ? 'vermelho' : diferencaMin < -TOLERANCIA_SEMAFORO_MIN ? 'amarelo' : 'verde';
     }
   }
+  const minutosAtePonto = precisa ? minutos : undefined;
   if (prevista) {
     horarioPrevisto = prevista;
     const ate = paraMin(prevista) - agoraMinutosSP();
@@ -760,7 +774,7 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
   const proxima = faltam === 0;
   // O aviso "a van chega em ~N min" só dispara com a distância real (GPS da van + local de embarque marcado):
   // estimativa por número de paradas serve só para a barra, nunca para avisar a família.
-  return { ...base, estado: proxima ? 'proxima' : 'a_caminho', progresso, minutos, mapaLiberado: false, avisoAtivo: precisa && minutos <= avisoMin, estimativaPrecisa: precisa, ...(horarioPrevisto ? { horarioPrevisto, adiantada } : {}), ...(chegadaPrevista ? { chegadaPrevista } : {}), ...(semaforo ? { semaforo, diferencaMin } : {}), ...(chegou ? { chegou: true } : {}) };
+  return { ...base, estado: proxima ? 'proxima' : 'a_caminho', progresso, minutos, mapaLiberado: false, avisoAtivo: precisa && minutos <= avisoMin, estimativaPrecisa: precisa, ...(horarioPrevisto ? { horarioPrevisto, adiantada } : {}), ...(chegadaPrevista ? { chegadaPrevista } : {}), ...(semaforo ? { semaforo, diferencaMin } : {}), ...(chegou ? { chegou: true } : {}), ...(minutosAtePonto !== undefined ? { minutosAtePonto } : {}) };
 }
 
 /**

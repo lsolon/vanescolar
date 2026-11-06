@@ -393,6 +393,9 @@ export interface ProximidadeVan {
   diferencaMin?: number;
   chegadaPrevista?: string;
   chegou?: boolean;
+  sentido?: 'IDA' | 'VOLTA';
+  minutosAtePonto?: number;
+  chegarEscolaAte?: string;
   posicao?: { latitude: number; longitude: number; heading: number };
   atualizadoEm: string;
 }
