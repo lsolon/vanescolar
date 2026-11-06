@@ -1465,3 +1465,22 @@ test('Status da parada: só PENDENTE, EMBARCOU, ENTREGUE ou AUSENTE; observaçã
     assert.equal((await jsonReq('POST', `/api/paradas/${id}/status`, mot, { status: bom })).status, 200, bom);
   }
 });
+
+test('Segurança: ninguém vira admin cadastrando um e-mail de administrador', async () => {
+  for (const email of ['admin@vanescolar.com.br', 'ADMIN@vanescolar.com.br', ' leandrosolon@gmail.com ']) {
+    const reg = await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Intruso', email, password: 'senhaDoIntruso123', lgpdConsent: true });
+    assert.equal(reg.status, 400, `cadastro com ${email}`);
+    const lg = await jsonReq('POST', '/api/auth/login-email', undefined, { email: email.trim(), password: 'senhaDoIntruso123' });
+    assert.notEqual(lg.data?.role, 'admin', `login com ${email}`);
+    assert.ok(lg.status === 401 || lg.data?.role !== 'admin');
+  }
+  // um responsável comum, mesmo logado, nunca passa em rota de admin
+  const email = `comum_${Date.now()}@teste.com`;
+  const reg = await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Comum', email, password: 'senhaSegura123!', lgpdConsent: true });
+  assert.equal((await jsonReq('GET', '/api/admin/metrics', reg.data.token)).status, 403);
+  assert.equal((await jsonReq('GET', '/api/admin/backup', reg.data.token)).status, 403);
+  // o admin legítimo continua entrando pela senha do admin
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  assert.equal(adm.status, 200);
+  assert.equal((await jsonReq('GET', '/api/admin/metrics', adm.data.token)).status, 200);
+});
