@@ -383,19 +383,12 @@ test('GPS real: servidor valida coordenadas e entrega só ao motorista dono', as
 // ---------------------------------------------------------------------------
 async function novoResponsavel(codigo: string) {
   const email = `resp_${Date.now()}_${Math.random().toString(36).slice(2, 6)}@teste.com`;
-  const reg = await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Resp Teste', email, password: 'senhaSegura123!', lgpdConsent: true });
-  // Confirma o e-mail: pelo atalho de simulação (versões antigas) ou pelo link enviado (versão com e-mails reais).
-  let token: string = reg.data.token;
-  const sim = await jsonReq('POST', '/api/auth/verify-email-sim', token);
-  if (sim.status === 200) {
-    token = sim.data.token;
-  } else {
-    await new Promise((x) => setTimeout(x, 200));
-    const lista: any[] = await (await fetch(`${BASE}/api/_dev/emails`)).json();
-    const msg = [...lista].reverse().find((m) => m.to === email);
-    await fetch(msg.text.match(/https?:\/\/\S+/)[0], { redirect: 'manual' });
-    token = (await jsonReq('POST', '/api/auth/refresh-session', token)).data.token;
-  }
+  await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Resp Teste', email, password: 'senhaSegura123!', lgpdConsent: true });
+  // Sem provedor de e-mail, quem confirma é o administrador (botão "Confirmar e-mail" no painel).
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const lista = (await jsonReq('GET', '/api/admin/responsaveis', adm)).data.responsaveis;
+  await jsonReq('POST', `/api/admin/usuarios/${lista.find((x: any) => x.email === email).id}/confirmar-email`, adm);
+  const token: string = (await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'senhaSegura123!' })).data.token;
   const v = await jsonReq('POST', '/api/vincular', token, { codigoVinculo: codigo });
   assert.equal(v.status, 200, JSON.stringify(v.data));
   return v.data.token as string;
@@ -1393,4 +1386,13 @@ test('Financeiro: lançamentos, consumo e lucro do mês; dados privados de cada 
   assert.equal(fx.length, 1);
   assert.equal((await jsonReq('DELETE', `${P}/custos-fixos/${fx[0].id}`, b)).status, 404);
   assert.equal((await jsonReq('DELETE', `${P}/custos-fixos/${fx[0].id}`, a)).status, 200);
+});
+
+test('Segurança: o atalho verify-email-sim não existe; responsável não se auto-verifica', async () => {
+  const email = `semsim_${Date.now()}@teste.com`;
+  const reg = await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Sem Sim', email, password: 'senhaSegura123!', lgpdConsent: true });
+  const r = await jsonReq('POST', '/api/auth/verify-email-sim', reg.data.token);
+  assert.equal(r.status, 404);
+  const v = await jsonReq('POST', '/api/vincular', reg.data.token, { codigoVinculo: 'QUALQUER' });
+  assert.ok(v.status === 403 || v.status === 400, `esperava bloqueio, veio ${v.status}`);
 });

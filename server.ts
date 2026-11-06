@@ -1684,16 +1684,6 @@ async function startServer() {
     res.json({ sucesso: true, message: 'Se o e-mail estiver cadastrado, as instruções de redefinição foram enviadas.' });
   });
 
-  app.post('/api/auth/verify-email-sim', authenticate, (req: Request, res: Response) => {
-    const userPayload = (req as any).user as SessionPayload;
-    const user = usersDB.find((u) => u.id === userPayload.userId);
-    if (user) {
-      user.emailVerified = true;
-    }
-    const token = signToken({ role: userPayload.role, userId: userPayload.userId, email: userPayload.email, studentId: userPayload.studentId, emailVerified: true });
-    res.json({ sucesso: true, token, emailVerified: true });
-  });
-
   // PREFERÊNCIAS DO RESPONSÁVEL: estilo da barra de proximidade e antecedência do aviso.
   // ---------------------------------------------------------------------------
   // CÓDIGO DO MOTORISTA, FILHOS E CONFIRMAÇÃO
