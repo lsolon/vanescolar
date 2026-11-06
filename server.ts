@@ -2606,13 +2606,17 @@ async function startServer() {
   // ROTAS DE MOTORISTA COM PROTEÇÃO DE ROLE E OWNER DA VIAGEM (REQUISITO 5)
   app.post('/api/paradas/:id/status', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const paradaId = parseInt(req.params.id, 10);
-    const { status, observacao } = req.body;
+    const { status } = req.body;
+    const observacao = typeof req.body.observacao === 'string' ? req.body.observacao.slice(0, 300) : undefined;
     const userMot = (req as any).user as SessionPayload;
     const parada = serverState.paradas.find((p) => p.id === paradaId || p.id_aluno === paradaId);
     // SEGURANÇA: um motorista só altera as paradas dos SEUS alunos.
     if (!parada || (userMot.role === 'motorista' && donoDaParada(parada) !== userMot.userId)) {
       return res.status(404).json({ error: 'Parada não encontrada' });
     }
+    // Só estes quatro estados existem; qualquer outro texto deixaria o aluno num estado que as telas não entendem.
+    // (Depois da checagem de dono: quem não é dono recebe 404, sem saber se a parada existe.)
+    if (!['PENDENTE', 'EMBARCOU', 'ENTREGUE', 'AUSENTE'].includes(status)) return res.status(400).json({ error: 'Status inválido.' });
 
     parada.status_embarque = status;
     if (observacao !== undefined) (parada as any).observacao = observacao;
