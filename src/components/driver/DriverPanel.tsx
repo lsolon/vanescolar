@@ -406,6 +406,8 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const embarcados = paradas.filter((p) => p.status_embarque === 'EMBARCOU').length;
   const entregues = paradas.filter((p) => p.status_embarque === 'ENTREGUE').length;
   const ausentes = paradas.filter((p) => p.status_embarque === 'AUSENTE').length;
+  /** Rota em andamento e ninguém mais pendente nem a bordo: sugere encerrar (o motorista confirma). */
+  const rotaTodaConcluida = totalAlunos > 0 && paradas.every((p) => p.status_embarque === 'ENTREGUE' || p.status_embarque === 'AUSENTE');
 
   const ordemDoSentido = (p: any): number => (sentidoRota === 'VOLTA' ? (p.ordem_volta ?? p.ordem_sequencia) : (p.ordem_ida ?? p.ordem_sequencia)) ?? 0;
   const paradasNaOrdem = [...paradas].sort((a, b) => ordemDoSentido(a) - ordemDoSentido(b));
@@ -586,6 +588,21 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           </button>
           </div>
         </div>
+
+        {isRotaAtiva && rotaTodaConcluida && (
+          <div className="mt-3 p-3 bg-amber-950/70 border border-amber-500/40 rounded-xl text-xs text-amber-100 flex items-center justify-between gap-3 animate-fadeIn" role="status">
+            <span className="font-medium">
+              {sentidoRota === 'IDA' ? 'Todos os alunos foram entregues na escola.' : 'Todos os alunos foram deixados em casa.'} Encerrar a rota?
+            </span>
+            <button
+              type="button"
+              onClick={() => onToggleRota(sentidoRota)}
+              className="shrink-0 px-3 py-2 min-h-[40px] rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold uppercase tracking-wider cursor-pointer"
+            >
+              Encerrar rota
+            </button>
+          </div>
+        )}
 
         {/* ALERTA DE SUCESSO / NOTIFICAÇÃO DOS PAIS */}
         {mensagemSucesso && (
