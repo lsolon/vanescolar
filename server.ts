@@ -2653,7 +2653,8 @@ async function startServer() {
 
     const newToken = signToken({ role: 'responsavel', userId: user.userId, email: user.email, studentId: parada.id_aluno, emailVerified: true });
     auditLog('VINCULO_SUCESSO', user.email, `Vinculado ao aluno ID ${parada.id_aluno} (${parada.nome_aluno}) - Código expirado`);
-    res.json({ sucesso: true, token: newToken, parada });
+    // PRIVACIDADE: o responsável recebe só os campos permitidos (nada de coordenadas, endereço, telefone ou código).
+    res.json({ sucesso: true, token: newToken, parada: { ...paradaParaResponsavel(parada), responsavel_nome: parada.responsavel_nome } });
   });
 
   // --------------------------------------------------------------------------
@@ -2832,6 +2833,108 @@ async function startServer() {
     };
     broadcast('GPS_ATUALIZADO', trip.gpsAtual, driverId);
     res.json({ sucesso: true });
+  });
+
+  // ---- Cadastro do aluno feito pelo motorista, de uma vez só (a família só passa os dados e confere) ----
+  const APP_URL_PUBLICA = String(process.env.APP_URL || 'https://vanescolar.ai.studio').replace(/\/+$/, '');
+  const primeiroNome = (v: unknown) => String(v ?? '').trim().split(/\s+/)[0] || '';
+  const telefoneBR = (v: unknown): string | null => {
+    let d = String(v ?? '').replace(/\D/g, '');
+    if (d.length >= 12 && d.startsWith('55')) d = d.slice(2);
+    return d.length === 10 || d.length === 11 ? d : null;
+  };
+  const mensagemConvite = (motoristaNome: string, p: any) =>
+    `Olá, ${primeiroNome(p.responsavel_nome) || 'tudo bem'}! Aqui é ${primeiroNome(motoristaNome) || 'o motorista'} do transporte escolar. ` +
+    `Cadastrei ${primeiroNome(p.nome_aluno)} no VanEscolar para você acompanhar a van pelo celular.\n\n` +
+    `1) Abra ${APP_URL_PUBLICA}\n2) Crie a sua conta\n3) Digite este código para ver ${primeiroNome(p.nome_aluno)}: ${p.codigo_vinculo}\n\n` +
+    `Qualquer dúvida, é só me chamar.`;
+
+  app.post('/api/motorista/alunos', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const b = req.body || {};
+    const texto = (v: unknown, max: number) => String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, max);
+    const nomeAluno = texto(b.nomeAluno, 80), escola = texto(b.escola, 120), endereco = texto(b.endereco, 200);
+    const nomeResp = texto(b.nomeResponsavel, 80);
+    const turno = lerTurno(b.turno);
+    const tel = telefoneBR(b.telefoneResponsavel);
+    if (nomeAluno.length < 2) return res.status(400).json({ error: 'Informe o nome do aluno.' });
+    if (escola.length < 2) return res.status(400).json({ error: 'Informe a escola.' });
+    if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã ou tarde.' });
+    if (nomeResp.length < 2) return res.status(400).json({ error: 'Informe o nome do responsável.' });
+    if (!tel) return res.status(400).json({ error: 'Informe o WhatsApp do responsável com DDD.' });
+    if (endereco.length < 3) return res.status(400).json({ error: 'Informe o endereço de embarque.' });
+    // LGPD (menores): o motorista confirma que o responsável autorizou o uso dos dados para o transporte.
+    if (b.autorizacaoResponsavel !== true) return res.status(400).json({ error: 'Confirme que o responsável autorizou o uso dos dados.' });
+    const local = lerLocal(b.latitude, b.longitude);
+    if (b.latitude !== undefined && b.latitude !== null && !local) return res.status(400).json({ error: 'Localização inválida.' });
+    const entrada = lerHorario(b.escolaEntrada), saida = lerHorario(b.escolaSaida);
+    if ((entrada || saida) && (!entrada || !saida)) return res.status(400).json({ error: 'Informe entrada e saída da escola no formato HH:MM.' });
+    if (entrada && saida && paraMin(saida) <= paraMin(entrada)) return res.status(400).json({ error: 'A saída precisa ser depois da entrada.' });
+
+    const duplicado = (serverState.paradas as any[]).some((p) => donoDaParada(p) === driverId && p.vinculo !== 'RECUSADO'
+      && String(p.nome_aluno).trim().toLowerCase() === nomeAluno.toLowerCase() && chaveEscola(p.escola_destino) === chaveEscola(escola) && p.turno === turno);
+    if (duplicado) return res.status(409).json({ error: 'Este aluno já está cadastrado nessa escola e turno.' });
+
+    const novoId = serverState.paradas.reduce((m: number, p: any) => Math.max(m, p.id % 1000, (p.id_aluno ?? 0) - 210), 0) + 1;
+    const nova: any = {
+      id: 1000 + novoId,
+      id_viagem: 1000 + driverId,
+      id_motorista: driverId,
+      id_aluno: 210 + novoId,
+      ordem_sequencia: (serverState.paradas as any[]).filter((p) => donoDaParada(p) === driverId && confirmada(p)).length + 1,
+      vinculo: 'CONFIRMADO', // o motorista cadastrou: já está na van
+      status_embarque: 'PENDENTE',
+      ...(entrada && saida ? { escola_entrada: entrada, escola_saida: saida } : {}),
+      turno,
+      latitude: local ? local.latitude : null,
+      longitude: local ? local.longitude : null,
+      nome_aluno: nomeAluno,
+      nome_sanitizado: `${nomeAluno.split(' ')[0]} ${nomeAluno.split(' ')[1]?.[0] || ''}.`,
+      endereco_real: endereco,
+      endereco_mascarado: mascararEnderecoSeguro(endereco),
+      ponto_referencia: texto(b.pontoReferencia, 120),
+      responsavel_nome: nomeResp,
+      responsavel_telefone: tel,
+      escola_destino: escola,
+      codigo_vinculo: `VAN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+      vinculado_usuario_id: null,
+      autorizacao_responsavel_em: new Date().toISOString()
+    };
+    const herdou = herdarHorarioDaEscola(nova); // o horário da escola/turno definido pelo motorista vale mais que o digitado
+    serverState.paradas.push(nova);
+    reordenar(driverId);
+    reordenarVolta(driverId);
+    auditLog('ALUNO_CADASTRADO_PELO_MOTORISTA', user.email, `Aluno ${nova.id_aluno} cadastrado pelo motorista ${driverId}`);
+    broadcast('NOVA_PARADA_CADASTRADA', { paradaId: nova.id }, driverId);
+    const nomeMot = perfilMotorista(driverId)?.nome ?? '';
+    res.json({
+      sucesso: true,
+      paradaId: nova.id,
+      alunoId: nova.id_aluno,
+      codigoVinculo: nova.codigo_vinculo,
+      whatsapp: `55${tel}`,
+      mensagem: mensagemConvite(nomeMot, nova),
+      horarioHerdado: herdou,
+      semHorarioDaEscola: !(nova.escola_entrada && nova.escola_saida),
+      semPontoNoMapa: !local
+    });
+  });
+
+  // Convite (código + mensagem de WhatsApp) para reenviar à família enquanto ela ainda não se vinculou.
+  app.get('/api/paradas/:id/convite', authenticate, requireDriver, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const p: any = serverState.paradas.find((x: any) => x.id === parseInt(req.params.id, 10));
+    if (!p || donoDaParada(p) !== driverId) return res.status(404).json({ error: 'Aluno não encontrado.' });
+    if (!p.codigo_vinculo || p.vinculado_usuario_id || p.codigo_expirado) return res.json({ disponivel: false });
+    const tel = telefoneBR(p.responsavel_telefone);
+    res.json({
+      disponivel: true,
+      codigoVinculo: p.codigo_vinculo,
+      mensagem: mensagemConvite(perfilMotorista(driverId)?.nome ?? '', p),
+      ...(tel ? { whatsapp: `55${tel}` } : {})
+    });
   });
 
   // Cadastro de aluno pelo motorista: desativado (agora o responsável cadastra o filho). Só existe no modo demonstração.

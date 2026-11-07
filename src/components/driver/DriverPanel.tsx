@@ -63,6 +63,7 @@ import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 import { MeuIdAcesso } from '../shared/MeuIdAcesso';
 import { CampoHora } from '../shared/CampoHora';
 import { CodigoMotorista, SolicitacoesPendentes } from './CodigoESolicitacoes';
+import { NovoAlunoMotorista, ConviteFamilia } from './NovoAluno';
 import { EscolasDoMotorista, HorariosPorEscola, RotasIdaVolta } from './RotaEEscolas';
 
 interface DriverPanelProps {
@@ -659,6 +660,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
         {aba === 'diario' && (
           <>
+        <NovoAlunoMotorista onCriado={carregarDadosZeroCache} />
         <SolicitacoesPendentes pendentes={pendentes} totalNaVan={paradas.length} onMudou={carregarDadosZeroCache} />
         {/* DIÁRIO DE BORDO COM MASCARAMENTO VISUAL RIGOROSO */}
         <div className="space-y-3">
@@ -868,6 +870,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                         </button>
                       ))}
                     </div>
+                    <div className="mt-1"><ConviteFamilia paradaId={item.parada_id} /></div>
                   </div>
                   <button
                     type="button"
