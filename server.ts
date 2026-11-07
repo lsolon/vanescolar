@@ -265,7 +265,7 @@ const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 // Limpa registros vencidos para o mapa não crescer sem limite.
 setInterval(() => {
   const agora = Date.now();
-  for (const [ip, r] of rateLimitMap) if (agora > r.resetTime) rateLimitMap.delete(ip);
+  for (const [chave, r] of rateLimitMap) if (agora > r.resetTime) rateLimitMap.delete(chave);
 }, 5 * 60 * 1000).unref();
 
 /**
@@ -281,10 +281,13 @@ function rateLimiter(limit: number, windowMs: number) {
     if (DEMO_MODE || (local && !req.headers['x-forwarded-for'])) return next();
 
     const now = Date.now();
-    const record = rateLimitMap.get(ip);
+    // Um contador por IP E por rota: antes todas as rotas dividiam o mesmo contador do IP,
+    // e cliques em outras telas esgotavam o limite de /rotas/automatica, /admin/backup etc.
+    const chave = `${ip}|${req.method}|${req.baseUrl}${req.route?.path ?? req.path}`;
+    const record = rateLimitMap.get(chave);
 
     if (!record || now > record.resetTime) {
-      rateLimitMap.set(ip, { count: 1, resetTime: now + windowMs });
+      rateLimitMap.set(chave, { count: 1, resetTime: now + windowMs });
       return next();
     }
 
