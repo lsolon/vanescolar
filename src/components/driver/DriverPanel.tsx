@@ -56,7 +56,14 @@ import {
   LogOut,
   KeyRound,
   UserPlus,
-  Copy
+  Copy,
+  ClipboardList,
+  Map as MapIcon,
+  Menu as MenuIcon,
+  ChevronRight,
+  ArrowLeft,
+  Wallet,
+  Settings
 } from 'lucide-react';
 import { LiveMap } from '../shared/LiveMap';
 import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
@@ -113,7 +120,8 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const [erroPin, setErroPin] = useState<string | null>(null);
 
   // Modal de Cadastro de Novo Aluno pelo Motorista
-  const [aba, setAba] = useState<'diario' | 'mapa' | 'mensagens' | 'mensalidades' | 'financeiro' | 'ajustes'>('diario');
+  const [aba, setAba] = useState<'diario' | 'mapa' | 'mensagens' | 'mais' | 'cadastro' | 'mensalidades' | 'financeiro' | 'ajustes'>('diario');
+  const [verPendentes, setVerPendentes] = useState(false);
   const [sentidoRota, setSentidoRota] = useState<'IDA' | 'VOLTA'>('IDA');
   // Com a rota em andamento vale o sentido do servidor (sobrevive a recarregar a página); antes de iniciar, o escolhido no seletor.
   const sentidoServidor: 'IDA' | 'VOLTA' | null = isRotaAtiva ? (String((viagemZeroCache?.viagem as any)?.sentido) === 'VOLTA' ? 'VOLTA' : 'IDA') : null;
@@ -650,25 +658,57 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           </div>
         )}
 
-        {/* NAVEGAÇÃO: a home é o Diário de Bordo; o resto fica a um toque */}
-        <nav aria-label="Seções do painel" role="tablist" className="flex gap-2 overflow-x-auto pb-1">
-          {([['diario', 'Diário de Bordo'], ['mapa', 'Mapa'], ['mensagens', 'Mensagens'], ['mensalidades', 'Mensalidades'], ['financeiro', 'Financeiro'], ['ajustes', 'Rotas e ajustes']] as const).map(([k, nome]) => (
-            <button key={k} type="button" role="tab" aria-selected={aba === k} onClick={() => setAba(k)}
-              className={`relative shrink-0 px-3 py-2 min-h-[44px] rounded-xl border text-[11px] font-black cursor-pointer whitespace-nowrap ${aba === k ? 'bg-amber-400/15 text-amber-200 border-amber-400/50' : 'bg-slate-900 text-slate-400 border-slate-800'}`}>
-              {nome}
-              {k === 'mensagens' && naoLidasMsgs > 0 && <span aria-label={`${naoLidasMsgs} mensagens não lidas`} className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-cyan-500 text-slate-950 text-[10px] font-black flex items-center justify-center">{naoLidasMsgs}</span>}
-              {k === 'diario' && pendentes.length > 0 && <span aria-label={`${pendentes.length} solicitações pendentes`} className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-black flex items-center justify-center">{pendentes.length}</span>}
-            </button>
-          ))}
-        </nav>
+        {/* Sub-telas de "Mais": voltar para o menu */}
+        {['cadastro', 'mensalidades', 'financeiro', 'ajustes'].includes(aba) && (
+          <button type="button" onClick={() => setAba('mais')} className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-xl bg-slate-900 border border-slate-800 text-xs font-bold text-slate-300 cursor-pointer">
+            <ArrowLeft className="w-4 h-4" /> Mais
+          </button>
+        )}
 
-        {aba === 'diario' && (
+        {aba === 'mais' && (
+          <section aria-label="Mais opções" className="space-y-2">
+            <h2 className="text-sm font-bold text-slate-200">Mais</h2>
+            {([
+              ['cadastro', 'Cadastrar alunos', 'Convidar famílias, novo aluno e importar lista', UserPlus],
+              ['mensalidades', 'Mensalidades', 'Quem pagou e quem está em aberto', Wallet],
+              ['financeiro', 'Financeiro', 'Receitas, custos e resultado do mês', Wallet],
+              ['ajustes', 'Rotas e ajustes', 'Horários das escolas, rotas de ida e volta, código', Settings]
+            ] as const).map(([k, titulo, desc, Icone]) => (
+              <button key={k} type="button" onClick={() => setAba(k)} className="w-full flex items-center gap-3 px-4 py-3 min-h-[60px] rounded-2xl bg-slate-900 border border-slate-800 text-left cursor-pointer active:scale-[0.99]">
+                <Icone className="w-5 h-5 text-amber-300 shrink-0" />
+                <span className="flex-1 min-w-0">
+                  <span className="block text-sm font-bold text-slate-100">{titulo}</span>
+                  <span className="block text-[11px] text-slate-400">{desc}</span>
+                </span>
+                {k === 'cadastro' && pendentes.length > 0 && <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-rose-500 text-white text-[11px] font-black flex items-center justify-center">{pendentes.length}</span>}
+                <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
+              </button>
+            ))}
+          </section>
+        )}
+
+        {aba === 'cadastro' && (
           <>
-        <QuandoSair sentido={sentidoRota} />
+        <h2 className="text-sm font-bold text-slate-200">Cadastrar alunos</h2>
+        <SolicitacoesPendentes pendentes={pendentes} totalNaVan={paradas.length} onMudou={carregarDadosZeroCache} />
         <ConvidarFamilias nomeMotorista={motorista?.nome} />
         <NovoAlunoMotorista onCriado={carregarDadosZeroCache} />
         <ImportarAlunos onCriados={carregarDadosZeroCache} />
-        <SolicitacoesPendentes pendentes={pendentes} totalNaVan={paradas.length} onMudou={carregarDadosZeroCache} />
+          </>
+        )}
+
+        {aba === 'diario' && (
+          <>
+        {!isRotaAtiva && <QuandoSair sentido={sentidoRota} />}
+        {pendentes.length > 0 && (
+          <div className="space-y-2">
+            <button type="button" onClick={() => setVerPendentes((v) => !v)} aria-expanded={verPendentes} className="w-full flex items-center justify-between gap-2 px-4 py-3 min-h-[48px] rounded-xl bg-amber-500/15 border border-amber-400/40 text-amber-200 text-sm font-bold cursor-pointer">
+              <span>{pendentes.length === 1 ? '1 família aguardando aprovação' : `${pendentes.length} famílias aguardando aprovação`}</span>
+              <ChevronRight className={`w-4 h-4 transition-transform ${verPendentes ? 'rotate-90' : ''}`} />
+            </button>
+            {verPendentes && <SolicitacoesPendentes pendentes={pendentes} totalNaVan={paradas.length} onMudou={carregarDadosZeroCache} />}
+          </div>
+        )}
         {/* DIÁRIO DE BORDO COM MASCARAMENTO VISUAL RIGOROSO */}
         <div className="space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -1034,6 +1074,26 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           </>
         )}
       </main>
+
+      {/* MENU FIXO EMBAIXO: ao alcance do polegar. Cadastro, mensalidades, financeiro e ajustes ficam em "Mais". */}
+      <nav aria-label="Seções do painel" role="tablist" className="sticky bottom-0 z-30 shrink-0 grid grid-cols-4 bg-slate-900 border-t border-slate-800 pb-[env(safe-area-inset-bottom)]">
+        {([
+          ['diario', 'Hoje', ClipboardList, pendentes.length],
+          ['mapa', 'Mapa', MapIcon, 0],
+          ['mensagens', 'Mensagens', MessageCircle, naoLidasMsgs],
+          ['mais', 'Mais', MenuIcon, 0]
+        ] as const).map(([k, nome, Icone, n]) => {
+          const ativa = k === 'mais' ? ['mais', 'cadastro', 'mensalidades', 'financeiro', 'ajustes'].includes(aba) : aba === k;
+          return (
+            <button key={k} type="button" role="tab" aria-selected={ativa} onClick={() => setAba(k)}
+              className={`relative flex flex-col items-center justify-center gap-0.5 py-2 min-h-[56px] text-[11px] font-bold cursor-pointer ${ativa ? 'text-amber-300' : 'text-slate-400'}`}>
+              <Icone className="w-5 h-5" />
+              {nome}
+              {n > 0 && <span aria-label={k === 'mensagens' ? `${n} mensagens não lidas` : `${n} solicitações pendentes`} className={`absolute top-1 left-1/2 ml-2 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-black flex items-center justify-center ${k === 'mensagens' ? 'bg-cyan-500 text-slate-950' : 'bg-rose-500 text-white'}`}>{n}</span>}
+            </button>
+          );
+        })}
+      </nav>
 
       {/* MODAL DE CONFIRMAÇÃO DO KILL-SWITCH REMOTO */}
       {modalKillSwitchAberto && (
