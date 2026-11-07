@@ -3052,8 +3052,8 @@ async function startServer() {
     if (km > DISTANCIA_MAX_KM) return res.status(409).json({ error: 'Sua posição está muito longe do ponto. Confira o GPS.' });
     const minutos = minutosPorKm(km, 0, 0, fatorRuasDe(driverId, sentido));
     const horarios = horariosDaParada(primeira);
-    // Volta: a van deve estar na escola na hora da saída. Ida: no ponto do primeiro aluno no horário combinado.
-    const alvo = sentido === 'IDA' ? horarios.hora_ida : (lerHorario(primeira.escola_saida) ? primeira.escola_saida : null);
+    // Volta: a van deve estar na escola FOLGA_CHEGADA_MIN antes da saída. Ida: no ponto do primeiro aluno no horário combinado.
+    const alvo = sentido === 'IDA' ? horarios.hora_ida : (lerHorario(primeira.escola_saida) ? deMin(paraMin(primeira.escola_saida) - FOLGA_CHEGADA_MIN) : null);
     const agora = agoraMinutosSP();
     const base = { sentido, destino: nomeDestino, distanciaKm: Math.round(km * 10) / 10, minutosAteLa: minutos, margemMin: MARGEM_SAIDA_MIN, agora: deMin(agora) };
     if (!alvo) return res.json({ ...base, horarioAlvo: null, sairAs: null, situacao: 'sem_horario' });

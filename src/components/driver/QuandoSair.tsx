@@ -48,7 +48,7 @@ export const QuandoSair: React.FC<{ sentido: 'IDA' | 'VOLTA' }> = ({ sentido }) 
           </p>
           {r.sairAs ? (
             <>
-              <p className="text-xs text-slate-300">{r.sentido === 'IDA' ? 'Horário combinado' : 'Saída da escola'}: <b className="text-slate-100">{r.horarioAlvo}</b></p>
+              <p className="text-xs text-slate-300">{r.sentido === 'IDA' ? 'Horário combinado' : 'Chegar na escola (15 min antes da saída)'}: <b className="text-slate-100">{r.horarioAlvo}</b></p>
               <p className="text-lg font-black text-slate-50">Saia às {r.sairAs}</p>
               <p className="text-xs font-bold text-slate-200">
                 {r.situacao === 'ha_tempo' && `Faltam ${hhmm(r.faltamMin ?? 0)} para sair (agora são ${r.agora}).`}
