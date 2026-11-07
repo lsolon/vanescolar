@@ -36,6 +36,37 @@ const EscolhaMotorista: React.FC<{
   );
 };
 
+/** Código VAN-… que o motorista mandou por WhatsApp: liga a conta ao aluno que ele já cadastrou. */
+const VincularPorCodigo: React.FC<{ onVinculado: () => void }> = ({ onVinculado }) => {
+  const [codigo, setCodigo] = useState('');
+  const [ocupado, setOcupado] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const enviar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!codigo.trim()) { setErro('Digite o código que o motorista enviou.'); return; }
+    setOcupado(true);
+    setErro(null);
+    try {
+      await TransportRepository.vincularPaiPorCodigo(codigo);
+      onVinculado();
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : 'Não foi possível usar este código.');
+    } finally {
+      setOcupado(false);
+    }
+  };
+  return (
+    <form onSubmit={enviar} className="space-y-2 p-3 rounded-2xl bg-slate-900 border border-slate-800">
+      <label className="text-[11px] text-slate-300 block">Tenho um código do motorista
+        <input value={codigo} onChange={(e) => setCodigo(e.target.value)} placeholder="Ex.: VAN-1A2B3C" autoCapitalize="characters" autoCorrect="off" autoComplete="off" className={`${campo} mt-1 font-mono tracking-wider`} />
+        <span className="text-[10px] text-slate-500">Se o motorista já cadastrou seu filho(a) e mandou uma mensagem, digite aqui o código VAN-…</span>
+      </label>
+      {erro && <p role="alert" className="text-xs text-rose-300">{erro}</p>}
+      <button type="submit" disabled={ocupado} className="w-full py-3 rounded-xl bg-cyan-400 text-slate-950 text-sm font-black min-h-[48px] cursor-pointer disabled:opacity-50">{ocupado ? 'Verificando…' : 'Usar este código'}</button>
+    </form>
+  );
+};
+
 /** Formulário para cadastrar um filho: dados, escola, horários, local de embarque e motorista. */
 export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => void; onCancelar?: () => void; primeiro?: boolean }> = ({ motoristas, onSalvo, onCancelar, primeiro }) => {
   const [nome, setNome] = useState('');
@@ -69,6 +100,9 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
   };
 
   return (
+    <div className="space-y-5">
+    <VincularPorCodigo onVinculado={onSalvo} />
+    <p className="text-center text-[11px] text-slate-500">ou, se o motorista passou o código dele (MOT-…), cadastre aqui</p>
     <form onSubmit={enviar} className="space-y-3">
       <h2 className="text-base font-bold text-slate-100">{primeiro ? 'Cadastre seu filho(a)' : 'Adicionar filho(a)'}</h2>
       {primeiro && <p className="text-xs text-slate-400">Informe os dados e o código que o motorista passou. Ele confirma o lugar do seu filho na van.</p>}
@@ -104,6 +138,7 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
         {onCancelar && <button type="button" onClick={onCancelar} className="px-4 py-3 rounded-xl bg-slate-800 text-slate-300 text-sm font-bold min-h-[48px] cursor-pointer">Cancelar</button>}
       </div>
     </form>
+    </div>
   );
 };
 
