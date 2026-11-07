@@ -1780,6 +1780,48 @@ test('Importação em lote: confere a lista, aponta erros e repetidos, exige a a
   assert.equal(g.data.totais.cortadas, 5);
 });
 
+test('Quando sair: calcula a hora de saída da posição atual até o primeiro ponto, sem guardar a posição', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'QuandoSair');
+  const url = '/api/motorista/quando-sair';
+  const pos = { latitude: -22.95, longitude: -43.20 }; // ~5,5 km do ponto
+  const agoraSP = () => { const f = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date()); return (Number(f.find((x) => x.type === 'hour')!.value) % 24) * 60 + Number(f.find((x) => x.type === 'minute')!.value); };
+  const hm = (m: number) => { const x = ((m % 1440) + 1440) % 1440; return `${String(Math.floor(x / 60)).padStart(2, '0')}:${String(x % 60).padStart(2, '0')}`; };
+  // sem alunos
+  assert.equal((await jsonReq('POST', url, mot, { ...pos, sentido: 'IDA' })).status, 409);
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola QS', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  // primeiro aluno sem ponto marcado: pede para marcar
+  const semPonto = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Sem Ponto' })).data;
+  const r0 = await jsonReq('POST', url, mot, { ...pos, sentido: 'IDA' });
+  assert.equal(r0.status, 409);
+  assert.match(String(r0.data.error), /ponto de embarque/);
+  await jsonReq('PUT', `/api/paradas/${semPonto.novaParada.id}/local`, mot, { latitude: -22.90, longitude: -43.20 });
+  // sem horário: calcula o trajeto mas não inventa a hora de sair
+  const r1 = await jsonReq('POST', url, mot, { ...pos, sentido: 'IDA' });
+  assert.equal(r1.status, 200);
+  assert.equal(r1.data.situacao, 'sem_horario');
+  assert.equal(r1.data.sairAs, null);
+  assert.ok(r1.data.minutosAteLa >= 1 && r1.data.distanciaKm > 4);
+  // com horário bem à frente: há tempo
+  await jsonReq('PUT', `/api/paradas/${semPonto.novaParada.id}/horarios`, mot, { horaIda: hm(agoraSP() + 300) });
+  const r2 = (await jsonReq('POST', url, mot, { ...pos, sentido: 'IDA' })).data;
+  assert.equal(r2.situacao, 'ha_tempo');
+  assert.match(String(r2.sairAs), /^\d\d:\d\d$/);
+  assert.equal(r2.margemMin, 5);
+  assert.ok(r2.faltamMin > 200 && r2.faltamMin < 300);
+  // horário já passado: atrasado
+  await jsonReq('PUT', `/api/paradas/${semPonto.novaParada.id}/horarios`, mot, { horaIda: hm(agoraSP() - 60) });
+  assert.equal((await jsonReq('POST', url, mot, { ...pos, sentido: 'IDA' })).data.situacao, 'atrasado');
+  // posição inválida, sem login e responsável não acessam
+  assert.equal((await jsonReq('POST', url, mot, { latitude: 'x', longitude: 1 })).status, 400);
+  assert.equal((await jsonReq('POST', url, undefined, pos)).status, 401);
+  const resp = await novoResponsavel(semPonto.codigoVinculo);
+  assert.equal((await jsonReq('POST', url, resp, pos)).status, 403);
+  // a posição não fica guardada em lugar nenhum que o responsável alcance
+  const prox = JSON.stringify((await jsonReq('GET', '/api/proximidade', resp)).data);
+  assert.ok(!prox.includes('-22.95'), 'a posição do motorista não pode vazar');
+});
+
 test('Log de uso: registra ações e toques com detalhe, sem nome, endereço, telefone, coordenadas nem texto de mensagem', async () => {
   const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
   const mot = await novoMotorista(adm, 'LogUso');

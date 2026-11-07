@@ -882,6 +882,7 @@ function acharUsuarioPorLogin(identificador: unknown): UserRecord | undefined {
 // ---- Horários da escola (informados pelo responsável) e horários previstos da van ----
 const FOLGA_CHEGADA_MIN = 15;   // a van chega à escola esta folga antes da entrada
 const TRAJETO_ESCOLA_MIN = 10;  // do último embarque até a escola
+const MARGEM_SAIDA_MIN = 5;      // folga extra na conta de "quando sair" (trânsito, abrir o portão)
 const APOS_SAIDA_MIN = 10;      // da saída da escola até o primeiro desembarque
 
 function lerHorario(v: unknown): string | null {
@@ -3108,6 +3109,47 @@ async function startServer() {
     };
   };
   const recDoMotorista = (user: SessionPayload) => usersDB.find((u) => u.id === user.userId) ?? usersDB.find((u) => u.id === (driverIdFor(user) as number));
+
+  // Ferramenta do início do turno: da posição ATUAL do motorista até o primeiro aluno (ida) ou até a escola (volta),
+  // diz quanto tempo leva e a que horas ele precisa sair. A posição só é usada na conta: não é guardada nem repassada.
+  app.post('/api/motorista/quando-sair', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const lat = Number(req.body?.latitude), lng = Number(req.body?.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      return res.status(400).json({ error: 'Posição inválida. Permita o GPS e tente de novo.' });
+    }
+    const sentido: 'IDA' | 'VOLTA' = req.body?.sentido === 'VOLTA' ? 'VOLTA' : 'IDA';
+    const fila = serverState.paradas
+      .filter((p: any) => donoDaParada(p) === driverId && confirmada(p) && p.status_embarque === 'PENDENTE')
+      .sort((a: any, b: any) => ordemNo(a, sentido) - ordemNo(b, sentido));
+    if (fila.length === 0) return res.status(409).json({ error: 'Não há alunos confirmados e pendentes para esta rota.' });
+    const primeira: any = fila[0];
+    const origem = { latitude: lat, longitude: lng };
+    // Ida: o destino é o ponto de embarque do primeiro aluno. Volta: a van começa na escola do primeiro aluno da fila.
+    const destino = sentido === 'IDA' ? (temLocalP(primeira) ? primeira : null) : localDaEscola(driverId, primeira.escola_destino);
+    const nomeDestino = sentido === 'IDA' ? primeira.nome_aluno : String(primeira.escola_destino || 'escola');
+    if (!destino) {
+      return res.status(409).json({
+        error: sentido === 'IDA'
+          ? `A primeira parada (${primeira.nome_aluno}) ainda não tem o ponto de embarque marcado no mapa.`
+          : `A escola ${primeira.escola_destino || ''} ainda não tem o local marcado. Marque em Ajustes, Rotas e escolas.`
+      });
+    }
+    const km = haversineKm(origem, destino);
+    if (km > DISTANCIA_MAX_KM) return res.status(409).json({ error: 'Sua posição está muito longe do ponto. Confira o GPS.' });
+    const minutos = minutosPorKm(km, 0, 0, fatorRuasDe(driverId, sentido));
+    const horarios = horariosDaParada(primeira);
+    // Volta: a van deve estar na escola na hora da saída. Ida: no ponto do primeiro aluno no horário combinado.
+    const alvo = sentido === 'IDA' ? horarios.hora_ida : (lerHorario(primeira.escola_saida) ? primeira.escola_saida : null);
+    const agora = agoraMinutosSP();
+    const base = { sentido, destino: nomeDestino, distanciaKm: Math.round(km * 10) / 10, minutosAteLa: minutos, margemMin: MARGEM_SAIDA_MIN, agora: deMin(agora) };
+    if (!alvo) return res.json({ ...base, horarioAlvo: null, sairAs: null, situacao: 'sem_horario' });
+    const sairMin = paraMin(alvo) - minutos - MARGEM_SAIDA_MIN;
+    // Diferença circular (-12h..+12h) para não quebrar perto da meia-noite.
+    const faltam = ((sairMin - agora + 720) % 1440 + 1440) % 1440 - 720;
+    res.json({ ...base, horarioAlvo: alvo, sairAs: deMin(sairMin), faltamMin: faltam, situacao: faltam > 2 ? 'ha_tempo' : faltam >= -2 ? 'saia_agora' : 'atrasado' });
+  });
 
   app.get('/api/motorista/pre-cadastro', authenticate, requireDriver, (req: Request, res: Response) => {
     const rec = recDoMotorista((req as any).user);
