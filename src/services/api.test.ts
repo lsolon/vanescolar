@@ -1949,3 +1949,23 @@ test('Guia do primeiro acesso: os exemplos só existem no modo de teste; no modo
   const ex2 = await jsonReq('POST', '/api/teste/exemplos', fam2, {});
   assert.notEqual(ex2.data.codigo, ex.data.codigo, 'cada responsável recebe um aluno de exemplo próprio');
 });
+
+test('Modo de teste: cada sessão ganha conta própria e sem sessão volta à conta compartilhada', async () => {
+  const modoTeste = !!(await jsonReq('GET', '/api/health')).data.modoTeste;
+  if (!modoTeste) {
+    assert.equal((await jsonReq('POST', '/api/teste/entrar', undefined, { papel: 'motorista', sessao: 'a1b2c3d4e5f6a7b8' })).status, 404);
+    return;
+  }
+  const entrar = async (sessao?: string) => (await jsonReq('POST', '/api/teste/entrar', undefined, { papel: 'motorista', sessao })).data.token as string;
+  const a = await entrar('a1b2c3d4e5f6a7b8');
+  const b = await entrar('b1b2c3d4e5f6a7b8');
+  assert.equal((await jsonReq('POST', '/api/teste/exemplos', a, {})).data.criados, 3);
+  const nomes = async (tok: string) => ((await jsonReq('GET', '/api/estado', tok)).data.paradas as any[]).map((p) => p.nome_aluno);
+  assert.equal((await nomes(a)).length, 3, 'A vê os seus alunos');
+  assert.equal((await nomes(b)).length, 0, 'B não vê os alunos de A');
+  assert.equal((await jsonReq('POST', '/api/teste/exemplos', b, {})).data.criados, 3, 'B carrega os próprios exemplos');
+  assert.equal((await nomes(await entrar('a1b2c3d4e5f6a7b8'))).length, 3, 'a mesma sessão volta à mesma conta');
+  // id inválido não cria conta própria: cai na conta compartilhada
+  const c1 = await entrar('ZZ'); const c2 = await entrar();
+  assert.deepEqual(await nomes(c1), await nomes(c2));
+});

@@ -632,6 +632,26 @@ export interface ResumoFinanceiro {
   ultima_km: number | null;
 }
 
+/**
+ * Id aleatório deste aparelho no modo de teste: cada testador ganha a sua própria conta (dados separados).
+ * Com `?conta=demo` na URL volta à conta de teste compartilhada (usada nas demonstrações).
+ */
+function idSessaoTeste(): string | undefined {
+  try {
+    if (new URLSearchParams(window.location.search).get('conta') === 'demo') return undefined;
+    let id = localStorage.getItem('van_teste_sessao');
+    if (!id || !/^[a-f0-9]{12,32}$/.test(id)) {
+      const b = new Uint8Array(8);
+      crypto.getRandomValues(b);
+      id = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+      localStorage.setItem('van_teste_sessao', id);
+    }
+    return id;
+  } catch {
+    return undefined;
+  }
+}
+
 export const TransportRepository = {
   async loginMotorista(email: string, pin: string): Promise<string> {
     return this.loginMotoristaEmail(email, pin);
@@ -997,7 +1017,7 @@ export const TransportRepository = {
     const res = await fetch(`${getBaseUrl()}/api/teste/entrar`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ papel, nome })
+      body: JSON.stringify({ papel, nome, sessao: idSessaoTeste() })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Modo de teste indisponível.');

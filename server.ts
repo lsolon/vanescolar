@@ -1311,12 +1311,13 @@ async function startServer() {
   // Só existe com MODO_TESTE_SEM_LOGIN=true no ambiente. Desligado por padrão.
   // ==========================================================================
   /** Usuário do modo de teste (cria na primeira vez; no máximo 50). Só é chamado com MODO_TESTE_SEM_LOGIN=true. */
-  const obterUsuarioTeste = (papel: 'motorista' | 'responsavel', nomeInformado?: unknown): UserRecord | null => {
-    const slug = String(nomeInformado || papel).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || papel;
+  const obterUsuarioTeste = (papel: 'motorista' | 'responsavel', nomeInformado?: unknown, sessao?: unknown): UserRecord | null => {
+    // Com `sessao` (id aleatório de 12 a 32 hex gerado no aparelho), cada testador ganha a sua própria conta, sem ver dados dos outros.
+    const slug = typeof sessao === 'string' && /^[a-f0-9]{12,32}$/.test(sessao) ? `s-${sessao}` : String(nomeInformado || papel).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || papel;
     const email = `teste-${papel}-${slug}@teste.local`;
     let user = usersDB.find((u) => u.email === email);
     if (!user) {
-      if (usersDB.filter((u) => u.email.endsWith('@teste.local')).length >= 50) return null;
+      if (usersDB.filter((u) => u.email.endsWith('@teste.local')).length >= 100) return null;
       user = {
         id: usersDB.reduce((m, u) => Math.max(m, u.id), 200) + 1,
         fullName: String(nomeInformado || (papel === 'motorista' ? 'Motorista Teste' : 'Responsável Teste')).slice(0, 60),
@@ -1335,7 +1336,7 @@ async function startServer() {
     if (!MODO_TESTE_SEM_LOGIN) return res.status(404).json({ error: 'Não encontrado.' });
     const papel = req.body?.papel === 'motorista' ? 'motorista' : req.body?.papel === 'responsavel' ? 'responsavel' : null;
     if (!papel) return res.status(400).json({ error: 'Informe papel: motorista ou responsavel.' });
-    const user = obterUsuarioTeste(papel, req.body?.nome);
+    const user = obterUsuarioTeste(papel, req.body?.nome, req.body?.sessao);
     if (!user) return res.status(429).json({ error: 'Limite de usuários de teste atingido.' });
     auditLog('LOGIN_MODO_TESTE', user.email, `Entrada sem login como ${papel}`);
     const token = signToken({ role: user.role, userId: user.id, email: user.email, studentId: user.studentId, emailVerified: true });
