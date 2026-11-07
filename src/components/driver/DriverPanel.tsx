@@ -1090,7 +1090,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         <div className="fixed inset-0 z-50 bg-slate-950/80 flex items-end sm:items-center justify-center p-3" role="dialog" aria-modal="true">
           <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 max-h-[calc(100dvh-1.5rem)] overflow-y-auto overscroll-contain">
             <h3 className="text-sm font-bold text-slate-100">Marcar local de embarque — {paradaMarcando.nome}</h3>
-            <SeletorLocal valor={localMarcando} onChange={setLocalMarcando} />
+            <SeletorLocal grande valor={localMarcando} onChange={setLocalMarcando} />
             {erroLocal && <p role="alert" className="text-[11px] text-rose-300">{erroLocal}</p>}
             <div className="grid grid-cols-2 gap-2">
               <button type="button" onClick={() => setParadaMarcando(null)} className="py-2.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold cursor-pointer">Cancelar</button>
