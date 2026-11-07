@@ -123,6 +123,9 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const [aba, setAba] = useState<'diario' | 'mapa' | 'mensagens' | 'mais' | 'cadastro' | 'mensalidades' | 'financeiro' | 'ajustes'>('diario');
   const [verPendentes, setVerPendentes] = useState(false);
   const [abertoId, setAbertoId] = useState<number | string | null>(null);
+  /** Faixa embaixo, logo após marcar um aluno: confirma e deixa desfazer por alguns segundos. */
+  const [faixa, setFaixa] = useState<{ texto: string; desfazerId?: number; nome: string } | null>(null);
+  const faixaTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sentidoRota, setSentidoRota] = useState<'IDA' | 'VOLTA'>('IDA');
   // Com a rota em andamento vale o sentido do servidor (sobrevive a recarregar a página); antes de iniciar, o escolhido no seletor.
   const sentidoServidor: 'IDA' | 'VOLTA' | null = isRotaAtiva ? (String((viagemZeroCache?.viagem as any)?.sentido) === 'VOLTA' ? 'VOLTA' : 'IDA') : null;
@@ -230,9 +233,10 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
       const atualizado = await TransportRepository.getViagemMotoristaZeroCache(undefined, { apenasProximaParada });
       setViagemZeroCache(atualizado);
 
-      const statusMsg = novoStatus === 'PENDENTE' ? 'voltou para pendente' : novoStatus === 'EMBARCOU' ? 'embarcou na van' : (novoStatus === 'ENTREGUE' ? 'entregue na escola' : 'marcado como ausente');
-      setMensagemSucesso(`${nomeAlunoSanitizado} ${statusMsg}!`);
-      setTimeout(() => setMensagemSucesso(null), 3500);
+      const statusMsg = novoStatus === 'PENDENTE' ? 'voltou para pendente' : novoStatus === 'EMBARCOU' ? 'embarcou' : (novoStatus === 'ENTREGUE' ? 'foi entregue' : 'está ausente');
+      if (faixaTimer.current) clearTimeout(faixaTimer.current);
+      setFaixa({ texto: `${nomeAlunoSanitizado} ${statusMsg}`, nome: nomeAlunoSanitizado, ...(novoStatus !== 'PENDENTE' ? { desfazerId: numericId } : {}) });
+      faixaTimer.current = setTimeout(() => setFaixa(null), 8000);
     } catch (err) {
       console.error('Erro ao atualizar status:', err);
     } finally {
@@ -457,108 +461,49 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-100 font-sans">
-      {/* CABEÇALHO DO MOTORISTA COM INDICADORES DE SEGURANÇA */}
-      <header className="bg-slate-900 border-b border-slate-800 p-4 sticky top-0 z-30 shadow-md">
-        {/* Barra Superior: Selo Zero-Cache e Botão de Kill-Switch */}
-        <div className="flex items-center justify-between gap-2 pb-3 mb-3 border-b border-slate-800/80 text-[11px]">
-          <div className="flex items-center gap-1.5 text-emerald-400 font-semibold bg-emerald-950/60 border border-emerald-500/30 px-2.5 py-1 rounded-lg">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Zero-Cache LGPD Ativo</span>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            {/* BOTÃO 2FA / TOTP */}
-            <button
-              onClick={async () => {
-                try {
-                  const current = viagemZeroCache?.motorista;
-                  const res = await TransportRepository.toggleTotp(!current?.totp_enabled);
-                  setMensagemSucesso(res.message || 'Configuração 2FA atualizada!');
-                  setTimeout(() => setMensagemSucesso(null), 3000);
-                  carregarDadosZeroCache();
-                } catch {
-                  setMensagemSucesso('Erro ao atualizar 2FA');
-                  setTimeout(() => setMensagemSucesso(null), 3000);
-                }
-              }}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 text-[11px] font-bold transition-all cursor-pointer"
-              title="Ativar ou desativar verificação em 2 etapas (TOTP)"
-            >
-              <KeyRound className="w-3.5 h-3.5 text-amber-400" />
-              <span>{viagemZeroCache?.motorista?.totp_enabled ? '2FA: Ativo' : '2FA: Ativar'}</span>
-            </button>
-
-            {/* BOTÃO CRÍTICO: KILL-SWITCH REMOTO / DISPOSITIVO COMPROMETIDO */}
-            <button
-              onClick={() => setModalKillSwitchAberto(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 text-[11px] font-bold transition-all active:scale-95 shadow-sm cursor-pointer"
-              title="Acionar bloqueio imediato caso o dispositivo seja perdido ou comprometido"
-            >
-              <ShieldAlert className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
-              <span>Kill-Switch</span>
-            </button>
-
-            {/* BOTÃO SAIR / LOGOUT */}
-            {onLogout && (
-              <button
-                onClick={async () => {
-                  await TransportRepository.logout();
-                  onLogout();
-                }}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] font-bold transition-all active:scale-95 cursor-pointer"
-                title="Sair do painel e voltar ao Portal"
-              >
-                <LogOut className="w-3.5 h-3.5 text-slate-400" />
-                <span>Sair</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Linha do Motorista: Foto, Placa e Botão de Rota */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="relative">
+      {/* CABEÇALHO ENXUTO: quem dirige, sentido e o botão principal da rota. Segurança fica em Mais > Rotas e ajustes. */}
+      <header className="bg-slate-900 border-b border-slate-800 px-4 py-3 sticky top-0 z-30 shadow-md space-y-2.5">
+        <div className="flex items-center gap-3">
+          <div className="relative shrink-0">
               {motorista?.foto_url && !fotoFalhou ? (
                 <img
                   src={motorista.foto_url}
                   alt={motorista?.nome || "Motorista"}
                   onError={() => setFotoFalhou(true)}
-                  className="w-12 h-12 rounded-xl object-cover ring-2 ring-amber-400 shadow-md"
+                  className="w-10 h-10 rounded-xl object-cover ring-2 ring-amber-400 shadow-md"
                 />
               ) : (
                 <div
                   aria-label={motorista?.nome || "Motorista"}
-                  className="w-12 h-12 rounded-xl ring-2 ring-amber-400 shadow-md bg-slate-800 text-amber-300 font-black text-base flex items-center justify-center"
+                  className="w-10 h-10 rounded-xl ring-2 ring-amber-400 shadow-md bg-slate-800 text-amber-300 font-black text-base flex items-center justify-center"
                 >
                   {(motorista?.nome || 'M').trim().split(/\s+/).slice(0, 2).map((p: string) => p[0]?.toUpperCase()).join('')}
                 </div>
               )}
-              <span className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-slate-900 ${isRotaAtiva ? 'bg-emerald-500 animate-pulse' : 'bg-slate-500'}`} />
-            </div>
+              <span className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-slate-900 ${isRotaAtiva ? 'bg-emerald-500 animate-pulse' : 'bg-slate-500'}`} />
 
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-base font-bold text-slate-100 leading-tight">
-                  {motorista?.nome || "Motorista"}
-                </h1>
-                <span className="bg-amber-400/10 text-amber-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-amber-400/20">
-                  MOTORISTA
-                </span>
-              </div>
-              <p className="text-xs text-slate-400 flex items-center gap-1.5 mt-0.5">
-                <Bus className="w-3.5 h-3.5 text-amber-400" />
-                <span>{motorista?.veiculo_modelo || "Van Escolar"}</span>
-                <span className="text-slate-600">•</span>
-                <span className="font-mono font-semibold text-slate-300 bg-slate-800 px-1 rounded text-[11px]">
-                  {motorista?.veiculo_placa || "RIO-2026"}
-                </span>
-              </p>
-            </div>
           </div>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-sm font-bold text-slate-100 leading-tight truncate">{motorista?.nome || "Motorista"}</h1>
+            <p className="text-[11px] text-slate-400 flex items-center gap-1.5 truncate">
+              <Bus className="w-3 h-3 text-amber-400 shrink-0" />
+              <span className="truncate">{motorista?.veiculo_modelo || "Van Escolar"}</span>
+              <span className="font-mono font-semibold text-slate-300">{motorista?.veiculo_placa || "RIO-2026"}</span>
+            </p>
+          </div>
+          {onLogout && (
+            <button
+              onClick={async () => { await TransportRepository.logout(); onLogout(); }}
+              className="shrink-0 flex items-center gap-1 px-3 min-h-[40px] rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] font-bold cursor-pointer"
+              title="Sair do painel e voltar ao Portal"
+            >
+              <LogOut className="w-3.5 h-3.5 text-slate-400" />
+              <span>Sair</span>
+            </button>
+          )}
+        </div>
 
-          {/* BOTÃO PRINCIPAL: INICIAR / ENCERRAR ROTA */}
-          <div className="flex items-center gap-2 ml-auto">
+        <div className="flex items-center gap-2">
           {!isRotaAtiva && (
             <div role="group" aria-label="Sentido da viagem" className="flex rounded-xl overflow-hidden border border-slate-700 text-[11px] font-bold shrink-0">
               <button
@@ -566,7 +511,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                 aria-pressed={sentidoAuto}
                 title="Escolhe Ida ou Volta pelo horário de entrada e saída da escola"
                 onClick={() => { setSentidoAuto(true); setSentidoRota(sentidoSugerido); }}
-                className={`px-2.5 py-2 min-h-[40px] cursor-pointer border-r border-slate-700 ${sentidoAuto ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-900 text-slate-500'}`}
+                className={`px-3 py-2 min-h-[48px] cursor-pointer border-r border-slate-700 ${sentidoAuto ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-900 text-slate-500'}`}
               >
                 Auto
               </button>
@@ -576,7 +521,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                   type="button"
                   aria-pressed={sentidoRota === sv}
                   onClick={() => { setSentidoAuto(false); setSentidoRota(sv); }}
-                  className={`px-2.5 py-2 min-h-[40px] cursor-pointer ${sentidoRota === sv ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-900 text-slate-400'}`}
+                  className={`px-3 py-2 min-h-[48px] cursor-pointer ${sentidoRota === sv ? 'bg-cyan-500/20 text-cyan-300' : 'bg-slate-900 text-slate-400'}`}
                 >
                   {sv === 'IDA' ? 'Ida' : 'Volta'}
                 </button>
@@ -585,7 +530,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           )}
           <button
             onClick={() => onToggleRota(sentidoRota)}
-            className={`flex items-center gap-2 px-3.5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider transition-all shadow-lg active:scale-95 ${
+            className={`flex-1 flex items-center justify-center gap-2 px-4 min-h-[48px] rounded-xl font-bold text-sm uppercase tracking-wider transition-all shadow-lg active:scale-95 cursor-pointer ${
               isRotaAtiva
                 ? 'bg-rose-600 hover:bg-rose-500 text-white ring-2 ring-rose-400/50 shadow-rose-950/50'
                 : 'bg-emerald-600 hover:bg-emerald-500 text-white ring-2 ring-emerald-400/50 shadow-emerald-950/50'
@@ -594,20 +539,19 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             {isRotaAtiva ? (
               <>
                 <Square className="w-4 h-4 fill-white" />
-                <span>Encerrar</span>
+                <span>Encerrar rota</span>
               </>
             ) : (
               <>
-                <Play className="w-4 h-4 fill-white animate-pulse" />
-                <span>Iniciar Rota</span>
+                <Play className="w-4 h-4 fill-white" />
+                <span>Iniciar rota</span>
               </>
             )}
           </button>
-          </div>
         </div>
 
         {isRotaAtiva && rotaTodaConcluida && (
-          <div className="mt-3 p-3 bg-amber-950/70 border border-amber-500/40 rounded-xl text-xs text-amber-100 flex items-center justify-between gap-3 animate-fadeIn" role="status">
+          <div className="p-3 bg-amber-950/70 border border-amber-500/40 rounded-xl text-xs text-amber-100 flex items-center justify-between gap-3 animate-fadeIn" role="status">
             <span className="font-medium">
               {sentidoRota === 'IDA' ? 'Todos os alunos foram entregues na escola.' : 'Todos os alunos foram deixados em casa.'} Encerrar a rota?
             </span>
@@ -623,30 +567,17 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
         {/* ALERTA DE SUCESSO / NOTIFICAÇÃO DOS PAIS */}
         {mensagemSucesso && (
-          <div className="mt-3 p-2.5 bg-emerald-950/80 border border-emerald-500/40 rounded-xl text-xs text-emerald-200 flex items-center gap-2 animate-fadeIn">
+          <div className="p-2.5 bg-emerald-950/80 border border-emerald-500/40 rounded-xl text-xs text-emerald-200 flex items-center gap-2 animate-fadeIn">
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
             <span className="font-medium">{mensagemSucesso}</span>
           </div>
         )}
 
-        {/* MÉTRICAS OPERACIONAIS */}
-        <div className="grid grid-cols-4 gap-2 mt-3 pt-3 border-t border-slate-800/80">
-          <div className="bg-slate-950/70 p-2 rounded-xl border border-slate-800 text-center">
-            <span className="text-[10px] text-slate-400 block font-medium">Total</span>
-            <span className="text-base font-extrabold text-slate-100">{totalAlunos}</span>
-          </div>
-          <div className="bg-slate-950/70 p-2 rounded-xl border border-slate-800 text-center">
-            <span className="text-[10px] text-emerald-400 block font-medium">A Bordo</span>
-            <span className="text-base font-extrabold text-emerald-400">{embarcados}</span>
-          </div>
-          <div className="bg-slate-950/70 p-2 rounded-xl border border-slate-800 text-center">
-            <span className="text-[10px] text-indigo-400 block font-medium">Entregues</span>
-            <span className="text-base font-extrabold text-indigo-400">{entregues}</span>
-          </div>
-          <div className="bg-slate-950/70 p-2 rounded-xl border border-slate-800 text-center">
-            <span className="text-[10px] text-rose-400 block font-medium">Ausentes</span>
-            <span className="text-base font-extrabold text-rose-400">{ausentes}</span>
-          </div>
+        <div className="grid grid-cols-4 gap-1.5 text-center text-[11px]" aria-label="Resumo da rota">
+          <span className="rounded-lg bg-slate-950/70 border border-slate-800 py-1"><span className="text-slate-400">Total </span><strong className="text-slate-100">{totalAlunos}</strong></span>
+          <span className="rounded-lg bg-slate-950/70 border border-slate-800 py-1"><span className="text-emerald-400">A bordo </span><strong className="text-emerald-400">{embarcados}</strong></span>
+          <span className="rounded-lg bg-slate-950/70 border border-slate-800 py-1"><span className="text-indigo-400">Entregues </span><strong className="text-indigo-400">{entregues}</strong></span>
+          <span className="rounded-lg bg-slate-950/70 border border-slate-800 py-1"><span className="text-rose-400">Ausentes </span><strong className="text-rose-400">{ausentes}</strong></span>
         </div>
       </header>
 
@@ -1085,6 +1016,47 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
         {aba === 'ajustes' && (
           <>
+        <section className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3" aria-label="Segurança">
+          <h3 className="text-sm font-bold text-slate-100">Segurança</h3>
+          <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] font-semibold bg-emerald-950/60 border border-emerald-500/30 px-2.5 py-1.5 rounded-lg">
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Zero-Cache LGPD ativo: nada de aluno fica guardado no aparelho</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* BOTÃO 2FA / TOTP */}
+            <button
+              onClick={async () => {
+                try {
+                  const current = viagemZeroCache?.motorista;
+                  const res = await TransportRepository.toggleTotp(!current?.totp_enabled);
+                  setMensagemSucesso(res.message || 'Configuração 2FA atualizada!');
+                  setTimeout(() => setMensagemSucesso(null), 3000);
+                  carregarDadosZeroCache();
+                } catch {
+                  setMensagemSucesso('Erro ao atualizar 2FA');
+                  setTimeout(() => setMensagemSucesso(null), 3000);
+                }
+              }}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 text-[11px] font-bold transition-all cursor-pointer"
+              title="Ativar ou desativar verificação em 2 etapas (TOTP)"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+              <span>{viagemZeroCache?.motorista?.totp_enabled ? '2FA: Ativo' : '2FA: Ativar'}</span>
+            </button>
+
+            {/* BOTÃO CRÍTICO: KILL-SWITCH REMOTO / DISPOSITIVO COMPROMETIDO */}
+            <button
+              onClick={() => setModalKillSwitchAberto(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/40 text-[11px] font-bold transition-all active:scale-95 shadow-sm cursor-pointer"
+              title="Acionar bloqueio imediato caso o dispositivo seja perdido ou comprometido"
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-rose-400 animate-pulse" />
+              <span>Kill-Switch</span>
+            </button>
+
+          </div>
+          <p className="text-[11px] text-slate-400">Kill-Switch bloqueia a sessão e apaga os dados da tela se o aparelho for perdido ou roubado.</p>
+        </section>
         <section className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3" aria-label="Opções do diário">
           <h3 className="text-sm font-bold text-slate-100">Opções do diário</h3>
           <p className="text-[11px] text-slate-400">Endereços completos ficam sempre mascarados na tela (LGPD de menores).</p>
@@ -1145,7 +1117,17 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
       </main>
 
       {/* MENU FIXO EMBAIXO: ao alcance do polegar. Cadastro, mensalidades, financeiro e ajustes ficam em "Mais". */}
-      <nav aria-label="Seções do painel" role="tablist" className="sticky bottom-0 z-30 shrink-0 grid grid-cols-4 bg-slate-900 border-t border-slate-800 pb-[env(safe-area-inset-bottom)]">
+      <div className="sticky bottom-0 z-30 shrink-0 bg-slate-900">
+      {faixa && (
+        <div role="status" className="flex items-center gap-2 px-4 py-2.5 bg-emerald-950 border-t border-emerald-500/40 text-emerald-200 text-sm">
+          <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+          <span className="flex-1 min-w-0 truncate">{faixa.texto}</span>
+          {faixa.desfazerId !== undefined && (
+            <button type="button" onClick={() => handleAtualizarStatus(faixa.desfazerId as number, 'PENDENTE', faixa.nome)} className="shrink-0 px-3 min-h-[40px] rounded-lg bg-emerald-800 text-emerald-50 text-xs font-bold underline cursor-pointer">Desfazer</button>
+          )}
+        </div>
+      )}
+      <nav aria-label="Seções do painel" role="tablist" className="grid grid-cols-4 border-t border-slate-800 pb-[env(safe-area-inset-bottom)]">
         {([
           ['diario', 'Hoje', ClipboardList, pendentes.length],
           ['mapa', 'Mapa', MapIcon, 0],
@@ -1163,6 +1145,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           );
         })}
       </nav>
+      </div>
 
       {/* MODAL DE CONFIRMAÇÃO DO KILL-SWITCH REMOTO */}
       {modalKillSwitchAberto && (
