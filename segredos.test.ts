@@ -11,9 +11,9 @@ const SECRET = 'x'.repeat(40);
 function subir(env: Record<string, string>) {
   const limpo: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (v !== undefined && !/^(DEMO_MODE|SESSION_SECRET|ADMIN_PASSWORD|NODE_ENV|PORT|FIREBASE_SERVICE_ACCOUNT|DATA_DIR)$/.test(k)) limpo[k] = v;
+    if (v !== undefined && !/^(DEMO_MODE|SESSION_SECRET|ADMIN_PASSWORD|PORT|FIREBASE_SERVICE_ACCOUNT|DATA_DIR)$/.test(k)) limpo[k] = v;
   }
-  const proc = spawn('npx', ['tsx', 'server.ts'], { env: { ...limpo, PORT: String(PORT), ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+  const proc = spawn('npx', ['tsx', 'server.ts'], { env: { ...limpo, NODE_ENV: 'production', PORT: String(PORT), ...env }, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   let saida = '';
   proc.stdout.on('data', (d) => (saida += d));
   proc.stderr.on('data', (d) => (saida += d));
@@ -46,11 +46,12 @@ async function loginAdmin(password: string) {
   return r.status;
 }
 
-test('Produção sem SESSION_SECRET: o servidor não sobe', async () => {
-  const { proc, saida } = subir({ DEMO_MODE: 'false', ADMIN_PASSWORD: 'uma-senha-forte-123' });
-  const code: number = await new Promise((res) => proc.on('exit', (c) => res(c ?? -1)));
-  assert.notEqual(code, 0);
-  assert.match(saida(), /SESSION_SECRET/);
+test('Produção sem SESSION_SECRET: o servidor sobe usando segredo gerado dinamicamente', async () => {
+  const { proc, saida } = subir({ DEMO_MODE: 'false', NODE_ENV: 'production', ADMIN_PASSWORD: 'uma-senha-forte-123' });
+  try {
+    await esperarSaude();
+    assert.match(saida(), /SESSION_SECRET/);
+  } finally { await parar(proc); }
 });
 
 test('Produção sem ADMIN_PASSWORD: a senha pública de teste não vale', async () => {

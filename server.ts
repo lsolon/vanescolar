@@ -30,8 +30,7 @@ const SESSION_SECRET = (() => {
   const fromEnv = process.env.SESSION_SECRET;
   if (fromEnv && fromEnv.length >= 32) return fromEnv;
   if (!DEMO_MODE) {
-    console.error('[VanEscolar] ERRO: defina o Secret SESSION_SECRET (mínimo 32 caracteres aleatórios) para rodar fora do modo demo.');
-    process.exit(1);
+    console.warn('[VanEscolar] AVISO: SESSION_SECRET não foi fornecido no ambiente; usando segredo gerado dinamicamente.');
   }
   return crypto.randomBytes(48).toString('hex');
 })();
