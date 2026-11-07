@@ -1880,3 +1880,41 @@ test('Desfazer: o motorista volta o aluno para pendente (marcação sem querer) 
   assert.equal((await st('PENDENTE')).status_embarque, 'PENDENTE');
   assert.equal((await jsonReq('POST', `/api/paradas/${id}/status`, mot, { status: 'QUALQUER' })).status, 400);
 });
+
+test('Proximidade de todos os filhos: um item por filho, sem coordenadas, e o aviso de um não depende do outro estar em foco', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'Irmaos');
+  const nova = async (n: string) => (await jsonReq('POST', '/api/paradas/nova', mot, {
+    nomeAluno: n, endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777'
+  })).data;
+  const a = await nova('Irmao A'), b = await nova('Irmao B'), c = await nova('Outro Aluno');
+  const resp = await novoResponsavel(a.codigoVinculo);
+  // segundo filho do mesmo responsável
+  assert.equal((await jsonReq('POST', '/api/vincular', resp, { codigoVinculo: b.codigoVinculo })).status, 200);
+
+  let r = (await jsonReq('GET', '/api/proximidade', resp)).data;
+  assert.equal(r.proximidades.length, 2, 'um item por filho');
+  const ids = r.proximidades.map((x: any) => x.id_aluno).sort();
+  assert.deepEqual(ids, [a.novaParada.id_aluno ?? a.novaParada.id_aluno, b.novaParada.id_aluno].sort());
+  assert.ok(!ids.includes(c.novaParada.id_aluno), 'aluno de outra família não aparece');
+  assert.ok(r.proximidades.every((x: any) => x.proximidade.estado === 'aguardando'));
+
+  await jsonReq('POST', '/api/rotas/iniciar', mot);
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.95, longitude: -43.2, speedKmH: 30, accuracyMeters: 8 });
+  r = (await jsonReq('GET', '/api/proximidade', resp)).data;
+  assert.ok(r.proximidades.every((x: any) => x.proximidade.estado === 'a_caminho' || x.proximidade.estado === 'proxima'));
+  assert.ok(r.proximidades.every((x: any) => x.proximidade.posicao === undefined && x.proximidade.mapaLiberado === false));
+  assert.equal(JSON.stringify(r.proximidades).includes('-22.95'), false, 'nenhuma coordenada da van na lista');
+
+  // marcar um filho como embarcado muda só o item dele
+  await jsonReq('POST', `/api/paradas/${a.novaParada.id}/status`, mot, { status: 'EMBARCOU' });
+  r = (await jsonReq('GET', '/api/proximidade', resp)).data;
+  const porId = (id: number) => r.proximidades.find((x: any) => x.id_aluno === id).proximidade;
+  assert.equal(porId(a.novaParada.id_aluno).estado, 'embarcou');
+  assert.notEqual(porId(b.novaParada.id_aluno).estado, 'embarcou');
+
+  // o estado completo (usado também pelo SSE) traz a mesma lista, e a proximidade do filho em foco continua igual
+  const est = (await jsonReq('GET', '/api/estado', resp)).data;
+  assert.equal(est.proximidades.length, 2);
+  assert.ok(est.proximidade);
+});

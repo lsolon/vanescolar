@@ -738,6 +738,15 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
   const entrada = lerHorario(mine?.escola_entrada);
   return { ...r, sentido: sentidoDaViagem(getTrip(driverId)), ...(entrada ? { chegarEscolaAte: deMin(paraMin(entrada) - FOLGA_CHEGADA_MIN) } : {}) };
 }
+/** Proximidade resumida de TODOS os filhos do responsável (um por filho, mesmo de motoristas diferentes), sem coordenadas. */
+function proximidadesDosFilhos(user: { userId?: number; studentId?: number }, avisoMin: number): { id_aluno: number; proximidade: Omit<Proximidade, 'posicao'> | null }[] {
+  return filhosDe(user.userId, user.studentId).map((p: any) => {
+    const r = computeProximity(donoDaParada(p), p.id_aluno, avisoMin);
+    if (!r) return { id_aluno: p.id_aluno, proximidade: null };
+    const { posicao: _posicao, ...semPosicao } = r as any;
+    return { id_aluno: p.id_aluno, proximidade: semPosicao };
+  });
+}
 function computeProximityBase(driverId: number, studentId: number | undefined, avisoMin: number): Proximidade | null {
   if (!studentId) return null;
   const trip = getTrip(driverId);
@@ -1011,6 +1020,7 @@ function getFilteredStateForUser(user: SessionPayload, pref?: number) {
       etaNextStopMinutes: prox?.minutos ?? 0
     };
     cloned.proximidade = prox;
+    cloned.proximidades = proximidadesDosFilhos(user, prefsDe(user.userId).avisoMin);
     cloned.prefs = prefsDe(user.userId);
   }
 
@@ -2716,7 +2726,7 @@ async function startServer() {
     const prefOk = Number.isFinite(pref) ? pref : undefined;
     const driverId = driverIdFor(u, prefOk);
     const prox = driverId !== null ? computeProximity(driverId, alunoAtivo(u, prefOk), prefsDe(u.userId).avisoMin) : null;
-    res.json({ proximidade: prox, prefs: prefsDe(u.userId) });
+    res.json({ proximidade: prox, proximidades: proximidadesDosFilhos(u, prefsDe(u.userId).avisoMin), prefs: prefsDe(u.userId) });
   });
 
   app.post('/api/vincular', authenticate, rateLimiter(10, 60000), (req: Request, res: Response) => {

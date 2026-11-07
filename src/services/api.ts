@@ -436,6 +436,8 @@ export interface ResultadoImportacao {
 export interface EstadoPreCadastro { link: { url: string; expiraEm: string; envios: number; maxEnvios: number } | null; regras: string }
 export interface EscolaMotorista { nome: string; local: { latitude: number; longitude: number } | null; horarios?: Partial<Record<Turno, { entrada: string; saida: string }>> }
 export interface FilhoResumo { id_aluno: number; nome_aluno: string; escola_destino: string; vinculo: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO'; motorista: string | null }
+/** Proximidade resumida de um filho (sem coordenadas). */
+export interface ProximidadeFilho { id_aluno: number; proximidade: ProximidadeVan | null }
 export interface PrefsProximidade { estilo: 'A' | 'B' | 'C'; avisoMin: number }
 
 type EventCallback = (eventType: string, payload: unknown) => void;
@@ -1038,7 +1040,7 @@ export const TransportRepository = {
   },
 
   /** Resumo seguro da proximidade da van (sem coordenadas, exceto quando a próxima parada é a do aluno). */
-  async getProximidade(): Promise<{ proximidade: ProximidadeVan | null; prefs: PrefsProximidade } | null> {
+  async getProximidade(): Promise<{ proximidade: ProximidadeVan | null; proximidades?: ProximidadeFilho[]; prefs: PrefsProximidade } | null> {
     const res = await fetch(`${getBaseUrl()}/api/proximidade${qsAluno()}`, { headers: getAuthHeaders() });
     if (!res.ok) return null;
     return res.json();
