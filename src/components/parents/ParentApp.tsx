@@ -52,6 +52,7 @@ import {
   LogOut
 } from 'lucide-react';
 import { LiveMap } from '../shared/LiveMap';
+import { GuiaPrimeiroAcesso, useGuiaPrimeiroAcesso } from '../shared/GuiaPrimeiroAcesso';
 
 interface ParentAppProps {
   coordenadas: GPSCoordinate;
@@ -125,6 +126,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
   const [erroCarga, setErroCarga] = useState<boolean>(false);
   const [filhosInfo, setFilhosInfo] = useState<{ filhos: FilhoResumo[]; filhoAtivo: number | null; motoristas: { id: number; nome: string }[] }>({ filhos: [], filhoAtivo: null, motoristas: [] });
   const [adicionando, setAdicionando] = useState(false);
+  const guia = useGuiaPrimeiroAcesso('responsavel');
 
   // Aviso dos outros filhos: quem não está em foco também avisa quando a van chega ao tempo escolhido.
   useEffect(() => {
@@ -249,11 +251,17 @@ export const ParentApp: React.FC<ParentAppProps> = ({
   // Primeiro acesso: o responsável cadastra o filho com o código do motorista
   if (!isDemo && !erroCarga && filhosInfo.filhos.length === 0) {
     return (
-      <div className="h-full overflow-y-auto bg-slate-950 text-slate-200 p-4">
-        <div className="max-w-md mx-auto pb-10">
-          <AdicionarFilho primeiro motoristas={filhosInfo.motoristas} onSalvo={() => { setCarregando(true); carregarDados(); }} />
-          {onLogout && <button onClick={onLogout} className="mt-4 text-xs text-slate-400 underline cursor-pointer min-h-[44px]">Sair</button>}
+      <div className="flex flex-col h-full bg-slate-950 text-slate-200">
+        <div className="flex-1 overflow-y-auto p-4">
+          <div className="max-w-md mx-auto pb-10">
+            <AdicionarFilho primeiro motoristas={filhosInfo.motoristas} onSalvo={() => { setCarregando(true); carregarDados(); }} />
+            <div className="mt-4 flex items-center gap-4">
+              {onLogout && <button onClick={onLogout} className="text-xs text-slate-400 underline cursor-pointer min-h-[44px]">Sair</button>}
+              {!guia.aberto && <button type="button" onClick={guia.abrir} className="text-xs text-cyan-300 underline cursor-pointer min-h-[44px]">Guia passo a passo</button>}
+            </div>
+          </div>
         </div>
+        <GuiaPrimeiroAcesso guia={guia} />
       </div>
     );
   }
@@ -662,7 +670,11 @@ export const ParentApp: React.FC<ParentAppProps> = ({
             </div>
           </div>
         </div>
+        {!guia.aberto && (
+          <button type="button" onClick={guia.abrir} className="block mx-auto text-xs text-cyan-300 underline min-h-[44px] cursor-pointer">Guia passo a passo</button>
+        )}
       </main>
+      <GuiaPrimeiroAcesso guia={guia} />
 
       {/* MODAL: AVISAR AUSÊNCIA (REQUISITO EXPLÍCITO) */}
       {adicionando && (
