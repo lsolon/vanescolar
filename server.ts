@@ -140,6 +140,8 @@ interface UserRecord {
   veiculoPlaca?: string;
   /** Motorista: local de cada escola atendida (chave = nome normalizado) */
   escolasLocal?: Record<string, { latitude: number; longitude: number }>;
+  /** Motorista: horários de entrada e saída por escola e turno (definidos uma vez; o aluno novo herda) */
+  horariosEscola?: Record<string, { nome: string; turnos: Partial<Record<'MANHA' | 'TARDE', { entrada: string; saida: string }>> }>;
   /** rota por ruas: por sentido, o fator ruas/linha reta medido (usado na previsão ao vivo) */
   rotaAuto?: Partial<Record<'IDA' | 'VOLTA', { fatorRuas: number; criadaEm: string }>>;
   capacidade?: number;
@@ -640,6 +642,25 @@ function localDaEscola(driverId: number, nome: unknown): { latitude: number; lon
   const rec = usersDB.find((u) => u.id === driverId);
   return rec?.escolasLocal?.[chaveEscola(nome)] ?? null;
 }
+type Turno = 'MANHA' | 'TARDE';
+const lerTurno = (v: unknown): Turno | null => {
+  const t = String(v ?? '').trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return t === 'MANHA' || t === 'TARDE' ? t : null;
+};
+function horarioDaEscolaTurno(driverId: number, escola: unknown, turno: Turno | null | undefined): { entrada: string; saida: string } | null {
+  if (!turno) return null;
+  const rec = usersDB.find((u) => u.id === driverId);
+  return rec?.horariosEscola?.[chaveEscola(escola)]?.turnos?.[turno] ?? null;
+}
+/** Aluno herda entrada e saída definidas pelo motorista para a escola e o turno dele. Devolve true se herdou. */
+function herdarHorarioDaEscola(p: any): boolean {
+  const h = horarioDaEscolaTurno(donoDaParada(p), p.escola_destino, p.turno);
+  if (!h) return false;
+  p.escola_entrada = h.entrada;
+  p.escola_saida = h.saida;
+  p.horario_da_escola = true;
+  return true;
+}
 const temLocalP = (p: any) => typeof p?.latitude === 'number' && typeof p?.longitude === 'number';
 
 /** Distância (km) do caminho: partida → pontos na ordem → destino opcional. */
@@ -903,7 +924,7 @@ function lerLocal(lat: unknown, lng: unknown): { latitude: number; longitude: nu
  */
 const CAMPOS_PARADA_RESPONSAVEL = [
   'id', 'id_aluno', 'nome_aluno', 'nome_sanitizado', 'status_embarque', 'vinculo',
-  'escola_destino', 'escola_entrada', 'escola_saida',
+  'escola_destino', 'escola_entrada', 'escola_saida', 'turno', 'horario_da_escola',
   'hora_ida', 'hora_volta', 'hora_prevista', 'hora_ida_manual', 'hora_volta_manual',
   'hora_embarque', 'hora_desembarque', 'motivo_ausencia', 'ausencia_trecho'
 ];
@@ -1798,9 +1819,11 @@ async function startServer() {
     if (nomeAluno.length < 2 || escola.length < 2 || endereco.length < 3) {
       return res.status(400).json({ error: 'Informe nome do filho, escola e endereço de embarque.' });
     }
+    const turno = lerTurno(b.turno);
+    // Entrada e saída são opcionais: se o motorista já definiu a escola e o turno, o aluno herda; senão o motorista completa depois.
     const entrada = lerHorario(b.escolaEntrada), saida = lerHorario(b.escolaSaida);
-    if (!entrada || !saida) return res.status(400).json({ error: 'Informe entrada e saída da escola no formato HH:MM.' });
-    if (paraMin(saida) <= paraMin(entrada)) return res.status(400).json({ error: 'A saída precisa ser depois da entrada.' });
+    if ((entrada || saida) && (!entrada || !saida)) return res.status(400).json({ error: 'Informe entrada e saída da escola no formato HH:MM.' });
+    if (entrada && saida && paraMin(saida) <= paraMin(entrada)) return res.status(400).json({ error: 'A saída precisa ser depois da entrada.' });
     // PRIVACIDADE: o responsável não informa coordenadas; o motorista marca o ponto de embarque.
     const motorista = resolverMotorista(rec, b.codigoMotorista, b.motoristaId);
     if (typeof motorista === 'string') return res.status(typeof b.codigoMotorista === 'string' && b.codigoMotorista.trim() ? 404 : 400).json({ error: motorista });
@@ -1814,8 +1837,8 @@ async function startServer() {
       ordem_sequencia: 0,
       vinculo: 'PENDENTE',
       status_embarque: 'PENDENTE',
-      escola_entrada: entrada,
-      escola_saida: saida,
+      ...(entrada && saida ? { escola_entrada: entrada, escola_saida: saida } : {}),
+      ...(turno ? { turno } : {}),
       latitude: null,
       longitude: null,
       nome_aluno: nomeAluno,
@@ -1828,6 +1851,7 @@ async function startServer() {
       escola_destino: escola,
       vinculado_usuario_id: rec.id
     };
+    herdarHorarioDaEscola(nova); // o horário definido pelo motorista para a escola e o turno vale mais que o digitado
     serverState.paradas.push(nova);
     if (rec.studentId === undefined) rec.studentId = nova.id_aluno;
     auditLog('FILHO_CADASTRADO', rec.email, `Filho ${nova.id_aluno} solicitado ao motorista ${motorista}`);
@@ -1900,7 +1924,13 @@ async function startServer() {
       const k = chaveEscola(p.escola_destino);
       if (!nomes.has(k)) nomes.set(k, String(p.escola_destino));
     }
-    return [...nomes.entries()].map(([k, nome]) => ({ nome, local: usersDB.find((u) => u.id === driverId)?.escolasLocal?.[k] ?? null }));
+    const rec = usersDB.find((u) => u.id === driverId);
+    for (const [k, v] of Object.entries(rec?.horariosEscola || {})) if (!nomes.has(k)) nomes.set(k, v.nome);
+    return [...nomes.entries()].map(([k, nome]) => ({
+      nome,
+      local: rec?.escolasLocal?.[k] ?? null,
+      horarios: rec?.horariosEscola?.[k]?.turnos ?? {}
+    }));
   };
 
   app.get('/api/motorista/escolas', authenticate, requireDriver, (req: Request, res: Response) => {
@@ -1929,6 +1959,59 @@ async function startServer() {
     res.json({ sucesso: true });
   });
 
+
+  // Horários de entrada e saída por escola e turno, definidos uma vez pelo motorista; os alunos daquela escola e turno herdam.
+  app.put('/api/motorista/escolas/horarios', authenticate, requireDriver, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const rec = usersDB.find((u) => u.id === user.userId) ?? usersDB.find((u) => u.id === driverId);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const nome = String(req.body?.nome ?? '').trim().slice(0, 120);
+    if (nome.length < 2) return res.status(400).json({ error: 'Informe o nome da escola.' });
+    const turno = lerTurno(req.body?.turno);
+    if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã ou tarde.' });
+    const k = chaveEscola(nome);
+    const atual = rec.horariosEscola?.[k] ?? { nome, turnos: {} };
+    if (req.body?.remover === true) {
+      delete atual.turnos[turno];
+      const novo = { ...(rec.horariosEscola || {}) };
+      if (Object.keys(atual.turnos).length) novo[k] = atual; else delete novo[k];
+      rec.horariosEscola = novo;
+      for (const p of serverState.paradas as any[]) {
+        if (donoDaParada(p) === driverId && chaveEscola(p.escola_destino) === k && p.turno === turno) delete p.horario_da_escola; // volta a poder ser informado pelo responsável
+      }
+      broadcast('HORARIOS_ATUALIZADOS', {}, driverId);
+      return res.json({ sucesso: true, alunosAtualizados: 0 });
+    }
+    const entrada = lerHorario(req.body?.entrada), saida = lerHorario(req.body?.saida);
+    if (!entrada || !saida) return res.status(400).json({ error: 'Informe entrada e saída no formato HH:MM.' });
+    if (paraMin(saida) <= paraMin(entrada)) return res.status(400).json({ error: 'A saída precisa ser depois da entrada.' });
+    atual.nome = atual.nome || nome;
+    atual.turnos[turno] = { entrada, saida };
+    rec.horariosEscola = { ...(rec.horariosEscola || {}), [k]: atual };
+    let n = 0;
+    for (const p of serverState.paradas as any[]) {
+      if (donoDaParada(p) !== driverId || p.vinculo === 'RECUSADO' || chaveEscola(p.escola_destino) !== k || p.turno !== turno) continue;
+      if (herdarHorarioDaEscola(p)) n++;
+    }
+    auditLog('HORARIOS_ESCOLA_DEFINIDOS', rec.email, `Horários de escola/turno definidos; ${n} aluno(s) atualizado(s)`);
+    broadcast('HORARIOS_ATUALIZADOS', {}, driverId);
+    res.json({ sucesso: true, alunosAtualizados: n });
+  });
+
+  // O motorista define o turno de um aluno seu; se a escola/turno já tem horário, o aluno herda.
+  app.put('/api/paradas/:id/turno', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const parada: any = serverState.paradas.find((p: any) => p.id === parseInt(req.params.id, 10));
+    if (!parada || donoDaParada(parada) !== user.userId) return res.status(404).json({ error: 'Parada não encontrada' });
+    const turno = lerTurno(req.body?.turno);
+    if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã ou tarde.' });
+    parada.turno = turno;
+    const herdou = herdarHorarioDaEscola(parada);
+    if (!herdou) delete parada.horario_da_escola;
+    broadcast('HORARIOS_ATUALIZADOS', { paradaId: parada.id }, donoDaParada(parada));
+    res.json({ sucesso: true, turno, herdouHorario: herdou, ...horariosDaParada(parada) });
+  });
 
   // ---- Mensalidades: controle de cobrança por família (baixa manual, sem integração bancária) ----
   const alunosCobrancaDe = (driverId: number) =>
@@ -2483,6 +2566,9 @@ async function startServer() {
     if (!parada || (user.role === 'motorista' && donoDaParada(parada) !== user.userId)) {
       return res.status(404).json({ error: 'Aluno não encontrado.' });
     }
+    if (user.role === 'responsavel' && parada.horario_da_escola) {
+      return res.status(403).json({ error: 'Os horários desta escola são definidos pelo motorista. Peça a ele para ajustar.' });
+    }
     const entrada = lerHorario(req.body?.entrada);
     const saida = lerHorario(req.body?.saida);
     if (!entrada || !saida) return res.status(400).json({ error: 'Informe entrada e saída no formato HH:MM.' });
@@ -2771,6 +2857,7 @@ async function startServer() {
       status_embarque: 'PENDENTE' as const,
       ...(lerHorario(req.body.escolaEntrada) ? { escola_entrada: lerHorario(req.body.escolaEntrada)! } : {}),
       ...(lerHorario(req.body.escolaSaida) ? { escola_saida: lerHorario(req.body.escolaSaida)! } : {}),
+      ...(lerTurno(req.body.turno) ? { turno: lerTurno(req.body.turno)! } : {}),
       // Sem localização marcada o aluno fica sem coordenadas (nunca um ponto inventado).
       latitude: local ? local.latitude : null,
       longitude: local ? local.longitude : null,
@@ -2786,6 +2873,7 @@ async function startServer() {
       vinculado_usuario_id: null
     };
 
+    herdarHorarioDaEscola(novaParada); // se a escola e o turno já têm horário, o aluno herda
     serverState.paradas.push(novaParada as any);
     broadcast('NOVA_PARADA_CADASTRADA', { novaParada }, user.userId);
     res.json({ sucesso: true, novaParada, codigoVinculo });

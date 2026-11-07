@@ -63,7 +63,7 @@ import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 import { MeuIdAcesso } from '../shared/MeuIdAcesso';
 import { CampoHora } from '../shared/CampoHora';
 import { CodigoMotorista, SolicitacoesPendentes } from './CodigoESolicitacoes';
-import { EscolasDoMotorista, RotasIdaVolta } from './RotaEEscolas';
+import { EscolasDoMotorista, HorariosPorEscola, RotasIdaVolta } from './RotaEEscolas';
 
 interface DriverPanelProps {
   coordenadas: GPSCoordinate;
@@ -855,7 +855,18 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                   <div className="text-slate-300 leading-relaxed">
                     <div>Ida <strong className="font-mono text-slate-100">{item.hora_ida || '--:--'}</strong> · Volta <strong className="font-mono text-slate-100">{item.hora_volta || '--:--'}</strong></div>
                     <div className="text-slate-500">
-                      {item.escola_entrada && item.escola_saida ? `Escola: entra ${item.escola_entrada}, sai ${item.escola_saida}` : 'Responsável ainda não informou o horário da escola'}
+                      {item.escola_entrada && item.escola_saida
+                        ? `Escola: entra ${item.escola_entrada}, sai ${item.escola_saida}${item.horario_da_escola ? ' (definido por você)' : ''}`
+                        : item.turno ? 'Defina os horários dessa escola e turno em Ajustes' : 'Escolha o turno do aluno'}
+                    </div>
+                    <div className="flex items-center gap-1 mt-1" role="group" aria-label={`Turno de ${item.nome_aluno_sanitizado}`}>
+                      {(['MANHA', 'TARDE'] as const).map((t) => (
+                        <button key={t} type="button" aria-pressed={item.turno === t}
+                          onClick={async () => { try { await TransportRepository.definirTurnoDoAluno(item.parada_id, t); await carregarDadosZeroCache(); } catch (e) { console.error(e); } }}
+                          className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold min-h-[36px] cursor-pointer border ${item.turno === t ? 'bg-amber-400/20 border-amber-400 text-amber-200' : 'bg-slate-900 border-slate-700 text-slate-300'}`}>
+                          {t === 'MANHA' ? 'Manhã' : 'Tarde'}
+                        </button>
+                      ))}
                     </div>
                   </div>
                   <button
@@ -995,6 +1006,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           <>
         <InstalarApp />
         <CodigoMotorista nome={motorista?.nome} />
+        <HorariosPorEscola versao={paradas.length} onMudou={carregarDadosZeroCache} />
         <EscolasDoMotorista versao={paradas.length} />
         <RotasIdaVolta sentidoAtivo={sentidoRota} versao={paradas.length} onAplicado={carregarDadosZeroCache} />
         <MeuIdAcesso />

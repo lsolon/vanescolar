@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { TransportRepository } from '../../services/api';
 import type { SugestaoRota, EscolaMotorista, PropostaCronograma } from '../../services/api';
 import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
+import { CampoHora } from '../shared/CampoHora';
+import type { Turno } from '../../services/api';
 
 /** O motorista define onde fica cada escola: é o destino da barra de deslocamento do aluno a bordo. */
 export const EscolasDoMotorista: React.FC<{ versao?: number }> = ({ versao }) => {
@@ -74,6 +76,93 @@ export const EscolasDoMotorista: React.FC<{ versao?: number }> = ({ versao }) =>
           </li>
         ))}
       </ul>
+    </section>
+  );
+};
+
+const NOME_TURNO: Record<Turno, string> = { MANHA: 'Manhã', TARDE: 'Tarde' };
+
+/** O motorista define uma vez a entrada e a saída de cada escola por turno; os alunos daquela escola e turno herdam. */
+export const HorariosPorEscola: React.FC<{ versao?: number; onMudou?: () => void }> = ({ versao, onMudou }) => {
+  const [escolas, setEscolas] = useState<EscolaMotorista[]>([]);
+  const [nova, setNova] = useState('');
+  const [editando, setEditando] = useState<{ nome: string; turno: Turno } | null>(null);
+  const [entrada, setEntrada] = useState('');
+  const [saida, setSaida] = useState('');
+  const [erro, setErro] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+  const [salvando, setSalvando] = useState(false);
+
+  const carregar = () => TransportRepository.obterEscolas().then(setEscolas).catch(() => {});
+  useEffect(() => { carregar(); }, [versao]);
+
+  const lista = [...escolas];
+  const novoNome = nova.trim();
+  if (novoNome.length >= 2 && !lista.some((e) => e.nome.trim().toLowerCase() === novoNome.toLowerCase())) lista.push({ nome: novoNome, local: null, horarios: {} });
+
+  const abrir = (nome: string, turno: Turno, h?: { entrada: string; saida: string }) => {
+    setEditando({ nome, turno }); setEntrada(h?.entrada || ''); setSaida(h?.saida || ''); setErro(null); setOk(null);
+  };
+  const salvar = async () => {
+    if (!editando) return;
+    setSalvando(true); setErro(null); setOk(null);
+    try {
+      const n = await TransportRepository.definirHorariosEscola(editando.nome, editando.turno, entrada, saida);
+      setOk(n > 0 ? `Horários salvos. ${n} aluno(s) atualizado(s).` : 'Horários salvos. Os próximos alunos dessa escola e turno já entram com eles.');
+      setEditando(null); setNova(''); await carregar(); onMudou?.();
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao salvar.'); }
+    finally { setSalvando(false); }
+  };
+  const remover = async (nome: string, turno: Turno) => {
+    setErro(null); setOk(null);
+    try { await TransportRepository.removerHorariosEscola(nome, turno); await carregar(); onMudou?.(); }
+    catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao remover.'); }
+  };
+
+  return (
+    <section aria-label="Horários por escola e turno" className="bg-slate-900 border border-amber-400/30 rounded-2xl p-4 space-y-3">
+      <h3 className="text-xs font-bold text-amber-300">Horários da escola, por turno</h3>
+      <p className="text-[11px] text-slate-400">Defina uma vez a entrada e a saída de cada escola em cada turno. Todo aluno dessa escola e turno usa esses horários, e a família não precisa digitar.</p>
+      <div className="flex gap-2">
+        <input value={nova} onChange={(e) => setNova(e.target.value)} maxLength={120} placeholder="Adicionar escola (nome)" aria-label="Nome da nova escola"
+          className="flex-1 min-w-0 px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400 min-h-[44px]" />
+      </div>
+      {lista.length === 0 && <p className="text-[11px] text-slate-500">Nenhuma escola ainda. Digite o nome acima ou cadastre um aluno.</p>}
+      <ul className="space-y-2">
+        {lista.map((e) => (
+          <li key={e.nome} className="rounded-xl bg-slate-950 border border-slate-800 p-3 space-y-2">
+            <div className="text-xs font-semibold text-slate-100">{e.nome}</div>
+            {(['MANHA', 'TARDE'] as Turno[]).map((t) => {
+              const h = e.horarios?.[t];
+              const aberto = editando?.nome === e.nome && editando.turno === t;
+              return (
+                <div key={t} className="space-y-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-[11px] text-slate-300 w-14">{NOME_TURNO[t]}</span>
+                    <span className={`text-[11px] font-mono flex-1 ${h ? 'text-slate-100' : 'text-slate-500'}`}>{h ? `entra ${h.entrada} · sai ${h.saida}` : 'Não definido'}</span>
+                    {!aberto && <button type="button" onClick={() => abrir(e.nome, t, h)} className="px-3 py-2 rounded-xl bg-amber-400/10 border border-amber-400/40 text-amber-200 text-xs font-bold min-h-[44px] cursor-pointer">{h ? 'Alterar' : 'Definir'}</button>}
+                    {!aberto && h && <button type="button" onClick={() => remover(e.nome, t)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Remover</button>}
+                  </div>
+                  {aberto && (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="text-[11px] text-slate-300 space-y-1"><span>Entrada na escola</span><CampoHora label={`Entrada ${NOME_TURNO[t]}`} value={entrada} onChange={setEntrada} horaPadrao={t === 'MANHA' ? '07' : '13'} /></div>
+                        <div className="text-[11px] text-slate-300 space-y-1"><span>Saída da escola</span><CampoHora label={`Saída ${NOME_TURNO[t]}`} value={saida} onChange={setSaida} horaPadrao={t === 'MANHA' ? '12' : '17'} /></div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button type="button" disabled={!entrada || !saida || salvando} onClick={salvar} className="px-3 py-2 rounded-xl bg-amber-400 text-slate-950 text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50">{salvando ? 'Salvando…' : 'Salvar horários'}</button>
+                        <button type="button" onClick={() => setEditando(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Cancelar</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </li>
+        ))}
+      </ul>
+      {erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
+      {ok && <p role="status" className="text-[11px] text-emerald-300">{ok}</p>}
     </section>
   );
 };
