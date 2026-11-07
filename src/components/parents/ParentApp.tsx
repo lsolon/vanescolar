@@ -25,7 +25,7 @@ import {
   GPSCoordinate
 } from '../../types/database';
 import { TransportRepository, subscribeToDatabaseChanges } from '../../services/api';
-import type { ProximidadeVan, PrefsProximidade, FilhoResumo } from '../../services/api';
+import type { ProximidadeVan, PrefsProximidade, FilhoResumo, ProximidadeFilho } from '../../services/api';
 import { isDemoMode } from '../../services/demo';
 import { ProximidadeBar } from '../shared/ProximidadeBar';
 import { RealMap } from '../shared/RealMap';
@@ -87,16 +87,21 @@ export const ParentApp: React.FC<ParentAppProps> = ({
   const [prefs, setPrefs] = useState<PrefsProximidade>({ estilo: 'C', avisoMin: 10 });
   const [avisoProximidade, setAvisoProximidade] = useState<string | null>(null);
   const avisoJaDisparado = React.useRef(false);
+  // Proximidade dos demais filhos (o filho em foco usa `prox`); o aviso dispara uma vez por filho e por rota.
+  const [proxFilhos, setProxFilhos] = useState<ProximidadeFilho[]>([]);
+  const avisosFilhos = React.useRef<Set<number>>(new Set());
 
   useEffect(() => {
     if (!modoReal) return;
     TransportRepository.getProximidade().then((r) => {
-      if (r) { setProx(r.proximidade); setPrefs(r.prefs); }
+      if (r) { setProx(r.proximidade); setPrefs(r.prefs); setProxFilhos(r.proximidades ?? []); }
     }).catch(() => {});
     const unsub = subscribeToDatabaseChanges((event, payload: any) => {
       if (event === 'PROXIMIDADE_ATUALIZADA' || event === 'INIT_STATE') {
         const novo = payload?.proximidade ?? payload?.estado?.proximidade;
         if (novo !== undefined) setProx(novo);
+        const todos = payload?.estado?.proximidades ?? payload?.proximidades;
+        if (Array.isArray(todos)) setProxFilhos(todos);
         const pf = payload?.estado?.prefs ?? payload?.prefs;
         if (pf) setPrefs(pf);
       }
@@ -120,6 +125,24 @@ export const ParentApp: React.FC<ParentAppProps> = ({
   const [erroCarga, setErroCarga] = useState<boolean>(false);
   const [filhosInfo, setFilhosInfo] = useState<{ filhos: FilhoResumo[]; filhoAtivo: number | null; motoristas: { id: number; nome: string }[] }>({ filhos: [], filhoAtivo: null, motoristas: [] });
   const [adicionando, setAdicionando] = useState(false);
+
+  // Aviso dos outros filhos: quem não está em foco também avisa quando a van chega ao tempo escolhido.
+  useEffect(() => {
+    if (!modoReal) return;
+    for (const f of proxFilhos) {
+      const pr = f.proximidade;
+      if (!pr || f.id_aluno === filhosInfo.filhoAtivo) continue;
+      if (['aguardando', 'encerrada', 'embarcou', 'entregue', 'ausente'].includes(pr.estado)) { avisosFilhos.current.delete(f.id_aluno); continue; }
+      if (pr.avisoAtivo && !avisosFilhos.current.has(f.id_aluno) && ['a_caminho', 'proxima'].includes(pr.estado)) {
+        avisosFilhos.current.add(f.id_aluno);
+        const nome = filhosInfo.filhos.find((x) => x.id_aluno === f.id_aluno)?.nome_aluno.split(' ')[0] ?? 'Seu filho';
+        const msg = `${nome}: a van chega em ~${pr.minutos} min. Prepare o aluno!`;
+        setAvisoProximidade(msg);
+        try { navigator.vibrate?.([200, 100, 200]); } catch {}
+        try { if ('Notification' in window && Notification.permission === 'granted') new Notification('VanEscolar', { body: msg }); } catch {}
+      }
+    }
+  }, [modoReal, proxFilhos, filhosInfo]);
 
   // No modo demonstração (?demo=true) usa o aluno de exemplo; em uso real, o aluno vinculado ao responsável.
   const isDemo = (typeof window !== 'undefined' && window.location.search.includes('demo=true'))
