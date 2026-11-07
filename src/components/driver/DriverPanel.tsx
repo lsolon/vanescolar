@@ -63,6 +63,7 @@ import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 import { MeuIdAcesso } from '../shared/MeuIdAcesso';
 import { CampoHora } from '../shared/CampoHora';
 import { CodigoMotorista, SolicitacoesPendentes } from './CodigoESolicitacoes';
+import { QuandoSair } from './QuandoSair';
 import { NovoAlunoMotorista, ConviteFamilia, ConvidarFamilias, ImportarAlunos } from './NovoAluno';
 import { EscolasDoMotorista, HorariosPorEscola, RotasIdaVolta } from './RotaEEscolas';
 
@@ -660,6 +661,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
         {aba === 'diario' && (
           <>
+        <QuandoSair sentido={sentidoRota} />
         <ConvidarFamilias nomeMotorista={motorista?.nome} />
         <NovoAlunoMotorista onCriado={carregarDadosZeroCache} />
         <ImportarAlunos onCriados={carregarDadosZeroCache} />
