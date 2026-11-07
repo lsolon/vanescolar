@@ -814,7 +814,8 @@ function computeProximityBase(driverId: number, studentId: number | undefined, a
     const chegadaMin = agoraMinutosSP() + minutos;
     chegadaPrevista = deMin(chegadaMin);
     if (prevista) {
-      diferencaMin = chegadaMin - paraMin(prevista);
+      // Diferença circular (-12h..+12h): perto da meia-noite, 23:50 vs 00:10 são 20 min de diferença, não 23h40.
+      diferencaMin = ((chegadaMin - paraMin(prevista) + 720) % 1440 + 1440) % 1440 - 720;
       semaforo = diferencaMin > TOLERANCIA_SEMAFORO_MIN ? 'vermelho' : diferencaMin < -TOLERANCIA_SEMAFORO_MIN ? 'amarelo' : 'verde';
     }
   }
