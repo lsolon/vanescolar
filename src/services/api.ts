@@ -422,6 +422,7 @@ export interface PropostaCronograma {
   avisos: string[];
 }
 export type Turno = 'MANHA' | 'TARDE';
+export interface EstadoPreCadastro { link: { url: string; expiraEm: string; envios: number; maxEnvios: number } | null; regras: string }
 export interface EscolaMotorista { nome: string; local: { latitude: number; longitude: number } | null; horarios?: Partial<Record<Turno, { entrada: string; saida: string }>> }
 export interface FilhoResumo { id_aluno: number; nome_aluno: string; escola_destino: string; vinculo: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO'; motorista: string | null }
 export interface PrefsProximidade { estilo: 'A' | 'B' | 'C'; avisoMin: number }
@@ -1600,6 +1601,40 @@ export const TransportRepository = {
   async definirLocalEscola(nome: string, latitude: number, longitude: number): Promise<void> {
     const res = await fetch(`${getBaseUrl()}/api/motorista/escolas`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ nome, latitude, longitude }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Não foi possível salvar o local da escola.');
+  },
+
+  // ---- Pré-cadastro: link enviado às famílias ----
+  async obterPreCadastro(): Promise<EstadoPreCadastro> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/pre-cadastro`, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error('Não foi possível carregar o link de cadastro.');
+    return res.json();
+  },
+  async gerarLinkPreCadastro(): Promise<EstadoPreCadastro> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/pre-cadastro/link`, { method: 'POST', headers: getAuthHeaders() });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Não foi possível gerar o link.');
+    return res.json();
+  },
+  async desativarLinkPreCadastro(): Promise<EstadoPreCadastro> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/pre-cadastro/link`, { method: 'DELETE', headers: getAuthHeaders() });
+    if (!res.ok) throw new Error('Não foi possível desativar o link.');
+    return res.json();
+  },
+  async salvarRegrasServico(texto: string): Promise<EstadoPreCadastro> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/pre-cadastro/regras`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ texto }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Não foi possível salvar as regras.');
+    return res.json();
+  },
+  /** Página pública da família (sem login). */
+  async abrirPreCadastro(token: string): Promise<{ motorista: string; regras: string | null }> {
+    const res = await fetch(`${getBaseUrl()}/api/pre-cadastro/${encodeURIComponent(token)}`);
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Este link não está mais disponível.');
+    return d;
+  },
+  async enviarPreCadastro(token: string, dados: Record<string, unknown>): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/pre-cadastro/${encodeURIComponent(token)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(dados) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível enviar. Tente de novo.');
   },
 
   /** Motorista cadastra o aluno de uma vez; devolve o código e a mensagem pronta de WhatsApp para a família. */

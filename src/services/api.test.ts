@@ -1633,3 +1633,81 @@ test('Vincular: a resposta ao responsável não traz coordenadas, endereço, tel
   assert.equal(v.data.parada.nome_aluno, 'Zeca Lima');
   assert.ok(!JSON.stringify(v.data.parada).match(/latitude|longitude|endereco_real|Secreta|telefone|21977776666|codigo_vinculo/i), 'sem dados sensíveis na resposta');
 });
+
+test('Pré-cadastro: link do motorista, família preenche sem login com aceite, motorista aprova e envia o convite', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'PreCad');
+  const outro = await novoMotorista(adm, 'PreCadOutro');
+  const dados = { nomeAluno: 'Bia Costa', escola: 'Escola Pre', turno: 'tarde', nomeResponsavel: 'Marta Costa', telefoneResponsavel: '(21) 99888-7766', endereco: 'Rua Nova, 5', pontoReferencia: 'Padaria', aceiteLgpd: true };
+
+  // sem login não gera link; o público não consegue nada com token inventado
+  assert.equal((await jsonReq('POST', '/api/motorista/pre-cadastro/link', undefined)).status, 401);
+  assert.equal((await jsonReq('GET', '/api/pre-cadastro/token-que-nao-existe-123456')).status, 404);
+  assert.equal((await jsonReq('POST', '/api/pre-cadastro/token-que-nao-existe-123456', undefined, dados)).status, 404);
+  assert.equal((await jsonReq('GET', '/api/pre-cadastro/curto')).status, 404);
+
+  // o motorista gera o link e escreve as regras
+  assert.equal((await jsonReq('GET', '/api/motorista/pre-cadastro', mot)).data.link, null);
+  const gerado = await jsonReq('POST', '/api/motorista/pre-cadastro/link', mot);
+  assert.equal(gerado.status, 200);
+  const token = gerado.data.link.url.split('?pre=')[1];
+  assert.match(token, /^[A-Za-z0-9_-]{20,40}$/);
+  await jsonReq('PUT', '/api/motorista/pre-cadastro/regras', mot, { texto: 'Esperar no portão 5 minutos antes.' });
+
+  // a página pública mostra só o primeiro nome do motorista e as regras, sem dados de ninguém
+  const pub = await jsonReq('GET', `/api/pre-cadastro/${token}`);
+  assert.equal(pub.status, 200);
+  assert.equal(pub.data.regras, 'Esperar no portão 5 minutos antes.');
+  assert.deepEqual(Object.keys(pub.data).sort(), ['motorista', 'regras']);
+
+  // validações do formulário público
+  const url = `/api/pre-cadastro/${token}`;
+  for (const [campo, valor] of [['nomeAluno', ''], ['escola', ''], ['turno', 'noite'], ['nomeResponsavel', ''], ['telefoneResponsavel', '12'], ['endereco', ''], ['aceiteLgpd', false]] as const) {
+    assert.equal((await jsonReq('POST', url, undefined, { ...dados, aceiteRegras: true, [campo]: valor })).status, 400, `${campo}=${JSON.stringify(valor)}`);
+  }
+  assert.equal((await jsonReq('POST', url, undefined, dados)).status, 400, 'com regras, o aceite das regras é obrigatório');
+  // isca anti-robô: parece sucesso, mas não cria nada
+  assert.equal((await jsonReq('POST', url, undefined, { ...dados, aceiteRegras: true, nomeAluno: 'Robô', website: 'http://spam' })).status, 200);
+
+  // envio válido: cai como pendente, com aceite registrado; o link conta o envio
+  const env = await jsonReq('POST', url, undefined, { ...dados, aceiteRegras: true });
+  assert.equal(env.status, 200, JSON.stringify(env.data));
+  assert.deepEqual(env.data, { sucesso: true }, 'a resposta pública não devolve dados');
+  assert.equal((await jsonReq('GET', '/api/motorista/pre-cadastro', mot)).data.link.envios, 1);
+  const lista: any[] = (await jsonReq('GET', '/api/estado', mot)).data.paradas;
+  assert.ok(!lista.some((p) => p.nome_aluno === 'Robô' || p.nome_completo_para_chamada === 'Robô'), 'a isca não criou aluno');
+  const pend = lista.find((p) => (p.nome_completo_para_chamada ?? p.nome_aluno) === 'Bia Costa');
+  assert.ok(pend, 'pedido aparece para o motorista');
+  assert.equal(pend.vinculo, 'PENDENTE');
+  assert.equal(pend.turno, 'TARDE');
+  // reenviar o mesmo aluno não duplica nem revela
+  assert.equal((await jsonReq('POST', url, undefined, { ...dados, aceiteRegras: true })).status, 200);
+  const lista2: any[] = (await jsonReq('GET', '/api/estado', mot)).data.paradas;
+  assert.equal(lista2.filter((p) => (p.nome_completo_para_chamada ?? p.nome_aluno) === 'Bia Costa').length, 1);
+  // outro motorista não vê o pedido
+  const dOutro: any[] = (await jsonReq('GET', '/api/estado', outro)).data.paradas;
+  assert.ok(!dOutro.some((p) => (p.nome_completo_para_chamada ?? p.nome_aluno) === 'Bia Costa'));
+
+  // aprovar → o convite (código + WhatsApp) fica disponível e a família se vincula
+  const id = pend.parada_id ?? pend.id;
+  assert.equal((await jsonReq('POST', `/api/paradas/${id}/confirmar`, mot, { posicao: 1 })).status, 200);
+  const conv = await jsonReq('GET', `/api/paradas/${id}/convite`, mot);
+  assert.equal(conv.data.disponivel, true);
+  assert.equal(conv.data.whatsapp, '5521998887766');
+  const resp = await novoResponsavel(conv.data.codigoVinculo);
+  assert.ok(resp);
+
+  // desativar o link barra novos envios; gerar outro invalida o anterior
+  const novo = await jsonReq('POST', '/api/motorista/pre-cadastro/link', mot);
+  assert.equal((await jsonReq('GET', `/api/pre-cadastro/${token}`)).status, 404, 'link antigo deixa de valer');
+  const token2 = novo.data.link.url.split('?pre=')[1];
+  assert.equal((await jsonReq('GET', `/api/pre-cadastro/${token2}`)).status, 200);
+  assert.equal((await jsonReq('DELETE', '/api/motorista/pre-cadastro/link', mot)).data.link, null);
+  assert.equal((await jsonReq('POST', `/api/pre-cadastro/${token2}`, undefined, { ...dados, nomeAluno: 'Outro Aluno', aceiteRegras: true })).status, 404, 'link desativado');
+
+  // sem regras escritas, o aceite das regras não é exigido
+  await jsonReq('PUT', '/api/motorista/pre-cadastro/regras', mot, { texto: '' });
+  const t3 = (await jsonReq('POST', '/api/motorista/pre-cadastro/link', mot)).data.link.url.split('?pre=')[1];
+  assert.equal((await jsonReq('GET', `/api/pre-cadastro/${t3}`)).data.regras, null);
+  assert.equal((await jsonReq('POST', `/api/pre-cadastro/${t3}`, undefined, { ...dados, nomeAluno: 'Sem Regras' })).status, 200);
+});
