@@ -1005,6 +1005,14 @@ export const TransportRepository = {
     return data;
   },
 
+  /** Modo de teste: alunos fictícios (motorista) ou um código de exemplo para vincular (responsável). */
+  async carregarExemplosTeste(): Promise<{ criados?: number; motivo?: string; codigo?: string; nomeAluno?: string }> {
+    const res = await fetch(`${getBaseUrl()}/api/teste/exemplos`, { method: 'POST', headers: getAuthHeaders(), body: '{}' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Não foi possível carregar os exemplos.');
+    return data;
+  },
+
   async loginGoogle() {
     await sleep();
     try {

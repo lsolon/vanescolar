@@ -1311,20 +1311,16 @@ async function startServer() {
   // MODO DE TESTE (temporário): entrar como motorista/responsável sem login.
   // Só existe com MODO_TESTE_SEM_LOGIN=true no ambiente. Desligado por padrão.
   // ==========================================================================
-  app.post('/api/teste/entrar', rateLimiter(30, 60000), (req: Request, res: Response) => {
-    if (!MODO_TESTE_SEM_LOGIN) return res.status(404).json({ error: 'Não encontrado.' });
-    const papel = req.body?.papel === 'motorista' ? 'motorista' : req.body?.papel === 'responsavel' ? 'responsavel' : null;
-    if (!papel) return res.status(400).json({ error: 'Informe papel: motorista ou responsavel.' });
-    const slug = String(req.body?.nome || papel).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || papel;
+  /** Usuário do modo de teste (cria na primeira vez; no máximo 50). Só é chamado com MODO_TESTE_SEM_LOGIN=true. */
+  const obterUsuarioTeste = (papel: 'motorista' | 'responsavel', nomeInformado?: unknown): UserRecord | null => {
+    const slug = String(nomeInformado || papel).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20) || papel;
     const email = `teste-${papel}-${slug}@teste.local`;
     let user = usersDB.find((u) => u.email === email);
     if (!user) {
-      if (usersDB.filter((u) => u.email.endsWith('@teste.local')).length >= 50) {
-        return res.status(429).json({ error: 'Limite de usuários de teste atingido.' });
-      }
+      if (usersDB.filter((u) => u.email.endsWith('@teste.local')).length >= 50) return null;
       user = {
         id: usersDB.reduce((m, u) => Math.max(m, u.id), 200) + 1,
-        fullName: String(req.body?.nome || (papel === 'motorista' ? 'Motorista Teste' : 'Responsável Teste')).slice(0, 60),
+        fullName: String(nomeInformado || (papel === 'motorista' ? 'Motorista Teste' : 'Responsável Teste')).slice(0, 60),
         email,
         passwordHash: '',
         role: papel,
@@ -1334,6 +1330,14 @@ async function startServer() {
       };
       usersDB.push(user);
     }
+    return user;
+  };
+  app.post('/api/teste/entrar', rateLimiter(30, 60000), (req: Request, res: Response) => {
+    if (!MODO_TESTE_SEM_LOGIN) return res.status(404).json({ error: 'Não encontrado.' });
+    const papel = req.body?.papel === 'motorista' ? 'motorista' : req.body?.papel === 'responsavel' ? 'responsavel' : null;
+    if (!papel) return res.status(400).json({ error: 'Informe papel: motorista ou responsavel.' });
+    const user = obterUsuarioTeste(papel, req.body?.nome);
+    if (!user) return res.status(429).json({ error: 'Limite de usuários de teste atingido.' });
     auditLog('LOGIN_MODO_TESTE', user.email, `Entrada sem login como ${papel}`);
     const token = signToken({ role: user.role, userId: user.id, email: user.email, studentId: user.studentId, emailVerified: true });
     res.json({ sucesso: true, token, role: user.role, emailVerified: true, studentId: user.studentId });
@@ -3083,6 +3087,45 @@ async function startServer() {
     });
     return { rows, cortadas: Math.max(0, linhas.length - IMPORT_MAX_LINHAS) };
   }
+
+  // ==========================================================================
+  // MODO DE TESTE: dados de exemplo para o guia do primeiro acesso. Responde 404 fora do modo de teste.
+  // Motorista: cria 3 alunos fictícios na van dele (só se ainda não tiver aluno nenhum).
+  // Responsável: devolve um código VAN- de um aluno fictício de um "Motorista Exemplo", para treinar o vínculo.
+  // ==========================================================================
+  app.post('/api/teste/exemplos', authenticate, rateLimiter(10, 60000), (req: Request, res: Response) => {
+    if (!MODO_TESTE_SEM_LOGIN) return res.status(404).json({ error: 'Não encontrado.' });
+    const user = (req as any).user as SessionPayload;
+    if (user.role === 'motorista') {
+      const driverId = driverIdFor(user) as number;
+      if ((serverState.paradas as any[]).some((p) => donoDaParada(p) === driverId && p.vinculo !== 'RECUSADO')) {
+        return res.json({ sucesso: true, criados: 0, motivo: 'Você já tem alunos na van; nada foi adicionado.' });
+      }
+      const exemplos = [
+        { nomeAluno: 'Ana Exemplo', nomeResp: 'Responsável da Ana (exemplo)', tel: '21900000001', endereco: 'Rua das Palmeiras, 100 - Freguesia (exemplo)', local: { latitude: -22.9348, longitude: -43.3412 } },
+        { nomeAluno: 'Bruno Exemplo', nomeResp: 'Responsável do Bruno (exemplo)', tel: '21900000002', endereco: 'Rua dos Ipês, 250 - Freguesia (exemplo)', local: { latitude: -22.9362, longitude: -43.3390 } },
+        { nomeAluno: 'Carla Exemplo', nomeResp: 'Responsável da Carla (exemplo)', tel: '21900000003', endereco: 'Av. das Acácias, 40 - Freguesia (exemplo)', local: null } // sem ponto no mapa de propósito: o guia mostra como marcar
+      ];
+      for (const e of exemplos) {
+        criarAlunoConfirmado(driverId, { ...e, escola: 'Escola Exemplo', turno: 'MANHA', pontoReferencia: 'Portão azul (exemplo)', entrada: '07:30', saida: '12:00' });
+      }
+      auditLog('EXEMPLOS_TESTE_MOTORISTA', user.email, `Alunos de exemplo criados para o motorista ${driverId}`);
+      broadcast('NOVA_PARADA_CADASTRADA', { exemplos: true }, driverId);
+      return res.json({ sucesso: true, criados: exemplos.length });
+    }
+    if (user.role === 'responsavel') {
+      const mot = obterUsuarioTeste('motorista', 'Motorista Exemplo');
+      if (!mot) return res.status(429).json({ error: 'Limite de usuários de teste atingido.' });
+      const doExemplo = (serverState.paradas as any[]).filter((p) => donoDaParada(p) === mot.id);
+      let livre = doExemplo.find((p) => !p.vinculado_usuario_id && !p.codigo_expirado && p.codigo_vinculo);
+      if (!livre) {
+        if (doExemplo.length >= 40) return res.status(429).json({ error: 'Limite de alunos de exemplo atingido.' });
+        livre = criarAlunoConfirmado(mot.id, { nomeAluno: `Filho Exemplo ${doExemplo.length + 1}`, escola: 'Escola Exemplo', turno: 'MANHA', nomeResp: 'Você (exemplo)', tel: '21900000009', endereco: 'Rua das Palmeiras, 100 - Freguesia (exemplo)', pontoReferencia: 'Portão azul (exemplo)', local: null, entrada: '07:30', saida: '12:00' }).nova;
+      }
+      return res.json({ sucesso: true, codigo: livre.codigo_vinculo, nomeAluno: livre.nome_aluno });
+    }
+    return res.status(403).json({ error: 'Apenas motorista ou responsável.' });
+  });
 
   app.post('/api/motorista/alunos/importar', authenticate, requireDriver, rateLimiter(12, 60000), (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;

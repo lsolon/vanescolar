@@ -63,7 +63,8 @@ import {
   ChevronRight,
   ArrowLeft,
   Wallet,
-  Settings
+  Settings,
+  HelpCircle
 } from 'lucide-react';
 import { LiveMap } from '../shared/LiveMap';
 import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
@@ -73,6 +74,7 @@ import { CodigoMotorista, SolicitacoesPendentes } from './CodigoESolicitacoes';
 import { QuandoSair } from './QuandoSair';
 import { NovoAlunoMotorista, ConviteFamilia, ConvidarFamilias, ImportarAlunos } from './NovoAluno';
 import { EscolasDoMotorista, HorariosPorEscola, RotasIdaVolta } from './RotaEEscolas';
+import { GuiaPrimeiroAcesso, useGuiaPrimeiroAcesso } from '../shared/GuiaPrimeiroAcesso';
 
 interface DriverPanelProps {
   coordenadas: GPSCoordinate;
@@ -121,6 +123,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
   // Modal de Cadastro de Novo Aluno pelo Motorista
   const [aba, setAba] = useState<'diario' | 'mapa' | 'mensagens' | 'mais' | 'cadastro' | 'mensalidades' | 'financeiro' | 'ajustes'>('diario');
+  const guia = useGuiaPrimeiroAcesso('motorista');
   const [verPendentes, setVerPendentes] = useState(false);
   const [abertoId, setAbertoId] = useState<number | string | null>(null);
   /** Faixa embaixo, logo após marcar um aluno: confirma e deixa desfazer por alguns segundos. */
@@ -619,6 +622,14 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                 <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
               </button>
             ))}
+            <button type="button" onClick={guia.abrir} className="w-full flex items-center gap-3 px-4 py-3 min-h-[60px] rounded-2xl bg-slate-900 border border-slate-800 text-left cursor-pointer active:scale-[0.99]">
+              <HelpCircle className="w-5 h-5 text-amber-300 shrink-0" />
+              <span className="flex-1 min-w-0">
+                <span className="block text-sm font-bold text-slate-100">Guia passo a passo</span>
+                <span className="block text-[11px] text-slate-400">Como cadastrar alunos, fazer a rota e usar o painel</span>
+              </span>
+              <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
+            </button>
           </section>
         )}
 
@@ -1118,6 +1129,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
       {/* MENU FIXO EMBAIXO: ao alcance do polegar. Cadastro, mensalidades, financeiro e ajustes ficam em "Mais". */}
       <div className="sticky bottom-0 z-30 shrink-0 bg-slate-900">
+      <GuiaPrimeiroAcesso guia={guia} onIrParaAba={setAba} onExemplos={carregarDadosZeroCache} />
       {faixa && (
         <div role="status" className="flex items-center gap-2 px-4 py-2.5 bg-emerald-950 border-t border-emerald-500/40 text-emerald-200 text-sm">
           <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />

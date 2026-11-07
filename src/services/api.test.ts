@@ -1918,3 +1918,34 @@ test('Proximidade de todos os filhos: um item por filho, sem coordenadas, e o av
   assert.equal(est.proximidades.length, 2);
   assert.ok(est.proximidade);
 });
+
+test('Guia do primeiro acesso: os exemplos só existem no modo de teste; no modo de teste criam alunos fictícios e um código que vincula sem expor dados', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'GuiaMot');
+  assert.equal((await jsonReq('POST', '/api/teste/exemplos', undefined, {})).status, 401, 'sem login');
+  const modoTeste = !!(await jsonReq('GET', '/api/health')).data.modoTeste;
+  const r = await jsonReq('POST', '/api/teste/exemplos', mot, {});
+  if (!modoTeste) {
+    assert.equal(r.status, 404, 'fora do modo de teste a rota não pode existir');
+    return;
+  }
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.criados, 3);
+  assert.equal((await jsonReq('POST', '/api/teste/exemplos', mot, {})).data.criados, 0, 'não duplica nem mexe em quem já tem alunos');
+  const est = (await jsonReq('GET', '/api/estado', mot)).data;
+  const nomes = (est.paradas as any[]).map((p) => p.nome_aluno);
+  assert.deepEqual(nomes.filter((n) => /Exemplo/.test(n)).length, 3);
+
+  // responsável: recebe um código de exemplo, usa no vínculo e o código não serve duas vezes
+  const fam = await novoResponsavelVerificado(adm);
+  const ex = await jsonReq('POST', '/api/teste/exemplos', fam, {});
+  assert.equal(ex.status, 200, JSON.stringify(ex.data));
+  assert.match(ex.data.codigo, /^VAN-[0-9A-F]{6}$/);
+  const v = await jsonReq('POST', '/api/vincular', fam, { codigoVinculo: ex.data.codigo });
+  assert.equal(v.status, 200, JSON.stringify(v.data));
+  assert.ok(!JSON.stringify(v.data.parada).match(/latitude|longitude|endereco_real|telefone|codigo_vinculo/i), 'sem dados sensíveis para o responsável');
+  const fam2 = await novoResponsavelVerificado(adm);
+  assert.equal((await jsonReq('POST', '/api/vincular', fam2, { codigoVinculo: ex.data.codigo })).status, 404, 'código já usado');
+  const ex2 = await jsonReq('POST', '/api/teste/exemplos', fam2, {});
+  assert.notEqual(ex2.data.codigo, ex.data.codigo, 'cada responsável recebe um aluno de exemplo próprio');
+});
