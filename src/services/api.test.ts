@@ -1779,3 +1779,20 @@ test('Importação em lote: confere a lista, aponta erros e repetidos, exige a a
   assert.equal(g.data.linhas.length, 60);
   assert.equal(g.data.totais.cortadas, 5);
 });
+
+test('Desfazer: o motorista volta o aluno para pendente (marcação sem querer) e o aviso de ausência some', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'Desfazer');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola D', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  const A = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno D' })).data;
+  const id = A.novaParada.id;
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
+  const st = async (status: string) => (await jsonReq('POST', `/api/paradas/${id}/status`, mot, { status })).data.parada;
+  assert.equal((await st('AUSENTE')).status_embarque, 'AUSENTE');
+  const volta = await st('PENDENTE');
+  assert.equal(volta.status_embarque, 'PENDENTE');
+  assert.equal(volta.motivo_ausencia, undefined);
+  assert.equal((await st('EMBARCOU')).status_embarque, 'EMBARCOU');
+  assert.equal((await st('PENDENTE')).status_embarque, 'PENDENTE');
+  assert.equal((await jsonReq('POST', `/api/paradas/${id}/status`, mot, { status: 'QUALQUER' })).status, 400);
+});
