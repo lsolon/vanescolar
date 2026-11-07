@@ -964,6 +964,25 @@ export const TransportRepository = {
     return data;
   },
 
+  /** Log de uso (fase de testes): o servidor diz se está ligado. */
+  async logUsoAtivo(): Promise<boolean> {
+    try { const r = await fetch(`${getBaseUrl()}/api/health`); return !!(await r.json()).logUso; } catch { return false; }
+  },
+  async enviarLogUso(eventos: unknown[]): Promise<void> {
+    if (!AuthService.getSessionToken()) return;
+    await fetch(`${getBaseUrl()}/api/log-uso/eventos`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ eventos }), keepalive: true });
+  },
+  /** Admin: baixa o log de uso (csv ou json). */
+  async baixarLogUso(formato: 'csv' | 'json' = 'csv'): Promise<Blob> {
+    const res = await fetch(`${getBaseUrl()}/api/admin/log-uso?formato=${formato}`, { headers: getAuthHeaders(true) });
+    if (!res.ok) throw new Error('Não foi possível baixar o log de uso.');
+    return res.blob();
+  },
+  async limparLogUso(): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/admin/log-uso`, { method: 'DELETE', headers: getAuthHeaders(true) });
+    if (!res.ok) throw new Error('Não foi possível apagar o log de uso.');
+  },
+
   /** Modo de teste (servidor com MODO_TESTE_SEM_LOGIN=true): entra sem senha. */
   async modoTesteAtivo(): Promise<boolean> {
     try {
