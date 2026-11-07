@@ -422,6 +422,11 @@ export interface PropostaCronograma {
   avisos: string[];
 }
 export type Turno = 'MANHA' | 'TARDE';
+export interface LinhaImportacao { n: number; aluno: string; escola: string; turno: string; responsavel: string; telefone: string; status: 'ok' | 'erro' | 'duplicado'; erro?: string }
+export interface ResultadoImportacao {
+  confirmado: boolean; linhas: LinhaImportacao[]; totais: { ok: number; erro: number; duplicado: number; cortadas: number };
+  criados?: { paradaId: number; aluno: string; responsavel: string; whatsapp: string; mensagem: string }[];
+}
 export interface EstadoPreCadastro { link: { url: string; expiraEm: string; envios: number; maxEnvios: number } | null; regras: string }
 export interface EscolaMotorista { nome: string; local: { latitude: number; longitude: number } | null; horarios?: Partial<Record<Turno, { entrada: string; saida: string }>> }
 export interface FilhoResumo { id_aluno: number; nome_aluno: string; escola_destino: string; vinculo: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO'; motorista: string | null }
@@ -1645,6 +1650,14 @@ export const TransportRepository = {
     const res = await fetch(`${getBaseUrl()}/api/motorista/alunos`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(params) });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível cadastrar o aluno.');
+    return d;
+  },
+
+  /** Importação em lote: confirmar=false só confere a lista; confirmar=true cria os alunos válidos. */
+  async importarAlunos(texto: string, opcoes: { confirmar: boolean; autorizacaoResponsaveis?: boolean }): Promise<ResultadoImportacao> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/alunos/importar`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ texto, ...opcoes }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível importar a lista.');
     return d;
   },
 

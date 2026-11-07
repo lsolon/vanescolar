@@ -1711,3 +1711,71 @@ test('Pré-cadastro: link do motorista, família preenche sem login com aceite, 
   assert.equal((await jsonReq('GET', `/api/pre-cadastro/${t3}`)).data.regras, null);
   assert.equal((await jsonReq('POST', `/api/pre-cadastro/${t3}`, undefined, { ...dados, nomeAluno: 'Sem Regras' })).status, 200);
 });
+
+test('Importação em lote: confere a lista, aponta erros e repetidos, exige a autorização e cria só os válidos', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'Lote');
+  const outro = await novoMotorista(adm, 'LoteOutro');
+  const url = '/api/motorista/alunos/importar';
+  await jsonReq('PUT', '/api/motorista/escolas/horarios', mot, { nome: 'Colégio Lote', turno: 'MANHA', entrada: '07:40', saida: '12:00' });
+  const lista = [
+    'Aluno\tEscola\tTurno\tResponsável\tWhatsApp\tEndereço\tReferência', // cabeçalho é ignorado
+    'Ana Lima\tColégio Lote\tManhã\tRita Lima\t(21) 98888-1111\tRua A, 10, Centro\tPortão verde',
+    'Beto Dias;Colégio Lote;tarde;Paulo Dias;21977772222;Rua B, 20',
+    'Caio Reis\tColégio Lote\tnoite\tLia Reis\t21966663333\tRua C, 30', // turno inválido
+    'Duda Melo\tColégio Lote\tManhã\tNina Melo\t123\tRua D, 40', // telefone inválido
+    'Ana Lima\tcolégio lote\tmanha\tRita Lima\t(21) 98888-1111\tRua A, 10', // repetido na lista
+    'Eva Cruz sem separador',
+    'Fábio Gil\tColégio Lote\tM\tSara Gil\t+55 21 95555-4444\tRua F, 60'
+  ].join('\n');
+
+  assert.equal((await jsonReq('POST', url, undefined, { texto: lista })).status, 401, 'sem login');
+  assert.equal((await jsonReq('POST', url, mot, { texto: '   ' })).status, 400, 'lista vazia');
+
+  // conferir (não cria nada)
+  const prev = await jsonReq('POST', url, mot, { texto: lista, confirmar: false });
+  assert.equal(prev.status, 200, JSON.stringify(prev.data));
+  assert.equal(prev.data.confirmado, false);
+  assert.deepEqual(prev.data.totais, { ok: 3, erro: 3, duplicado: 1, cortadas: 0 });
+  const st = prev.data.linhas.map((l: any) => l.status);
+  assert.deepEqual(st, ['ok', 'ok', 'erro', 'erro', 'duplicado', 'erro', 'ok']);
+  assert.ok(!JSON.stringify(prev.data).match(/Rua A|Rua B|98888-1111|988881111/), 'a conferência não devolve endereço nem telefone inteiro');
+  const antes: any[] = (await jsonReq('GET', '/api/estado', mot)).data.paradas;
+  assert.equal(antes.length, 0, 'conferir não cria alunos');
+
+  // importar exige a autorização da lista
+  assert.equal((await jsonReq('POST', url, mot, { texto: lista, confirmar: true })).status, 400);
+  assert.equal((await jsonReq('POST', url, mot, { texto: lista, confirmar: true, autorizacaoResponsaveis: 'true' })).status, 400);
+  const imp = await jsonReq('POST', url, mot, { texto: lista, confirmar: true, autorizacaoResponsaveis: true });
+  assert.equal(imp.status, 200, JSON.stringify(imp.data));
+  assert.equal(imp.data.criados.length, 3);
+  const ana = imp.data.criados.find((c: any) => c.aluno === 'Ana Lima');
+  assert.match(ana.mensagem, /VAN-[0-9A-F]{6}/);
+  assert.equal(ana.whatsapp, '5521988881111');
+  assert.equal(imp.data.criados.find((c: any) => c.aluno === 'Fábio Gil').whatsapp, '5521955554444', '+55 é aceito');
+  assert.ok(!ana.mensagem.includes('Rua A'), 'a mensagem não leva o endereço');
+
+  // entram na van já confirmados, na ordem da lista, e herdam o horário do turno da manhã
+  const dep: any[] = (await jsonReq('GET', '/api/estado', mot)).data.paradas;
+  assert.equal(dep.length, 3);
+  assert.ok(dep.every((p) => (p.vinculo ?? 'CONFIRMADO') === 'CONFIRMADO'));
+  const pAna = dep.find((p) => (p.nome_completo_para_chamada ?? p.nome_aluno) === 'Ana Lima');
+  assert.equal(pAna.turno, 'MANHA');
+  assert.equal(pAna.escola_entrada, '07:40');
+  assert.deepEqual(dep.map((p) => p.ordem_sequencia).sort(), [1, 2, 3]);
+
+  // importar de novo a mesma lista: tudo vira repetido e nada é criado
+  const de_novo = await jsonReq('POST', url, mot, { texto: lista, confirmar: false });
+  assert.equal(de_novo.data.totais.ok, 0);
+  assert.equal((await jsonReq('POST', url, mot, { texto: lista, confirmar: true, autorizacaoResponsaveis: true })).status, 400, 'sem linha válida');
+
+  // outro motorista não vê os alunos e pode importar os mesmos nomes
+  assert.equal(((await jsonReq('GET', '/api/estado', outro)).data.paradas as any[]).length, 0);
+  assert.equal((await jsonReq('POST', url, outro, { texto: lista, confirmar: false })).data.totais.ok, 3);
+
+  // limite de 60 linhas
+  const grande = Array.from({ length: 65 }, (_, i) => `Aluno ${i + 1}\tEscola G\tManhã\tResp ${i + 1}\t2198000${String(1000 + i)}\tRua ${i + 1}`).join('\n');
+  const g = await jsonReq('POST', url, outro, { texto: grande, confirmar: false });
+  assert.equal(g.data.linhas.length, 60);
+  assert.equal(g.data.totais.cortadas, 5);
+});
