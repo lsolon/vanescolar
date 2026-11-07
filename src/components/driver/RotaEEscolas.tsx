@@ -282,7 +282,7 @@ export const RotasIdaVolta: React.FC<{ sentidoAtivo?: Sent; versao?: number; onA
           <div className="rounded-xl bg-slate-950 border border-emerald-400/30 p-3 space-y-2">
             <p className="text-[11px] font-bold text-emerald-300">
               {prop.modo === 'montar' ? 'Proposta de cronograma' : prop.modo === 'encaixar' ? 'Proposta para encaixar alunos novos (horários fixos não mudam)' : 'Conferência do cronograma fixado'}
-              {' — '}{aba === 'IDA' ? `chegada à escola até ${prop.limite}` : `primeiro desembarque a partir de ${prop.limite}`}
+              {' — '}{aba === 'IDA' ? `chegada à escola até ${prop.limite}` : `chegue à escola até ${prop.chegarEscolaAte ?? '--:--'} · primeiro desembarque a partir de ${prop.limite}`}
             </p>
             <ol className="text-[11px] text-slate-300 space-y-0.5">
               {prop.paradas.map((p, i) => <li key={p.id}>{i + 1}. <strong>{p.horario}</strong> — {p.nome} <span className="text-slate-500">{p.fixo ? '(horário já fixado)' : '(novo horário)'}</span></li>)}
