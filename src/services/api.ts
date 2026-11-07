@@ -425,6 +425,10 @@ export interface PropostaCronograma {
 }
 export type Turno = 'MANHA' | 'TARDE';
 export interface LinhaImportacao { n: number; aluno: string; escola: string; turno: string; responsavel: string; telefone: string; status: 'ok' | 'erro' | 'duplicado'; erro?: string }
+export interface QuandoSair {
+  sentido: 'IDA' | 'VOLTA'; destino: string; distanciaKm: number; minutosAteLa: number; margemMin: number; agora: string;
+  horarioAlvo: string | null; sairAs: string | null; faltamMin?: number; situacao: 'ha_tempo' | 'saia_agora' | 'atrasado' | 'sem_horario';
+}
 export interface ResultadoImportacao {
   confirmado: boolean; linhas: LinhaImportacao[]; totais: { ok: number; erro: number; duplicado: number; cortadas: number };
   criados?: { paradaId: number; aluno: string; responsavel: string; whatsapp: string; mensagem: string }[];
@@ -1660,6 +1664,14 @@ export const TransportRepository = {
     const res = await fetch(`${getBaseUrl()}/api/motorista/alunos/importar`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ texto, ...opcoes }) });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível importar a lista.');
+    return d;
+  },
+
+  /** Início do turno: da posição atual até o primeiro ponto, quanto tempo leva e a que horas sair. */
+  async quandoSair(posicao: { latitude: number; longitude: number }, sentido: 'IDA' | 'VOLTA'): Promise<QuandoSair> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/quando-sair`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ ...posicao, sentido }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível calcular agora.');
     return d;
   },
 
