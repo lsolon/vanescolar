@@ -42,8 +42,7 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
   const [escola, setEscola] = useState('');
   const [endereco, setEndereco] = useState('');
   const [ref, setRef] = useState('');
-  const [entrada, setEntrada] = useState('');
-  const [saida, setSaida] = useState('');
+  const [turno, setTurno] = useState<'MANHA' | 'TARDE' | ''>('');
   const [tel, setTel] = useState('');
   const [codigo, setCodigo] = useState('');
   const [motoristaId, setMotoristaId] = useState<number | ''>(motoristas[0]?.id ?? '');
@@ -53,12 +52,12 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
     setErro(null);
-    if (!entrada || !saida) { setErro('Informe a entrada e a saída da escola.'); return; }
+    if (!turno) { setErro('Escolha o turno: manhã ou tarde.'); return; }
     setSalvando(true);
     try {
       await TransportRepository.cadastrarFilho({
         nomeAluno: nome.trim(), escola: escola.trim(), endereco: endereco.trim(), pontoReferencia: ref.trim(),
-        escolaEntrada: entrada, escolaSaida: saida, telefone: tel.trim() || undefined,
+        turno, telefone: tel.trim() || undefined,
         ...(motoristaId !== '' && motoristas.length > 0 ? { motoristaId } : { codigoMotorista: codigo.trim() })
       });
       onSalvo();
@@ -79,9 +78,15 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
       <label className="text-[11px] text-slate-300 block">Escola
         <input required value={escola} onChange={(e) => setEscola(e.target.value)} maxLength={120} className={`${campo} mt-1`} autoComplete="off" />
       </label>
-      <div className="grid grid-cols-2 gap-2">
-        <div className="text-[11px] text-slate-300 space-y-1"><span>Entrada na escola</span><CampoHora label="Entrada na escola" value={entrada} onChange={setEntrada} horaPadrao="07" /></div>
-        <div className="text-[11px] text-slate-300 space-y-1"><span>Saída da escola</span><CampoHora label="Saída da escola" value={saida} onChange={setSaida} horaPadrao="12" /></div>
+      <div className="space-y-1" role="group" aria-label="Turno">
+        <span className="text-[11px] text-slate-300">Turno do seu filho(a) na van</span>
+        <div className="grid grid-cols-2 gap-2">
+          {([['MANHA', 'Manhã'], ['TARDE', 'Tarde']] as const).map(([v, nome]) => (
+            <button key={v} type="button" aria-pressed={turno === v} onClick={() => setTurno(v)}
+              className={`py-3 rounded-xl text-sm font-bold border min-h-[48px] cursor-pointer ${turno === v ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200' : 'bg-slate-900 border-slate-700 text-slate-300'}`}>{nome}</button>
+          ))}
+        </div>
+        <span className="text-[10px] text-slate-500">Os horários de entrada e saída da escola são definidos pelo motorista.</span>
       </div>
       <label className="text-[11px] text-slate-300 block">Endereço de embarque
         <input required value={endereco} onChange={(e) => setEndereco(e.target.value)} maxLength={200} placeholder="Rua, número, bairro" className={`${campo} mt-1`} autoComplete="street-address" />

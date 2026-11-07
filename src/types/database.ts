@@ -154,6 +154,9 @@ export interface ParadaViagem {
   hora_volta?: string | null;
   escola_entrada?: string;
   escola_saida?: string;
+  /** Turno do aluno e se os horários vieram da escola/turno definidos pelo motorista */
+  turno?: 'MANHA' | 'TARDE';
+  horario_da_escola?: boolean;
   ausencia_trecho?: 'IDA' | 'VOLTA' | 'AMBOS';
   /** PENDENTE = aguardando o motorista confirmar; RECUSADO = motorista não aceitou/removeu */
   vinculo?: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO';
@@ -190,6 +193,8 @@ export interface ParadaMotoristaSanitizada {
   hora_volta?: string | null;
   escola_entrada?: string;
   escola_saida?: string;
+  turno?: 'MANHA' | 'TARDE';
+  horario_da_escola?: boolean;
   vinculo?: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO';
   /** Escola do aluno (para a solicitação pendente) */
   escola_nome?: string;

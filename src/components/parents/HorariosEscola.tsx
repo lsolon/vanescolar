@@ -14,13 +14,15 @@ interface Props {
   saida?: string;
   horaIda?: string | null;
   horaVolta?: string | null;
+  /** horários definidos pelo motorista para a escola e o turno: o responsável não altera */
+  fixoPeloMotorista?: boolean;
   /** situação da van calculada no servidor (sem coordenadas) */
   prox?: ProximidadeVan | null;
   onSalvo: () => void;
 }
 
 /** O responsável informa a entrada e a saída da escola; a van calcula os horários de ida e de volta. */
-export const HorariosEscola: React.FC<Props> = ({ alunoId, entrada, saida, horaIda, horaVolta, prox, onSalvo }) => {
+export const HorariosEscola: React.FC<Props> = ({ alunoId, entrada, saida, horaIda, horaVolta, fixoPeloMotorista, prox, onSalvo }) => {
   const informado = !!(entrada && saida);
   const [editando, setEditando] = useState(!informado);
   const [e, setE] = useState(entrada || '');
@@ -103,7 +105,9 @@ export const HorariosEscola: React.FC<Props> = ({ alunoId, entrada, saida, horaI
               </div>
             );
           })()}
-          <button type="button" onClick={() => setEditando(true)} className="text-[11px] text-cyan-300 underline cursor-pointer">Alterar horários da escola</button>
+          {fixoPeloMotorista
+            ? <p className="text-[11px] text-slate-500">Horários da escola definidos pelo motorista.</p>
+            : <button type="button" onClick={() => setEditando(true)} className="text-[11px] text-cyan-300 underline cursor-pointer">Alterar horários da escola</button>}
         </div>
       )}
     </section>

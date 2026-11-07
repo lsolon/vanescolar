@@ -421,7 +421,8 @@ export interface PropostaCronograma {
   paradas: { id: number; nome: string; horario: string; fixo: boolean }[];
   avisos: string[];
 }
-export interface EscolaMotorista { nome: string; local: { latitude: number; longitude: number } | null }
+export type Turno = 'MANHA' | 'TARDE';
+export interface EscolaMotorista { nome: string; local: { latitude: number; longitude: number } | null; horarios?: Partial<Record<Turno, { entrada: string; saida: string }>> }
 export interface FilhoResumo { id_aluno: number; nome_aluno: string; escola_destino: string; vinculo: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO'; motorista: string | null }
 export interface PrefsProximidade { estilo: 'A' | 'B' | 'C'; avisoMin: number }
 
@@ -1123,6 +1124,8 @@ export const TransportRepository = {
             hora_volta: p.hora_volta,
             escola_entrada: p.escola_entrada,
             escola_saida: p.escola_saida,
+            turno: p.turno,
+            horario_da_escola: p.horario_da_escola,
             vinculo: p.vinculo ?? 'CONFIRMADO',
             escola_nome: p.escola_destino,
             hora_embarque: p.hora_embarque,
@@ -1313,6 +1316,8 @@ export const TransportRepository = {
               hora_volta: paradaServidor.hora_volta,
               escola_entrada: paradaServidor.escola_entrada,
               escola_saida: paradaServidor.escola_saida,
+              turno: paradaServidor.turno,
+              horario_da_escola: paradaServidor.horario_da_escola,
               ausencia_trecho: paradaServidor.ausencia_trecho,
               vinculo: paradaServidor.vinculo ?? 'CONFIRMADO',
               latitude: paradaServidor.latitude,
@@ -1477,6 +1482,7 @@ export const TransportRepository = {
     longitude?: number;
     escolaEntrada?: string;
     escolaSaida?: string;
+    turno?: Turno;
   }): Promise<{ novaParada: ParadaViagem; codigoVinculo: string }> {
     await sleep();
     if (typeof window !== 'undefined' || true) {
@@ -1596,9 +1602,29 @@ export const TransportRepository = {
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Não foi possível salvar o local da escola.');
   },
 
+  /** Define (ou remove) entrada e saída de uma escola num turno; os alunos daquela escola e turno herdam. */
+  async definirHorariosEscola(nome: string, turno: Turno, entrada: string, saida: string): Promise<number> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/escolas/horarios`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ nome, turno, entrada, saida }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível salvar os horários da escola.');
+    return d.alunosAtualizados ?? 0;
+  },
+
+  async removerHorariosEscola(nome: string, turno: Turno): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/escolas/horarios`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ nome, turno, remover: true }) });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Não foi possível remover os horários.');
+  },
+
+  async definirTurnoDoAluno(paradaId: number | string, turno: Turno): Promise<{ herdouHorario: boolean }> {
+    const res = await fetch(`${getBaseUrl()}/api/paradas/${paradaId}/turno`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ turno }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível definir o turno.');
+    return { herdouHorario: !!d.herdouHorario };
+  },
+
   async cadastrarFilho(params: {
     nomeAluno: string; escola: string; endereco: string; pontoReferencia?: string;
-    escolaEntrada: string; escolaSaida: string; telefone?: string;
+    turno?: Turno; escolaEntrada?: string; escolaSaida?: string; telefone?: string;
     codigoMotorista?: string; motoristaId?: number;
   }): Promise<number> {
     const res = await fetch(`${getBaseUrl()}/api/filhos`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(params) });

@@ -1484,3 +1484,87 @@ test('Segurança: ninguém vira admin cadastrando um e-mail de administrador', a
   assert.equal(adm.status, 200);
   assert.equal((await jsonReq('GET', '/api/admin/metrics', adm.data.token)).status, 200);
 });
+
+test('Horários por escola e turno: o motorista define uma vez, o aluno herda e o responsável não altera', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'HorEscola');
+  const outro = await novoMotorista(adm, 'HorEscolaOutro');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola Turno', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+
+  // validações
+  const url = '/api/motorista/escolas/horarios';
+  const ok = { nome: 'Escola Turno', turno: 'manhã', entrada: '07:40', saida: '12:00' };
+  assert.equal((await jsonReq('PUT', url, mot, { ...ok, turno: 'noite' })).status, 400, 'turno inválido');
+  assert.equal((await jsonReq('PUT', url, mot, { ...ok, entrada: '25:00' })).status, 400, 'hora inválida');
+  assert.equal((await jsonReq('PUT', url, mot, { ...ok, saida: '07:00' })).status, 400, 'saída antes da entrada');
+  assert.equal((await jsonReq('PUT', url, mot, { ...ok, nome: '' })).status, 400, 'sem nome');
+  assert.equal((await jsonReq('PUT', url, undefined, ok)).status, 401, 'sem login');
+
+  // aluno criado ANTES: recebe o turno e depois herda quando o horário é definido
+  const antes = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno Antes', turno: 'MANHA' })).data;
+  assert.equal(antes.novaParada.escola_entrada, undefined, 'sem horário definido ainda');
+  const salvo = await jsonReq('PUT', url, mot, { ...ok, turno: 'MANHA' });
+  assert.equal(salvo.status, 200, JSON.stringify(salvo.data));
+  assert.equal(salvo.data.alunosAtualizados, 1);
+  await jsonReq('PUT', url, mot, { nome: 'Escola Turno', turno: 'TARDE', entrada: '13:00', saida: '17:30' });
+
+  // lista de escolas traz os horários por turno
+  const esc = (await jsonReq('GET', '/api/motorista/escolas', mot)).data.escolas.find((e: any) => e.nome === 'Escola Turno');
+  assert.deepEqual(esc.horarios.MANHA, { entrada: '07:40', saida: '12:00' });
+  assert.deepEqual(esc.horarios.TARDE, { entrada: '13:00', saida: '17:30' });
+
+  // aluno criado DEPOIS herda pelo turno; o outro turno herda o outro horário
+  const manha = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno Manha', turno: 'MANHA', escolaEntrada: '06:00', escolaSaida: '09:00' })).data.novaParada;
+  assert.equal(manha.escola_entrada, '07:40', 'o horário do motorista vale mais que o digitado');
+  assert.equal(manha.escola_saida, '12:00');
+  const tarde = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno Tarde', turno: 'TARDE' })).data.novaParada;
+  assert.equal(tarde.escola_entrada, '13:00');
+  assert.equal(tarde.horario_da_escola, true);
+
+  // definir o turno de um aluno sem turno faz herdar
+  const sem = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno Sem Turno' })).data.novaParada;
+  assert.equal(sem.escola_entrada, undefined);
+  assert.equal((await jsonReq('PUT', `/api/paradas/${sem.id}/turno`, mot, { turno: 'xx' })).status, 400);
+  const t = await jsonReq('PUT', `/api/paradas/${sem.id}/turno`, mot, { turno: 'TARDE' });
+  assert.equal(t.status, 200);
+  assert.equal(t.data.herdouHorario, true);
+
+  // outro motorista não mexe no aluno e não vê os horários
+  assert.equal((await jsonReq('PUT', `/api/paradas/${sem.id}/turno`, outro, { turno: 'MANHA' })).status, 404);
+  const escOutro = (await jsonReq('GET', '/api/motorista/escolas', outro)).data.escolas;
+  assert.ok(!escOutro.some((e: any) => e.nome === 'Escola Turno'), 'horários são por motorista');
+
+  // responsável: não altera horário definido pelo motorista; sem turno definido, altera
+  const codigo = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno Familia', turno: 'MANHA' })).data;
+  const resp = await novoResponsavel(codigo.codigoVinculo);
+  const alunoId = codigo.novaParada.id_aluno;
+  const neg = await jsonReq('PUT', `/api/alunos/${alunoId}/escola-horarios`, resp, { entrada: '08:00', saida: '13:00' });
+  assert.equal(neg.status, 403, 'responsável não altera horário definido pelo motorista');
+  const est = (await jsonReq('GET', '/api/estado', resp)).data;
+  const p = est.paradas.find((x: any) => x.id_aluno === alunoId);
+  assert.equal(p.turno, 'MANHA');
+  assert.equal(p.horario_da_escola, true);
+  assert.equal(p.escola_entrada, '07:40');
+
+  // remover o horário do turno devolve a edição ao responsável e não apaga o que já foi herdado
+  assert.equal((await jsonReq('PUT', url, mot, { nome: 'Escola Turno', turno: 'MANHA', remover: true })).status, 200);
+  const livre = await jsonReq('PUT', `/api/alunos/${alunoId}/escola-horarios`, resp, { entrada: '08:00', saida: '13:00' });
+  assert.equal(livre.status, 200, JSON.stringify(livre.data));
+});
+
+test('Filhos: responsável escolhe o turno e herda os horários do motorista, sem digitar entrada e saída', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'FilhoTurno');
+  const codigo = (await jsonReq('GET', '/api/motorista/codigo', mot)).data.codigo;
+  await jsonReq('PUT', '/api/motorista/escolas/horarios', mot, { nome: 'Colégio Herança', turno: 'TARDE', entrada: '13:10', saida: '17:20' });
+  const fam = await novoResponsavelVerificado(adm);
+  const sem = await jsonReq('POST', '/api/filhos', fam, { nomeAluno: 'Lia Mar', escola: 'colégio herança', endereco: 'Rua A, 1', turno: 'TARDE', codigoMotorista: codigo });
+  assert.equal(sem.status, 200, JSON.stringify(sem.data));
+  const est = (await jsonReq('GET', '/api/estado', fam)).data;
+  const p = est.paradas.find((x: any) => x.id_aluno === sem.data.alunoId);
+  assert.equal(p.escola_entrada, '13:10', 'escola digitada com outra caixa ainda herda');
+  assert.equal(p.escola_saida, '17:20');
+  assert.ok(!JSON.stringify(est.paradas).match(/latitude|longitude|endereco/i), 'o responsável continua sem coordenadas e sem endereço');
+  // só uma das duas horas é recusada
+  assert.equal((await jsonReq('POST', '/api/filhos', fam, { nomeAluno: 'Lia Mar', escola: 'Colégio Y', endereco: 'Rua A, 1', escolaEntrada: '07:00' })).status, 400);
+});

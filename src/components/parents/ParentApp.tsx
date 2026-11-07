@@ -402,6 +402,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
             saida={dados.parada.escola_saida}
             horaIda={dados.parada.hora_ida}
             horaVolta={dados.parada.hora_volta}
+            fixoPeloMotorista={!!dados.parada.horario_da_escola}
             prox={prox}
             onSalvo={carregarDados}
           />
