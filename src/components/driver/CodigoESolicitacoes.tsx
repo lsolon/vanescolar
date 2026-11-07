@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { TransportRepository } from '../../services/api';
 import type { ParadaMotoristaSanitizada } from '../../types/database';
+import { MensagemFamilia } from './NovoAluno';
 
 /** Código do motorista: ele passa aos responsáveis, que o digitam uma única vez ao cadastrar o filho. */
 export const CodigoMotorista: React.FC<{ nome?: string }> = ({ nome }) => {
@@ -51,16 +52,37 @@ export const SolicitacoesPendentes: React.FC<{ pendentes: ParadaMotoristaSanitiz
   const [posicoes, setPosicoes] = useState<Record<string, number>>({});
   const [erro, setErro] = useState<string | null>(null);
   const [ocupado, setOcupado] = useState<string | null>(null);
-  if (pendentes.length === 0) return null;
+  const [convites, setConvites] = useState<Record<string, { nome: string; mensagem: string; whatsapp?: string }>>({});
+  if (pendentes.length === 0 && Object.keys(convites).length === 0) return null;
 
   const agir = async (id: number | string, fn: () => Promise<unknown>) => {
     setOcupado(String(id)); setErro(null);
     try { await fn(); onMudou(); } catch (e: any) { setErro(e.message); } finally { setOcupado(null); }
   };
 
+  // Depois de aprovar, o motorista já recebe a mensagem com o código para a família entrar no app.
+  const aprovar = async (p: ParadaMotoristaSanitizada, pos: number) => {
+    const id = String(p.parada_id);
+    setOcupado(id); setErro(null);
+    try {
+      await TransportRepository.confirmarAluno(p.parada_id, pos);
+      try {
+        const c = await TransportRepository.obterConviteDoAluno(p.parada_id);
+        if (c.disponivel && c.mensagem) setConvites((m) => ({ ...m, [id]: { nome: p.nome_completo_para_chamada || p.nome_aluno_sanitizado, mensagem: c.mensagem!, whatsapp: c.whatsapp } }));
+      } catch { /* o convite também fica no cartão do aluno */ }
+      onMudou();
+    } catch (e: any) { setErro(e.message); } finally { setOcupado(null); }
+  };
+
   return (
     <section aria-label="Solicitações de novos alunos" className="bg-amber-400/10 border border-amber-400/40 rounded-2xl p-4 space-y-3">
-      <h3 className="text-sm font-bold text-amber-200">Novos alunos aguardando ({pendentes.length})</h3>
+      {Object.entries(convites).map(([id, c]) => (
+        <div key={id} className="bg-emerald-500/10 border border-emerald-400/40 rounded-xl p-3">
+          <MensagemFamilia titulo={`${c.nome} aprovado. Envie o convite para a família entrar no app.`} whatsapp={c.whatsapp} mensagem={c.mensagem}
+            onFechar={() => setConvites((m) => { const n = { ...m }; delete n[id]; return n; })} />
+        </div>
+      ))}
+      {pendentes.length > 0 && <h3 className="text-sm font-bold text-amber-200">Novos alunos aguardando ({pendentes.length})</h3>}
       {pendentes.map((p) => {
         const id = String(p.parada_id);
         const pos = posicoes[id] ?? totalNaVan + 1;
@@ -69,7 +91,7 @@ export const SolicitacoesPendentes: React.FC<{ pendentes: ParadaMotoristaSanitiz
             <div className="text-xs text-slate-200">
               <strong>{p.nome_completo_para_chamada || p.nome_aluno_sanitizado}</strong>
               <div className="text-slate-400">{p.endereco_mascarado}</div>
-              <div className="text-slate-500">{p.escola_nome ? `${p.escola_nome} · ` : ''}entra {p.escola_entrada || '--:--'}, sai {p.escola_saida || '--:--'}</div>
+              <div className="text-slate-500">{p.escola_nome ? `${p.escola_nome} · ` : ''}{p.turno ? `${p.turno === 'MANHA' ? 'manhã' : 'tarde'} · ` : ''}entra {p.escola_entrada || '--:--'}, sai {p.escola_saida || '--:--'}</div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <label className="text-[11px] text-slate-300 flex items-center gap-1.5">
@@ -84,7 +106,7 @@ export const SolicitacoesPendentes: React.FC<{ pendentes: ParadaMotoristaSanitiz
                   ))}
                 </select>
               </label>
-              <button type="button" disabled={ocupado === id} onClick={() => agir(p.parada_id, () => TransportRepository.confirmarAluno(p.parada_id, pos))} className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50">Confirmar</button>
+              <button type="button" disabled={ocupado === id} onClick={() => aprovar(p, pos)} className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50">Confirmar</button>
               <button type="button" disabled={ocupado === id} onClick={() => agir(p.parada_id, () => TransportRepository.removerAlunoDaVan(p.parada_id))} className="px-3 py-2 rounded-xl bg-slate-800 text-rose-300 text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50">Recusar</button>
             </div>
           </div>
