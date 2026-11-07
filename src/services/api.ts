@@ -1602,6 +1602,25 @@ export const TransportRepository = {
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Não foi possível salvar o local da escola.');
   },
 
+  /** Motorista cadastra o aluno de uma vez; devolve o código e a mensagem pronta de WhatsApp para a família. */
+  async cadastrarAlunoPeloMotorista(params: {
+    nomeAluno: string; escola: string; turno: Turno; nomeResponsavel: string; telefoneResponsavel: string;
+    endereco: string; pontoReferencia?: string; latitude?: number; longitude?: number; autorizacaoResponsavel: boolean;
+  }): Promise<{ paradaId: number; codigoVinculo: string; whatsapp: string; mensagem: string; horarioHerdado: boolean; semHorarioDaEscola: boolean; semPontoNoMapa: boolean }> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/alunos`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(params) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível cadastrar o aluno.');
+    return d;
+  },
+
+  /** Convite (código + mensagem de WhatsApp) para reenviar enquanto a família não se vinculou. */
+  async obterConviteDoAluno(paradaId: number | string): Promise<{ disponivel: boolean; codigoVinculo?: string; mensagem?: string; whatsapp?: string }> {
+    const res = await fetch(`${getBaseUrl()}/api/paradas/${paradaId}/convite`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível carregar o convite.');
+    return d;
+  },
+
   /** Define (ou remove) entrada e saída de uma escola num turno; os alunos daquela escola e turno herdam. */
   async definirHorariosEscola(nome: string, turno: Turno, entrada: string, saida: string): Promise<number> {
     const res = await fetch(`${getBaseUrl()}/api/motorista/escolas/horarios`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ nome, turno, entrada, saida }) });

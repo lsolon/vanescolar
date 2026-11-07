@@ -1568,3 +1568,68 @@ test('Filhos: responsável escolhe o turno e herda os horários do motorista, se
   // só uma das duas horas é recusada
   assert.equal((await jsonReq('POST', '/api/filhos', fam, { nomeAluno: 'Lia Mar', escola: 'Colégio Y', endereco: 'Rua A, 1', escolaEntrada: '07:00' })).status, 400);
 });
+
+test('Cadastro pelo motorista: valida, herda horário, gera código e mensagem; família se vincula sem ver endereço nem coordenadas', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'CadMot');
+  const outro = await novoMotorista(adm, 'CadMotOutro');
+  const url = '/api/motorista/alunos';
+  const ok = { nomeAluno: 'Lia Mar Souza', escola: 'Escola Cad', turno: 'MANHA', nomeResponsavel: 'Rosa Souza', telefoneResponsavel: '(21) 98765-4321', endereco: 'Rua das Flores, 10', pontoReferencia: 'Portão azul', autorizacaoResponsavel: true };
+
+  // validações
+  assert.equal((await jsonReq('POST', url, undefined, ok)).status, 401, 'sem login');
+  for (const [campo, valor] of [['nomeAluno', 'A'], ['escola', ''], ['turno', 'noite'], ['nomeResponsavel', ''], ['telefoneResponsavel', '123'], ['endereco', ''], ['autorizacaoResponsavel', false], ['autorizacaoResponsavel', 'true'], ['escolaEntrada', '07:00']] as const) {
+    assert.equal((await jsonReq('POST', url, mot, { ...ok, [campo]: valor })).status, 400, `${campo}=${JSON.stringify(valor)}`);
+  }
+  assert.equal((await jsonReq('POST', url, mot, { ...ok, latitude: 999, longitude: 999 })).status, 400, 'local inválido');
+
+  // 1º aluno: sem horário da escola ainda
+  await jsonReq('PUT', '/api/motorista/escolas/horarios', mot, { nome: 'Escola Cad', turno: 'MANHA', entrada: '07:40', saida: '12:00' });
+  const r = await jsonReq('POST', url, mot, ok);
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.match(r.data.codigoVinculo, /^VAN-[0-9A-F]{6}$/);
+  assert.equal(r.data.whatsapp, '5521987654321');
+  assert.equal(r.data.horarioHerdado, true);
+  assert.equal(r.data.semPontoNoMapa, true);
+  assert.ok(r.data.mensagem.includes(r.data.codigoVinculo) && r.data.mensagem.includes('Lia') && r.data.mensagem.includes('Rosa'), 'mensagem com nome e código');
+  assert.ok(!r.data.mensagem.includes('Rua das Flores'), 'a mensagem não leva o endereço');
+  assert.equal((await jsonReq('POST', url, mot, ok)).status, 409, 'mesmo aluno/escola/turno duplicado');
+
+  // entra na van já confirmado, no fim da rota, com horário herdado
+  const est = (await jsonReq('GET', '/api/estado', mot)).data;
+  const lista: any[] = Array.isArray(est.paradas) ? est.paradas : [];
+  const p = lista.find((x) => x.id === r.data.paradaId);
+  assert.ok(p, 'aluno aparece para o motorista');
+  assert.equal(p.vinculo ?? 'CONFIRMADO', 'CONFIRMADO');
+  assert.equal(p.escola_entrada, '07:40');
+
+  // convite reenviável até a família se vincular; outro motorista não acessa
+  const conv = await jsonReq('GET', `/api/paradas/${r.data.paradaId}/convite`, mot);
+  assert.equal(conv.data.disponivel, true);
+  assert.equal(conv.data.codigoVinculo, r.data.codigoVinculo);
+  assert.equal((await jsonReq('GET', `/api/paradas/${r.data.paradaId}/convite`, outro)).status, 404);
+
+  // a família se vincula com o código e NÃO recebe coordenadas, endereço, telefone nem código
+  const pontoMarcado = (await jsonReq('POST', url, mot, { ...ok, nomeAluno: 'Com Ponto', latitude: -22.9, longitude: -43.2 })).data;
+  const resp = await novoResponsavel(pontoMarcado.codigoVinculo);
+  const vinc = await jsonReq('POST', '/api/vincular', resp, { codigoVinculo: 'van-xxxxxx' });
+  assert.equal(vinc.status, 404, 'código errado');
+  const est2 = (await jsonReq('GET', '/api/estado', resp)).data;
+  assert.ok(!JSON.stringify(est2.paradas).match(/latitude|longitude|endereco|telefone|codigo_vinculo/i), 'estado do responsável sem dados sensíveis');
+  assert.equal((await jsonReq('GET', `/api/paradas/${pontoMarcado.paradaId}/convite`, mot)).data.disponivel, false, 'depois de vinculado não há convite');
+});
+
+test('Vincular: a resposta ao responsável não traz coordenadas, endereço, telefone nem código', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'VincPriv');
+  const c = (await jsonReq('POST', '/api/motorista/alunos', mot, { nomeAluno: 'Zeca Lima', escola: 'Escola VP', turno: 'TARDE', nomeResponsavel: 'Rita Lima', telefoneResponsavel: '21977776666', endereco: 'Rua Secreta, 99', latitude: -22.9, longitude: -43.2, autorizacaoResponsavel: true })).data;
+  const email = `vp_${Date.now()}@teste.com`;
+  await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Rita', email, password: 'senhaSegura123!', lgpdConsent: true });
+  const lista = (await jsonReq('GET', '/api/admin/responsaveis', adm)).data.responsaveis;
+  await jsonReq('POST', `/api/admin/usuarios/${lista.find((x: any) => x.email === email).id}/confirmar-email`, adm);
+  const tok = (await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'senhaSegura123!' })).data.token;
+  const v = await jsonReq('POST', '/api/vincular', tok, { codigoVinculo: c.codigoVinculo });
+  assert.equal(v.status, 200, JSON.stringify(v.data));
+  assert.equal(v.data.parada.nome_aluno, 'Zeca Lima');
+  assert.ok(!JSON.stringify(v.data.parada).match(/latitude|longitude|endereco_real|Secreta|telefone|21977776666|codigo_vinculo/i), 'sem dados sensíveis na resposta');
+});
