@@ -2454,6 +2454,8 @@ async function startServer() {
     res.json({
       sucesso: true, sentido, modo,
       limite: deMin(limite),
+      // Nos dois sentidos a van chega à escola FOLGA_CHEGADA_MIN antes (entrada na ida, saída na volta).
+      chegarEscolaAte: deMin(paraMin((sentido === 'IDA' ? entrada : saida) as string) - FOLGA_CHEGADA_MIN),
       paradas: r.ordem.map((i) => ({ id: alunos[i].id, nome: plano[i].nome, horario: deMin(r.horarios[i]), fixo: plano[i].ancoraMin !== null })),
       avisos: r.avisos.map((a) => a.texto)
     });

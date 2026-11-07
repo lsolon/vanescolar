@@ -418,6 +418,8 @@ export interface PropostaCronograma {
   modo: 'montar' | 'encaixar' | 'verificar';
   /** limite: ida = hora em que a van deve chegar à escola; volta = hora do primeiro desembarque após a saída */
   limite: string;
+  /** hora em que a van deve estar na escola: 15 min antes da entrada (ida) ou da saída (volta) */
+  chegarEscolaAte?: string;
   paradas: { id: number; nome: string; horario: string; fixo: boolean }[];
   avisos: string[];
 }
