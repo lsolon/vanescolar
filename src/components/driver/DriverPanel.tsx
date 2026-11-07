@@ -207,10 +207,13 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   // Atualização do status de embarque com botões táteis veiculares
   const handleAtualizarStatus = async (
     alunoId: number | string,
-    novoStatus: StatusEmbarque,
-    nomeAlunoSanitizado: string
+    pedido: StatusEmbarque,
+    nomeAlunoSanitizado: string,
+    atual?: StatusEmbarque
   ) => {
     if (!viagemZeroCache) return;
+    // Tocar de novo no botão que já está marcado desfaz: o aluno volta a ficar pendente.
+    const novoStatus: StatusEmbarque = atual && atual === pedido ? 'PENDENTE' : pedido;
     const numericId = Number(alunoId);
     setProcessandoAcaoId(numericId);
     try {
@@ -218,7 +221,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
       const atualizado = await TransportRepository.getViagemMotoristaZeroCache(undefined, { apenasProximaParada });
       setViagemZeroCache(atualizado);
 
-      const statusMsg = novoStatus === 'EMBARCOU' ? 'embarcou na van' : (novoStatus === 'ENTREGUE' ? 'entregue na escola' : 'marcado como ausente');
+      const statusMsg = novoStatus === 'PENDENTE' ? 'voltou para pendente' : novoStatus === 'EMBARCOU' ? 'embarcou na van' : (novoStatus === 'ENTREGUE' ? 'entregue na escola' : 'marcado como ausente');
       setMensagemSucesso(`${nomeAlunoSanitizado} ${statusMsg}!`);
       setTimeout(() => setMensagemSucesso(null), 3500);
     } catch (err) {
@@ -900,7 +903,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                 <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-slate-800">
                   <button
                     disabled={isBusy}
-                    onClick={() => handleAtualizarStatus(item.aluno_id, 'EMBARCOU', item.nome_aluno_sanitizado)}
+                    onClick={() => handleAtualizarStatus(item.aluno_id, 'EMBARCOU', item.nome_aluno_sanitizado, item.status_embarque as StatusEmbarque)}
                     className={`py-3 px-2 rounded-xl font-bold text-xs flex flex-col items-center justify-center gap-1 transition-all active:scale-95 ${
                       item.status_embarque === 'EMBARCOU'
                         ? 'bg-emerald-600 text-white ring-2 ring-emerald-400 shadow-md shadow-emerald-950/60'
@@ -913,7 +916,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
                   <button
                     disabled={isBusy}
-                    onClick={() => handleAtualizarStatus(item.aluno_id, 'ENTREGUE', item.nome_aluno_sanitizado)}
+                    onClick={() => handleAtualizarStatus(item.aluno_id, 'ENTREGUE', item.nome_aluno_sanitizado, item.status_embarque as StatusEmbarque)}
                     className={`py-3 px-2 rounded-xl font-bold text-xs flex flex-col items-center justify-center gap-1 transition-all active:scale-95 ${
                       item.status_embarque === 'ENTREGUE'
                         ? 'bg-indigo-600 text-white ring-2 ring-indigo-400 shadow-md shadow-indigo-950/60'
@@ -926,7 +929,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
                   <button
                     disabled={isBusy}
-                    onClick={() => handleAtualizarStatus(item.aluno_id, 'AUSENTE', item.nome_aluno_sanitizado)}
+                    onClick={() => handleAtualizarStatus(item.aluno_id, 'AUSENTE', item.nome_aluno_sanitizado, item.status_embarque as StatusEmbarque)}
                     className={`py-3 px-2 rounded-xl font-bold text-xs flex flex-col items-center justify-center gap-1 transition-all active:scale-95 ${
                       item.status_embarque === 'AUSENTE'
                         ? 'bg-rose-600 text-white ring-2 ring-rose-400 shadow-md shadow-rose-950/60'
@@ -937,6 +940,16 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                     <span>Ausente</span>
                   </button>
                 </div>
+                {item.status_embarque !== 'PENDENTE' && (
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={() => handleAtualizarStatus(item.aluno_id, 'PENDENTE', item.nome_aluno_sanitizado)}
+                    className="mt-2 w-full py-2.5 rounded-xl border border-amber-400/40 bg-amber-400/10 text-amber-200 text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50"
+                  >
+                    Marquei sem querer: desfazer e voltar para pendente
+                  </button>
+                )}
 
                 {/* Previsão e Contato Seguro */}
                 <div className="flex items-center justify-between mt-2.5 pt-2 text-xs text-slate-400">

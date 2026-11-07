@@ -2809,6 +2809,8 @@ async function startServer() {
     if (!['PENDENTE', 'EMBARCOU', 'ENTREGUE', 'AUSENTE'].includes(status)) return res.status(400).json({ error: 'Status inválido.' });
 
     parada.status_embarque = status;
+    // Voltar para pendente limpa o aviso de ausência, para o aluno não ficar com um motivo que já não vale.
+    if (status === 'PENDENTE') { delete (parada as any).motivo_ausencia; delete (parada as any).ausencia_trecho; }
     if (observacao !== undefined) (parada as any).observacao = observacao;
     // Aprende o ponto pelo GPS da van: ao embarcar (ida) ou entregar (volta) um aluno sem ponto marcado, grava onde a van está.
     // O endereço nunca sai do app; o motorista pode corrigir depois marcando o ponto à mão.

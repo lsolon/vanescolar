@@ -1863,3 +1863,20 @@ test('Log de uso: registra ações e toques com detalhe, sem nome, endereço, te
   assert.match(csv.headers.get('content-type') || '', /text\/csv/);
   assert.match(await csv.text(), /horario,origem,papel,usuario,sessao,acao,metodo,rota,status,ms,detalhes/);
 });
+
+test('Desfazer: o motorista volta o aluno para pendente (marcação sem querer) e o aviso de ausência some', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'Desfazer');
+  const base = { endereco: 'Rua X, 1', pontoReferencia: '', escola: 'Escola D', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' };
+  const A = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Aluno D' })).data;
+  const id = A.novaParada.id;
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
+  const st = async (status: string) => (await jsonReq('POST', `/api/paradas/${id}/status`, mot, { status })).data.parada;
+  assert.equal((await st('AUSENTE')).status_embarque, 'AUSENTE');
+  const volta = await st('PENDENTE');
+  assert.equal(volta.status_embarque, 'PENDENTE');
+  assert.equal(volta.motivo_ausencia, undefined);
+  assert.equal((await st('EMBARCOU')).status_embarque, 'EMBARCOU');
+  assert.equal((await st('PENDENTE')).status_embarque, 'PENDENTE');
+  assert.equal((await jsonReq('POST', `/api/paradas/${id}/status`, mot, { status: 'QUALQUER' })).status, 400);
+});
