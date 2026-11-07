@@ -2853,6 +2853,43 @@ async function startServer() {
     `1) Abra ${APP_URL_PUBLICA}\n2) Crie a sua conta\n3) Digite este código para ver ${primeiroNome(p.nome_aluno)}: ${p.codigo_vinculo}\n\n` +
     `Qualquer dúvida, é só me chamar.`;
 
+  /** Cria o aluno já confirmado na van (cadastro feito pelo motorista), no fim das rotas de ida e volta. */
+  function criarAlunoConfirmado(driverId: number, c: { nomeAluno: string; escola: string; turno: Turno; nomeResp: string; tel: string; endereco: string; pontoReferencia: string; local?: { latitude: number; longitude: number } | null; entrada?: string | null; saida?: string | null }) {
+    const novoId = serverState.paradas.reduce((m: number, p: any) => Math.max(m, p.id % 1000, (p.id_aluno ?? 0) - 210), 0) + 1;
+    const nova: any = {
+      id: 1000 + novoId,
+      id_viagem: 1000 + driverId,
+      id_motorista: driverId,
+      id_aluno: 210 + novoId,
+      ordem_sequencia: (serverState.paradas as any[]).filter((p) => donoDaParada(p) === driverId && confirmada(p)).length + 1,
+      vinculo: 'CONFIRMADO', // o motorista cadastrou: já está na van
+      status_embarque: 'PENDENTE',
+      ...(c.entrada && c.saida ? { escola_entrada: c.entrada, escola_saida: c.saida } : {}),
+      turno: c.turno,
+      latitude: c.local ? c.local.latitude : null,
+      longitude: c.local ? c.local.longitude : null,
+      nome_aluno: c.nomeAluno,
+      nome_sanitizado: `${c.nomeAluno.split(' ')[0]} ${c.nomeAluno.split(' ')[1]?.[0] || ''}.`,
+      endereco_real: c.endereco,
+      endereco_mascarado: mascararEnderecoSeguro(c.endereco),
+      ponto_referencia: c.pontoReferencia,
+      responsavel_nome: c.nomeResp,
+      responsavel_telefone: c.tel,
+      escola_destino: c.escola,
+      codigo_vinculo: `VAN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+      vinculado_usuario_id: null,
+      autorizacao_responsavel_em: new Date().toISOString()
+    };
+    const herdou = herdarHorarioDaEscola(nova); // o horário da escola/turno definido pelo motorista vale mais que o digitado
+    serverState.paradas.push(nova);
+    reordenar(driverId);
+    reordenarVolta(driverId);
+    return { nova, herdou };
+  }
+  const jaCadastrado = (driverId: number, nomeAluno: string, escola: string, turno: Turno) =>
+    (serverState.paradas as any[]).some((p) => donoDaParada(p) === driverId && p.vinculo !== 'RECUSADO'
+      && String(p.nome_aluno).trim().toLowerCase() === nomeAluno.toLowerCase() && chaveEscola(p.escola_destino) === chaveEscola(escola) && p.turno === turno);
+
   app.post('/api/motorista/alunos', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
     const driverId = driverIdFor(user) as number;
@@ -2876,39 +2913,9 @@ async function startServer() {
     if ((entrada || saida) && (!entrada || !saida)) return res.status(400).json({ error: 'Informe entrada e saída da escola no formato HH:MM.' });
     if (entrada && saida && paraMin(saida) <= paraMin(entrada)) return res.status(400).json({ error: 'A saída precisa ser depois da entrada.' });
 
-    const duplicado = (serverState.paradas as any[]).some((p) => donoDaParada(p) === driverId && p.vinculo !== 'RECUSADO'
-      && String(p.nome_aluno).trim().toLowerCase() === nomeAluno.toLowerCase() && chaveEscola(p.escola_destino) === chaveEscola(escola) && p.turno === turno);
-    if (duplicado) return res.status(409).json({ error: 'Este aluno já está cadastrado nessa escola e turno.' });
+    if (jaCadastrado(driverId, nomeAluno, escola, turno)) return res.status(409).json({ error: 'Este aluno já está cadastrado nessa escola e turno.' });
 
-    const novoId = serverState.paradas.reduce((m: number, p: any) => Math.max(m, p.id % 1000, (p.id_aluno ?? 0) - 210), 0) + 1;
-    const nova: any = {
-      id: 1000 + novoId,
-      id_viagem: 1000 + driverId,
-      id_motorista: driverId,
-      id_aluno: 210 + novoId,
-      ordem_sequencia: (serverState.paradas as any[]).filter((p) => donoDaParada(p) === driverId && confirmada(p)).length + 1,
-      vinculo: 'CONFIRMADO', // o motorista cadastrou: já está na van
-      status_embarque: 'PENDENTE',
-      ...(entrada && saida ? { escola_entrada: entrada, escola_saida: saida } : {}),
-      turno,
-      latitude: local ? local.latitude : null,
-      longitude: local ? local.longitude : null,
-      nome_aluno: nomeAluno,
-      nome_sanitizado: `${nomeAluno.split(' ')[0]} ${nomeAluno.split(' ')[1]?.[0] || ''}.`,
-      endereco_real: endereco,
-      endereco_mascarado: mascararEnderecoSeguro(endereco),
-      ponto_referencia: texto(b.pontoReferencia, 120),
-      responsavel_nome: nomeResp,
-      responsavel_telefone: tel,
-      escola_destino: escola,
-      codigo_vinculo: `VAN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
-      vinculado_usuario_id: null,
-      autorizacao_responsavel_em: new Date().toISOString()
-    };
-    const herdou = herdarHorarioDaEscola(nova); // o horário da escola/turno definido pelo motorista vale mais que o digitado
-    serverState.paradas.push(nova);
-    reordenar(driverId);
-    reordenarVolta(driverId);
+    const { nova, herdou } = criarAlunoConfirmado(driverId, { nomeAluno, escola, turno, nomeResp, tel, endereco, pontoReferencia: texto(b.pontoReferencia, 120), local, entrada, saida });
     auditLog('ALUNO_CADASTRADO_PELO_MOTORISTA', user.email, `Aluno ${nova.id_aluno} cadastrado pelo motorista ${driverId}`);
     broadcast('NOVA_PARADA_CADASTRADA', { paradaId: nova.id }, driverId);
     const nomeMot = perfilMotorista(driverId)?.nome ?? '';
@@ -2923,6 +2930,72 @@ async function startServer() {
       semHorarioDaEscola: !(nova.escola_entrada && nova.escola_saida),
       semPontoNoMapa: !local
     });
+  });
+
+  // ---- Importação em lote: o motorista cola a lista (copiada da planilha); confere; importa ----
+  const IMPORT_MAX_LINHAS = 60;
+  const semAcento = (v: string) => v.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const turnoDaLista = (v: string): Turno | null => {
+    const t = semAcento(v.trim());
+    if (t === 'm' || t.startsWith('manh')) return 'MANHA';
+    if (t === 't' || t.startsWith('tard')) return 'TARDE';
+    return null;
+  };
+  function lerListaDeAlunos(texto: unknown, driverId: number) {
+    const bruto = String(texto ?? '').replace(/\r/g, '').slice(0, 30000);
+    const linhas = bruto.split('\n').map((l) => l.trim()).filter(Boolean);
+    const sep = (l: string) => (l.includes('\t') ? '\t' : l.includes(';') ? ';' : null);
+    // cabeçalho opcional: primeira coluna "aluno" ou "nome"
+    if (linhas.length) {
+      const sp = sep(linhas[0]);
+      const c0 = semAcento((sp ? linhas[0].split(sp)[0] : linhas[0]).trim());
+      if (['aluno', 'aluna', 'aluno(a)', 'nome', 'nome do aluno', 'estudante'].includes(c0)) linhas.shift(); // só o título exato da coluna
+    }
+    const vistos = new Set<string>();
+    const rows = linhas.slice(0, IMPORT_MAX_LINHAS).map((l, i) => {
+      const n = i + 1;
+      const sp = sep(l);
+      const base = { n, aluno: '', escola: '', turno: '' as string, responsavel: '', telefone: '', endereco: '', pontoReferencia: '', status: 'erro' as 'ok' | 'erro' | 'duplicado', erro: '' as string, turnoLido: null as Turno | null, tel: null as string | null };
+      if (!sp) return { ...base, erro: 'Separe as colunas com tab (copiado da planilha) ou ponto e vírgula.' };
+      const c = l.split(sp).map((x) => x.trim().replace(/\s+/g, ' '));
+      if (c.length < 6) return { ...base, aluno: (c[0] ?? '').slice(0, 80), erro: 'Faltam colunas. Use: aluno, escola, turno, responsável, WhatsApp, endereço.' };
+      const [aluno, escola, turnoTxt, resp, telTxt, endereco, ref = ''] = c;
+      const turnoLido = turnoDaLista(turnoTxt), tel = telefoneBR(telTxt);
+      const r = { ...base, aluno: aluno.slice(0, 80), escola: escola.slice(0, 120), turno: turnoLido ?? turnoTxt.slice(0, 20), responsavel: resp.slice(0, 80), telefone: tel ? `(${tel.slice(0, 2)}) *****-${tel.slice(-4)}` : telTxt.slice(0, 4), endereco: endereco.slice(0, 200), pontoReferencia: ref.slice(0, 120), turnoLido, tel };
+      if (aluno.length < 2) return { ...r, erro: 'Falta o nome do aluno.' };
+      if (escola.length < 2) return { ...r, erro: 'Falta a escola.' };
+      if (!turnoLido) return { ...r, erro: 'Turno deve ser manhã ou tarde.' };
+      if (resp.length < 2) return { ...r, erro: 'Falta o nome do responsável.' };
+      if (!tel) return { ...r, erro: 'WhatsApp inválido. Use DDD + número.' };
+      if (endereco.length < 3) return { ...r, erro: 'Falta o endereço.' };
+      const chave = `${aluno.toLowerCase()}|${chaveEscola(escola)}|${turnoLido}`;
+      if (vistos.has(chave)) return { ...r, status: 'duplicado' as const, erro: 'Repetido na lista.' };
+      vistos.add(chave);
+      if (jaCadastrado(driverId, aluno, escola, turnoLido)) return { ...r, status: 'duplicado' as const, erro: 'Já cadastrado nessa escola e turno.' };
+      return { ...r, status: 'ok' as const };
+    });
+    return { rows, cortadas: Math.max(0, linhas.length - IMPORT_MAX_LINHAS) };
+  }
+
+  app.post('/api/motorista/alunos/importar', authenticate, requireDriver, rateLimiter(12, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const { rows, cortadas } = lerListaDeAlunos(req.body?.texto, driverId);
+    if (rows.length === 0) return res.status(400).json({ error: 'Cole a lista de alunos, uma linha por aluno.' });
+    const resumo = rows.map((r) => ({ n: r.n, aluno: r.aluno, escola: r.escola, turno: r.turno, responsavel: r.responsavel, telefone: r.telefone, status: r.status, erro: r.erro || undefined }));
+    const totais = { ok: rows.filter((r) => r.status === 'ok').length, erro: rows.filter((r) => r.status === 'erro').length, duplicado: rows.filter((r) => r.status === 'duplicado').length, cortadas };
+    if (req.body?.confirmar !== true) return res.json({ confirmado: false, linhas: resumo, totais });
+    // LGPD (menores): uma confirmação do motorista para a lista toda.
+    if (req.body?.autorizacaoResponsaveis !== true) return res.status(400).json({ error: 'Confirme que os responsáveis autorizaram o uso dos dados.' });
+    if (totais.ok === 0) return res.status(400).json({ error: 'Nenhuma linha válida para importar.' });
+    const nomeMot = perfilMotorista(driverId)?.nome ?? '';
+    const criados = rows.filter((r) => r.status === 'ok').map((r) => {
+      const { nova } = criarAlunoConfirmado(driverId, { nomeAluno: r.aluno, escola: r.escola, turno: r.turnoLido!, nomeResp: r.responsavel, tel: r.tel!, endereco: r.endereco, pontoReferencia: r.pontoReferencia });
+      return { paradaId: nova.id, aluno: nova.nome_aluno, responsavel: nova.responsavel_nome, whatsapp: `55${r.tel}`, mensagem: mensagemConvite(nomeMot, nova) };
+    });
+    auditLog('ALUNOS_IMPORTADOS_EM_LOTE', user.email, `${criados.length} aluno(s) importado(s) pelo motorista ${driverId}`);
+    broadcast('NOVA_PARADA_CADASTRADA', {}, driverId);
+    res.json({ confirmado: true, criados, linhas: resumo, totais });
   });
 
   // ---- Pré-cadastro: a família preenche um formulário sem login e dá o aceite; o motorista confere e aprova ----

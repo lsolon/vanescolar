@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { TransportRepository } from '../../services/api';
-import type { Turno, EstadoPreCadastro } from '../../services/api';
+import type { Turno, EstadoPreCadastro, ResultadoImportacao } from '../../services/api';
 import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 
 const campo = 'w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-amber-400 min-h-[44px]';
@@ -213,6 +213,94 @@ export const ConvidarFamilias: React.FC<{ nomeMotorista?: string }> = ({ nomeMot
       </div>
       {erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
       {ok && <p role="status" className="text-[11px] text-emerald-300">{ok}</p>}
+    </section>
+  );
+};
+
+const MODELO_LISTA = 'Aluno\tEscola\tTurno\tResponsável\tWhatsApp\tEndereço\tPonto de referência (opcional)\nMaria Souza\tColégio Exemplo\tManhã\tAna Souza\t(21) 98765-4321\tRua das Flores, 10, Centro\tPortão azul';
+
+/** Importação em lote: o motorista cola a lista (copiada da planilha), confere e importa; depois envia o convite de cada família. */
+export const ImportarAlunos: React.FC<{ onCriados: () => void }> = ({ onCriados }) => {
+  const [aberto, setAberto] = useState(false);
+  const [texto, setTexto] = useState('');
+  const [prev, setPrev] = useState<ResultadoImportacao | null>(null);
+  const [final, setFinal] = useState<ResultadoImportacao | null>(null);
+  const [autorizou, setAutorizou] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const [ocupado, setOcupado] = useState(false);
+  const [copiado, setCopiado] = useState(false);
+
+  const copiarModelo = async () => { try { await navigator.clipboard.writeText(MODELO_LISTA); setCopiado(true); setTimeout(() => setCopiado(false), 2000); } catch { /* sem permissão */ } };
+  const conferir = async () => {
+    setOcupado(true); setErro(null); setPrev(null);
+    try { setPrev(await TransportRepository.importarAlunos(texto, { confirmar: false })); } catch (e) { setErro(e instanceof Error ? e.message : 'Falha.'); } finally { setOcupado(false); }
+  };
+  const importar = async () => {
+    setOcupado(true); setErro(null);
+    try {
+      const r = await TransportRepository.importarAlunos(texto, { confirmar: true, autorizacaoResponsaveis: true });
+      setFinal(r); setPrev(null); setTexto(''); setAutorizou(false); onCriados();
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Falha.'); } finally { setOcupado(false); }
+  };
+  const fechar = () => { setAberto(false); setFinal(null); setPrev(null); setTexto(''); setAutorizou(false); setErro(null); };
+
+  if (!aberto) return (
+    <button type="button" onClick={() => setAberto(true)} className="w-full py-3 rounded-2xl bg-slate-800 border border-slate-700 text-slate-200 text-sm font-bold min-h-[48px] cursor-pointer">Importar vários alunos (colar lista)</button>
+  );
+
+  if (final) return (
+    <section aria-label="Alunos importados" className="bg-emerald-500/10 border border-emerald-400/40 rounded-2xl p-4 space-y-3">
+      <h3 className="text-sm font-bold text-emerald-300">{final.criados?.length ?? 0} aluno(s) importado(s). Envie o convite para cada família.</h3>
+      <ul className="space-y-2">
+        {(final.criados ?? []).map((c) => (
+          <li key={c.paradaId} className="bg-slate-950/70 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
+            <div className="text-xs text-slate-200 min-w-0"><strong>{c.aluno}</strong><div className="text-slate-400 truncate">{c.responsavel}</div></div>
+            <a href={linkWhats(c.whatsapp, c.mensagem)} target="_blank" rel="noreferrer" className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold min-h-[44px] inline-flex items-center shrink-0">WhatsApp</a>
+          </li>
+        ))}
+      </ul>
+      <p className="text-[11px] text-slate-400">Cada mensagem leva o código da família. Depois, defina os horários de cada escola e turno (Ajustes) e marque o ponto de embarque de cada aluno no mapa. O convite também fica no botão "Convite da família" do cartão do aluno.</p>
+      <button type="button" onClick={fechar} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Concluir</button>
+    </section>
+  );
+
+  const cor = { ok: 'text-emerald-300', erro: 'text-rose-300', duplicado: 'text-amber-300' } as const;
+  const nome = { ok: 'OK', erro: 'Erro', duplicado: 'Repetido' } as const;
+  return (
+    <section aria-label="Importar alunos" className="bg-slate-900 border border-amber-400/30 rounded-2xl p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-bold text-amber-200">Importar vários alunos</h3>
+        <button type="button" onClick={fechar} className="text-[11px] text-slate-400 underline cursor-pointer min-h-[36px]">Fechar</button>
+      </div>
+      <p className="text-[11px] text-slate-400">Cole uma linha por aluno, na ordem: <strong>aluno, escola, turno, responsável, WhatsApp, endereço</strong> e, se quiser, ponto de referência. Se copiar de uma planilha, as colunas já vêm separadas por tab; senão, separe com ponto e vírgula. Até 60 alunos por vez.</p>
+      <button type="button" onClick={copiarModelo} className="text-[11px] text-amber-300 underline cursor-pointer min-h-[36px]">{copiado ? 'Modelo copiado! Cole numa planilha.' : 'Copiar modelo para a planilha'}</button>
+      <textarea value={texto} onChange={(e) => { setTexto(e.target.value); setPrev(null); }} rows={7} aria-label="Lista de alunos" maxLength={30000}
+        placeholder="Maria Souza; Colégio Exemplo; Manhã; Ana Souza; (21) 98765-4321; Rua das Flores, 10, Centro" className={`${campo} font-mono text-[11px] min-h-[140px]`} />
+      <button type="button" disabled={ocupado || texto.trim().length < 5} onClick={conferir} className="px-4 py-2 rounded-xl bg-amber-400 text-slate-950 text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50">{ocupado && !prev ? 'Conferindo…' : 'Conferir lista'}</button>
+
+      {prev && (
+        <div className="space-y-2">
+          <p className="text-xs text-slate-200"><span className={cor.ok}>{prev.totais.ok} prontos</span> · <span className={cor.duplicado}>{prev.totais.duplicado} repetidos</span> · <span className={cor.erro}>{prev.totais.erro} com erro</span>{prev.totais.cortadas > 0 ? ` · ${prev.totais.cortadas} linhas além do limite foram ignoradas` : ''}</p>
+          <ul className="space-y-1 max-h-72 overflow-y-auto">
+            {prev.linhas.map((l) => (
+              <li key={l.n} className="bg-slate-950 border border-slate-800 rounded-lg p-2 text-[11px] text-slate-300">
+                <span className={`font-bold ${cor[l.status]}`}>{nome[l.status]}</span> · linha {l.n} · {l.aluno || '—'}{l.escola ? ` · ${l.escola}` : ''}{l.turno ? ` · ${l.turno === 'MANHA' ? 'manhã' : l.turno === 'TARDE' ? 'tarde' : l.turno}` : ''}
+                {l.erro && <div className="text-slate-400">{l.erro}</div>}
+              </li>
+            ))}
+          </ul>
+          {prev.totais.ok > 0 && (
+            <>
+              <label className="flex items-start gap-2 text-[11px] text-slate-300 cursor-pointer">
+                <input type="checkbox" checked={autorizou} onChange={(e) => setAutorizou(e.target.checked)} className="mt-0.5 w-5 h-5 shrink-0" />
+                <span>Os responsáveis autorizaram o uso destes dados (nome, endereço e telefone) só para o transporte escolar.</span>
+              </label>
+              <button type="button" disabled={!autorizou || ocupado} onClick={importar} className="px-4 py-3 rounded-xl bg-emerald-600 text-white text-sm font-black min-h-[48px] cursor-pointer disabled:opacity-50">{ocupado ? 'Importando…' : `Importar ${prev.totais.ok} aluno(s)`}</button>
+            </>
+          )}
+        </div>
+      )}
+      {erro && <p role="alert" className="text-xs text-rose-300">{erro}</p>}
     </section>
   );
 };
