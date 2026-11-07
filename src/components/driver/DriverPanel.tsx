@@ -122,6 +122,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   // Modal de Cadastro de Novo Aluno pelo Motorista
   const [aba, setAba] = useState<'diario' | 'mapa' | 'mensagens' | 'mais' | 'cadastro' | 'mensalidades' | 'financeiro' | 'ajustes'>('diario');
   const [verPendentes, setVerPendentes] = useState(false);
+  const [abertoId, setAbertoId] = useState<number | string | null>(null);
   const [sentidoRota, setSentidoRota] = useState<'IDA' | 'VOLTA'>('IDA');
   // Com a rota em andamento vale o sentido do servidor (sobrevive a recarregar a página); antes de iniciar, o escolhido no seletor.
   const sentidoServidor: 'IDA' | 'VOLTA' | null = isRotaAtiva ? (String((viagemZeroCache?.viagem as any)?.sentido) === 'VOLTA' ? 'VOLTA' : 'IDA') : null;
@@ -450,6 +451,9 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
     if (filtroStatus === 'CONCLUIDOS') return p.status_embarque === 'ENTREGUE' || p.status_embarque === 'AUSENTE';
     return true;
   });
+  /** Em rota: o aluno que o motorista atende agora (primeiro pendente na ordem do sentido). */
+  const proximaPendente = isRotaAtiva && filtroStatus === 'TODOS' ? paradasFiltradas.find((p) => p.status_embarque === 'PENDENTE') : undefined;
+  const feitos = sentidoRota === 'VOLTA' ? entregues + ausentes : embarcados + entregues + ausentes;
 
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-100 font-sans">
@@ -709,73 +713,28 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             {verPendentes && <SolicitacoesPendentes pendentes={pendentes} totalNaVan={paradas.length} onMudou={carregarDadosZeroCache} />}
           </div>
         )}
-        {/* DIÁRIO DE BORDO COM MASCARAMENTO VISUAL RIGOROSO */}
+        {/* HOJE: sentido, progresso e a próxima parada em destaque */}
         <div className="space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <h2 className="text-sm font-bold text-slate-200 tracking-wide flex items-center gap-2">
-                <span>Diário de Bordo da Rota</span>
-                <span className="text-xs font-normal text-slate-400">({paradasFiltradas.length} paradas)</span>
-              </h2>
-              <p
-                data-testid="sentido-diario"
-                className={`mt-1 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-black ${sentidoRota === 'VOLTA' ? 'bg-amber-500/15 text-amber-200 border-amber-400/50' : 'bg-cyan-500/15 text-cyan-200 border-cyan-400/50'}`}
-              >
-                {sentidoRota === 'VOLTA' ? '↩ VOLTA · escola → casa' : '➜ IDA · casa → escola'}
-                <span className="font-semibold opacity-80">{isRotaAtiva ? '· em andamento' : '· rota não iniciada'}</span>
-              </p>
-              <span className="text-[10px] text-slate-400 flex items-center gap-1 mt-0.5">
-                <EyeOff className="w-3 h-3 text-cyan-400" />
-                <span>Endereços completos mascarados (LGPD Menores)</span>
-              </span>
-            </div>
-
-            {/* Ações do Diário de Bordo: Toggle Endereços Dinâmicos, Botão Novo Aluno e Alternador Zero-Cache */}
-            <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
-              {/* TOGGLE SWITCH: Aceitar Endereços Dinâmicos (Regra de Ouro - Controle do Motorista) */}
-              <button
-                onClick={async () => {
-                  try {
-                    const novoVal = !aceitaDinamicos;
-                    setAceitaDinamicos(novoVal);
-                    await TransportRepository.toggleEnderecosDinamicos(viagemZeroCache?.motorista?.id || 1, novoVal);
-                    setMensagemSucesso(`Endereços dinâmicos ${novoVal ? 'ativados' : 'desativados'} para sua van.`);
-                    setTimeout(() => setMensagemSucesso(null), 3500);
-                    carregarDadosZeroCache();
-                  } catch {
-                    setMensagemSucesso('Erro ao alterar permissão de endereços dinâmicos.');
-                    setTimeout(() => setMensagemSucesso(null), 3000);
-                  }
-                }}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                  aceitaDinamicos
-                    ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 shadow-sm shadow-emerald-950/50'
-                    : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200'
-                }`}
-                title="Ligar/Desligar permissão para que pais configurem endereços diferentes por dia da semana"
-              >
-                <span className={`w-3 h-3 rounded-full transition-all ${aceitaDinamicos ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
-                <span>End. Dinâmicos: {aceitaDinamicos ? 'LIGADO' : 'DESLIGADO'}</span>
-              </button>
-
-
-              <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800 text-[11px]">
-                <button
-                  onClick={() => setApenasProximaParada(false)}
-                  className={`px-2 py-0.5 rounded-lg font-medium transition-all ${!apenasProximaParada ? 'bg-amber-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
-                >
-                  Bloco Rota
-                </button>
-                <button
-                  onClick={() => setApenasProximaParada(true)}
-                  className={`px-2 py-0.5 rounded-lg font-medium transition-all ${apenasProximaParada ? 'bg-cyan-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
-                  title="Zero-Cache: Exibe estritamente a próxima parada pendente"
-                >
-                  1x1
-                </button>
-              </div>
-            </div>
+          <div className="flex items-center justify-between gap-2">
+            <p
+              data-testid="sentido-diario"
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-black ${sentidoRota === 'VOLTA' ? 'bg-amber-500/15 text-amber-200 border-amber-400/50' : 'bg-cyan-500/15 text-cyan-200 border-cyan-400/50'}`}
+            >
+              {sentidoRota === 'VOLTA' ? '↩ Volta · escola → casa' : '➜ Ida · casa → escola'}
+              <span className="font-semibold opacity-80">{isRotaAtiva ? '· em andamento' : '· não iniciada'}</span>
+            </p>
+            <span className="text-xs text-slate-400">{paradasFiltradas.length} {paradasFiltradas.length === 1 ? 'parada' : 'paradas'}</span>
           </div>
+
+          {isRotaAtiva && totalAlunos > 0 && (
+            <div aria-label="Progresso da rota">
+              <div className="flex justify-between text-xs text-slate-400 mb-1.5">
+                <span>{feitos} de {totalAlunos} {sentidoRota === 'VOLTA' ? 'entregues' : 'atendidos'}</span>
+                {embarcados > 0 && <span className="text-emerald-300">{embarcados} a bordo</span>}
+              </div>
+              <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden"><div className="h-full rounded-full bg-cyan-400 transition-all" style={{ width: `${Math.round((feitos / totalAlunos) * 100)}%` }} /></div>
+            </div>
+          )}
 
           {carregando && (
             <div className="text-center py-10 text-slate-400 flex flex-col items-center gap-2">
@@ -800,13 +759,19 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           )}
 
           {/* CARDS DOS ALUNOS COM DADOS SENSÍVEIS MASCARADOS */}
+          {!carregando && isRotaAtiva && filtroStatus === 'TODOS' && !proximaPendente && embarcados > 0 && (
+            <div role="status" className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-200">
+              Todos a bordo. {sentidoRota === 'VOLTA' ? 'Toque em "Entregue" ao deixar cada aluno em casa.' : 'Toque em "Entregue" ao chegar na escola.'}
+            </div>
+          )}
+
           {!carregando && paradasFiltradas.map((item) => {
             const isMariaClara = item.aluno_id === 201;
             const isBusy = processandoAcaoId === item.aluno_id;
-
-            return (
+            const aberto = abertoId === item.parada_id;
+            const ehProxima = proximaPendente?.parada_id === item.parada_id;
+            const cartaoCompleto = (
               <div
-                key={item.parada_id}
                 className={`bg-slate-900 rounded-2xl border p-4 transition-all shadow-md ${
                   isMariaClara ? 'border-amber-500/50 ring-1 ring-amber-500/30' : 'border-slate-800 hover:border-slate-700'
                 }`}
@@ -1021,6 +986,62 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                 </div>
               </div>
             );
+            const tel = item.telefone_para_chamada.replace(/\D/g, '');
+            const statusChip = item.status_embarque === 'PENDENTE'
+              ? { t: 'Pendente', c: 'bg-amber-500/10 text-amber-300 border-amber-500/30' }
+              : item.status_embarque === 'EMBARCOU' ? { t: 'A bordo', c: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' }
+              : item.status_embarque === 'ENTREGUE' ? { t: 'Entregue', c: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30' }
+              : { t: 'Ausente', c: 'bg-rose-500/15 text-rose-300 border-rose-500/30' };
+            return (
+              <div key={item.parada_id} className="space-y-2">
+                {ehProxima ? (
+                  <div className="rounded-2xl border-2 border-cyan-400/60 bg-slate-900 p-4" aria-label={`Próxima parada: ${item.nome_aluno_sanitizado}`}>
+                    <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
+                      <span>Próxima parada · #{ordemDoSentido(item)} · {item.hora_prevista}</span>
+                      {sentidoRota === 'IDA' && aguardarAte(item.hora_ida) && <span className="text-amber-300 font-bold">Aguardar até {item.hora_ida}</span>}
+                    </div>
+                    <h3 className="text-xl font-extrabold text-slate-50 mt-1">{item.nome_aluno_sanitizado}</h3>
+                    <p className="text-xs text-cyan-300 flex items-center gap-1 mt-1">
+                      <MapPin className="w-3 h-3 shrink-0" />
+                      <span className="font-mono">{item.endereco_mascarado ? item.endereco_mascarado.replace(/\d+/g, '').replace(/(\.\.\.)\./g, '$1') : 'Endereço Restrito (LGPD)'}</span>
+                    </p>
+                    {item.ponto_referencia_generico && <p className="text-[11px] text-slate-400 mt-0.5">Ref: <strong className="text-slate-300">{item.ponto_referencia_generico}</strong></p>}
+                    {item.tem_localizacao === false && (
+                      <button type="button" onClick={() => { setLocalMarcando(null); setErroLocal(null); setParadaMarcando({ id: item.parada_id, nome: item.nome_aluno_sanitizado }); }}
+                        className="mt-3 w-full px-3 py-2 rounded-xl bg-amber-400/10 text-amber-300 border border-amber-400/30 text-xs font-bold cursor-pointer min-h-[44px]">
+                        Marcar local de embarque
+                      </button>
+                    )}
+                    <button type="button" disabled={isBusy} onClick={() => handleAtualizarStatus(item.aluno_id, 'EMBARCOU', item.nome_aluno_sanitizado)}
+                      className="mt-3 w-full min-h-[56px] rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-base font-extrabold flex items-center justify-center gap-2 active:scale-[0.98] disabled:opacity-50 cursor-pointer">
+                      <UserCheck className="w-5 h-5" /> Embarcou
+                    </button>
+                    <div className="grid grid-cols-3 gap-2 mt-2">
+                      <button type="button" disabled={isBusy} onClick={() => handleAtualizarStatus(item.aluno_id, 'AUSENTE', item.nome_aluno_sanitizado)}
+                        className="min-h-[44px] rounded-xl bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold cursor-pointer disabled:opacity-50">Ausente</button>
+                      <a href={`tel:${tel}`} className="min-h-[44px] rounded-xl bg-slate-800 border border-slate-700 text-emerald-300 text-xs font-bold flex items-center justify-center gap-1"><Phone className="w-3.5 h-3.5" /> Ligar</a>
+                      <button type="button" onClick={() => setAbertoId(aberto ? null : item.parada_id)} aria-expanded={aberto}
+                        className="min-h-[44px] rounded-xl bg-slate-800 border border-slate-700 text-slate-300 text-xs font-bold cursor-pointer">{aberto ? 'Fechar' : 'Detalhes'}</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 rounded-xl bg-slate-900 border border-slate-800 pr-2">
+                    <button type="button" onClick={() => setAbertoId(aberto ? null : item.parada_id)} aria-expanded={aberto}
+                      className="flex-1 min-w-0 flex items-center gap-3 px-3 min-h-[52px] text-left cursor-pointer">
+                      <span className="w-6 h-6 rounded-full bg-slate-800 text-[11px] font-bold text-slate-300 flex items-center justify-center shrink-0">{ordemDoSentido(item)}</span>
+                      <span className="flex-1 min-w-0 truncate text-sm font-bold text-slate-100 flex items-center gap-1.5">{item.status_embarque === 'EMBARCOU' && isRotaAtiva && <UserCheck className="w-4 h-4 text-emerald-400 shrink-0" aria-label="A bordo" />}<span className="truncate">{item.nome_aluno_sanitizado}</span></span>
+                      <span className="text-xs font-mono text-slate-400 shrink-0">{item.hora_prevista}</span>
+                    </button>
+                    {!(item.status_embarque === 'EMBARCOU' && isRotaAtiva) && <span className={`shrink-0 px-2 py-1 rounded-full border text-[11px] font-bold ${statusChip.c}`}>{statusChip.t}</span>}
+                    {item.status_embarque === 'EMBARCOU' && isRotaAtiva && (
+                      <button type="button" disabled={isBusy} onClick={() => handleAtualizarStatus(item.aluno_id, 'ENTREGUE', item.nome_aluno_sanitizado)}
+                        className="shrink-0 px-3 min-h-[44px] rounded-lg bg-indigo-600 text-white text-xs font-bold cursor-pointer disabled:opacity-50">Entregue</button>
+                    )}
+                  </div>
+                )}
+                {aberto && cartaoCompleto}
+              </div>
+            );
           })}
         </div>
           </>
@@ -1064,6 +1085,54 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
         {aba === 'ajustes' && (
           <>
+        <section className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3" aria-label="Opções do diário">
+          <h3 className="text-sm font-bold text-slate-100">Opções do diário</h3>
+          <p className="text-[11px] text-slate-400">Endereços completos ficam sempre mascarados na tela (LGPD de menores).</p>
+            <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+              {/* TOGGLE SWITCH: Aceitar Endereços Dinâmicos (Regra de Ouro - Controle do Motorista) */}
+              <button
+                onClick={async () => {
+                  try {
+                    const novoVal = !aceitaDinamicos;
+                    setAceitaDinamicos(novoVal);
+                    await TransportRepository.toggleEnderecosDinamicos(viagemZeroCache?.motorista?.id || 1, novoVal);
+                    setMensagemSucesso(`Endereços dinâmicos ${novoVal ? 'ativados' : 'desativados'} para sua van.`);
+                    setTimeout(() => setMensagemSucesso(null), 3500);
+                    carregarDadosZeroCache();
+                  } catch {
+                    setMensagemSucesso('Erro ao alterar permissão de endereços dinâmicos.');
+                    setTimeout(() => setMensagemSucesso(null), 3000);
+                  }
+                }}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                  aceitaDinamicos
+                    ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300 shadow-sm shadow-emerald-950/50'
+                    : 'bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200'
+                }`}
+                title="Ligar/Desligar permissão para que pais configurem endereços diferentes por dia da semana"
+              >
+                <span className={`w-3 h-3 rounded-full transition-all ${aceitaDinamicos ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+                <span>End. Dinâmicos: {aceitaDinamicos ? 'LIGADO' : 'DESLIGADO'}</span>
+              </button>
+
+
+              <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800 text-[11px]">
+                <button
+                  onClick={() => setApenasProximaParada(false)}
+                  className={`px-2 py-0.5 rounded-lg font-medium transition-all ${!apenasProximaParada ? 'bg-amber-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
+                >
+                  Bloco Rota
+                </button>
+                <button
+                  onClick={() => setApenasProximaParada(true)}
+                  className={`px-2 py-0.5 rounded-lg font-medium transition-all ${apenasProximaParada ? 'bg-cyan-400 text-slate-950 font-bold' : 'text-slate-400 hover:text-slate-200'}`}
+                  title="Zero-Cache: Exibe estritamente a próxima parada pendente"
+                >
+                  1x1
+                </button>
+              </div>
+            </div>
+        </section>
         <InstalarApp />
         <CodigoMotorista nome={motorista?.nome} />
         <HorariosPorEscola versao={paradas.length} onMudou={carregarDadosZeroCache} />
