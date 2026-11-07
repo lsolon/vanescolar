@@ -11,7 +11,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
-import { createPersistence } from './persistence';
+import { createPersistence, createFirestoreFromEnv } from './persistence';
+import { LogUso, LogArquivo, LogFirestore, emCsv } from './logUso';
 import * as M from './mensalidades';
 import * as F from './financeiro';
 import * as G from './mensagens';
@@ -1111,15 +1112,46 @@ async function startServer() {
     financeiro: financeiroDB,
     mensagens: mensagensDB
   }));
+  let logUso: LogUso | undefined;
   const shutdown = async (signal: string) => {
     console.log(`[VanEscolar Server] ${signal} recebido: salvando estado antes de encerrar...`);
     try { await persistence.flush(); } catch (err: any) { console.error('[Persistência] Falha ao salvar no encerramento:', err?.message || err); }
+    try { await logUso?.flush(); } catch { /* o log nunca impede encerrar */ }
     process.exit(0);
   };
   process.once('SIGTERM', () => shutdown('SIGTERM'));
   process.once('SIGINT', () => shutdown('SIGINT'));
 
   const instanciaId = crypto.randomBytes(3).toString('hex');
+
+  // LOG DE USO (fase de testes): ligado com DEMO_MODE ou MODO_TESTE_SEM_LOGIN; LOG_USO=true/false força. Ver logUso.ts.
+  const LOG_USO_ATIVO = process.env.LOG_USO === 'true' || (process.env.LOG_USO !== 'false' && (DEMO_MODE || MODO_TESTE_SEM_LOGIN));
+  let storeLog = null as ConstructorParameters<typeof LogUso>[2];
+  try {
+    if (LOG_USO_ATIVO && persistence.kind === 'firestore') storeLog = new LogFirestore(await createFirestoreFromEnv());
+    else if (LOG_USO_ATIVO && persistence.kind === 'file') storeLog = new LogArquivo(path.join(process.env.DATA_DIR || path.resolve(process.cwd(), 'data'), 'log-uso.jsonl'));
+  } catch (err: any) { console.error('[LogUso] Sem armazenamento durável, guardando só em memória:', err?.message || err); }
+  logUso = new LogUso(LOG_USO_ATIVO, instanciaId, storeLog);
+  logUso.iniciar();
+  const LOG = logUso;
+  const CAMPOS_LOG_CORPO = ['status', 'sentido', 'turno', 'trecho', 'horaIda', 'horaVolta', 'escolaEntrada', 'escolaSaida', 'entrada', 'saida', 'confirmar', 'remover', 'autorizacaoResponsavel', 'autorizacaoResponsaveis', 'avisoMin', 'estilo', 'aceite', 'aceiteLgpd', 'aceiteRegras', 'papel', 'deslocamento', 'direcao'];
+  /** Troca nomes conhecidos (alunos, responsáveis, usuários), e-mails e números longos por marcadores. */
+  const mascararTexto = (t: unknown): string => {
+    let txt = String(t ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    const nomes = new Set<string>();
+    for (const p of serverState.paradas as any[]) for (const k of ['nome_aluno', 'nome_sanitizado', 'responsavel_nome']) { const v = String(p?.[k] ?? '').trim(); if (v.length >= 3) nomes.add(v); }
+    for (const u of usersDB) { const v = String(u.fullName ?? '').trim(); if (v.length >= 3) nomes.add(v); }
+    for (const n of [...nomes].sort((a, b) => b.length - a.length).slice(0, 500)) txt = txt.replace(new RegExp(n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '[nome]');
+    return txt.replace(/[\w.+-]+@[\w-]+\.[\w.]+/g, '[email]').replace(/\d[\d\s().-]{6,}\d/g, '[número]');
+  };
+  const detalheDoCorpo = (body: any): Record<string, string | number | boolean> => {
+    const det: Record<string, string | number | boolean> = {};
+    if (!body || typeof body !== 'object') return det;
+    for (const k of CAMPOS_LOG_CORPO) { const v = body[k]; if (typeof v === 'boolean' || typeof v === 'number') det[k] = v; else if (typeof v === 'string' && v.length <= 30) det[k] = v; }
+    for (const k of ['texto', 'mensagem', 'observacao', 'motivo']) if (typeof body[k] === 'string') det[`tam_${k}`] = body[k].length; // só o tamanho, nunca o conteúdo
+    for (const k of ['ordem', 'ids']) if (Array.isArray(body[k])) det[`n_${k}`] = body[k].length;
+    return det;
+  };
   const iniciadoEm = new Date().toISOString();
   const app = express();
   app.disable('x-powered-by');
@@ -1165,6 +1197,24 @@ async function startServer() {
     next();
   });
 
+  // Registra toda ação que altera dados e toda falha. Leituras que deram certo (as telas atualizando sozinhas) ficam de fora.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (!LOG.ativo || !req.path.startsWith('/api/') || req.path === '/api/gps' || req.path === '/api/health' || req.path.startsWith('/api/log-uso')) return next();
+    const ini = Date.now();
+    res.on('finish', () => {
+      try {
+        const leitura = req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS';
+        if (leitura && res.statusCode < 400) return;
+        const u = (req as any).user as SessionPayload | undefined;
+        const rota = req.route?.path ? String(req.baseUrl || '') + String(req.route.path) : req.path.replace(/[A-Za-z0-9_-]{16,}/g, ':x').replace(/\/\d+(?=\/|$)/g, '/:n');
+        const det = detalheDoCorpo(req.body);
+        for (const [k, v] of Object.entries(req.params || {})) if (/^\d{1,12}$/.test(String(v))) det[`id_${k}`] = Number(v);
+        LOG.registrar({ origem: 'api', papel: u?.role ?? 'publico', uid: u?.userId, acao: `${req.method} ${rota}`, rota, metodo: req.method, status: res.statusCode, ms: Date.now() - ini, det });
+      } catch { /* o log nunca atrapalha o app */ }
+    });
+    next();
+  });
+
   // Qualquer requisição que altera dados (POST/PUT/PATCH/DELETE) e termina com sucesso agenda uma gravação.
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
@@ -1175,7 +1225,7 @@ async function startServer() {
 
   // Saúde do servidor (não expõe dados): útil para conferir se a persistência está ativa.
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ ok: true, demoMode: DEMO_MODE, modoTeste: MODO_TESTE_SEM_LOGIN, persistence: persistence.kind, instancia: instanciaId, iniciadoEm, ...(persistence.reason ? { motivo: persistence.reason } : {}) });
+    res.json({ ok: true, demoMode: DEMO_MODE, modoTeste: MODO_TESTE_SEM_LOGIN, logUso: LOG.ativo, persistence: persistence.kind, instancia: instanciaId, iniciadoEm, ...(persistence.reason ? { motivo: persistence.reason } : {}) });
   });
 
   app.use((_req: Request, res: Response, next: NextFunction) => {
@@ -1572,6 +1622,44 @@ async function startServer() {
   // Apaga TODOS os dados (alunos, paradas, motoristas, responsáveis, convites, mensagens). Mantém só os admins.
   // Cópia de segurança baixável (o plano gratuito do Firestore não faz backup automático).
   // Por padrão NÃO inclui os hashes de senha; com ?senhas=1 inclui (guarde o arquivo com cuidado: tem dados de crianças).
+  // Toques na tela enviados pelo próprio app (só com o log ligado e com login). O texto passa pelo mascaramento de nomes.
+  app.post('/api/log-uso/eventos', authenticate, rateLimiter(120, 60000), (req: Request, res: Response) => {
+    if (!LOG.ativo) return res.status(204).end();
+    const u = (req as any).user as SessionPayload;
+    const lista = Array.isArray(req.body?.eventos) ? req.body.eventos.slice(0, 40) : [];
+    const ACOES = ['clique', 'campo', 'erro', 'tela', 'visivel', 'abriu'];
+    for (const e of lista) {
+      if (!e || typeof e !== 'object') continue;
+      const det: Record<string, string | number | boolean> = {};
+      if (e.rotulo) det.rotulo = mascararTexto(e.rotulo);
+      if (e.aba) det.aba = mascararTexto(e.aba).slice(0, 40);
+      for (const k of ['tag', 'tipo', 'id']) if (typeof e[k] === 'string' && e[k]) det[k] = String(e[k]).slice(0, 40);
+      if (typeof e.tam === 'number') det.tam = Math.max(0, Math.min(100000, Math.round(e.tam)));
+      if (typeof e.msg === 'string') det.msg = mascararTexto(e.msg);
+      LOG.registrar({ origem: 'tela', papel: u.role, uid: u.userId, sessao: typeof e.sessao === 'string' ? e.sessao.slice(0, 20) : undefined, acao: ACOES.includes(e.acao) ? e.acao : 'outro', det });
+    }
+    res.status(204).end();
+  });
+
+  // Admin baixa o log (CSV para abrir na planilha, ou JSON) e limpa ao fim da fase de testes.
+  app.get('/api/admin/log-uso', authenticate, requireAdmin, rateLimiter(10, 60000), async (req: Request, res: Response) => {
+    try {
+      const eventos = await LOG.exportar();
+      const nome = `vanescolar-log-uso-${new Date().toISOString().slice(0, 10)}`;
+      if (req.query.formato === 'json') { res.setHeader('Content-Disposition', `attachment; filename="${nome}.json"`); return res.json({ ativo: LOG.ativo, total: eventos.length, eventos }); }
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${nome}.csv"`);
+      res.send(emCsv(eventos));
+    } catch (err: any) {
+      res.status(500).json({ error: 'Não foi possível ler o log de uso.' });
+    }
+  });
+  app.delete('/api/admin/log-uso', authenticate, requireAdmin, rateLimiter(5, 60000), async (req: Request, res: Response) => {
+    await LOG.limpar();
+    auditLog('LOG_USO_LIMPO', ((req as any).user as SessionPayload).email, 'Log de uso apagado pelo admin');
+    res.json({ sucesso: true });
+  });
+
   app.get('/api/admin/backup', authenticate, requireAdmin, rateLimiter(5, 60000), (req: Request, res: Response) => {
     const admin = (req as any).user as SessionPayload;
     const comSenhas = req.query.senhas === '1';
@@ -2455,6 +2543,8 @@ async function startServer() {
     res.json({
       sucesso: true, sentido, modo,
       limite: deMin(limite),
+      // Nos dois sentidos a van chega à escola FOLGA_CHEGADA_MIN antes (entrada na ida, saída na volta).
+      chegarEscolaAte: deMin(paraMin((sentido === 'IDA' ? entrada : saida) as string) - FOLGA_CHEGADA_MIN),
       paradas: r.ordem.map((i) => ({ id: alunos[i].id, nome: plano[i].nome, horario: deMin(r.horarios[i]), fixo: plano[i].ancoraMin !== null })),
       avisos: r.avisos.map((a) => a.texto)
     });
@@ -3054,8 +3144,8 @@ async function startServer() {
     if (km > DISTANCIA_MAX_KM) return res.status(409).json({ error: 'Sua posição está muito longe do ponto. Confira o GPS.' });
     const minutos = minutosPorKm(km, 0, 0, fatorRuasDe(driverId, sentido));
     const horarios = horariosDaParada(primeira);
-    // Volta: a van deve estar na escola na hora da saída. Ida: no ponto do primeiro aluno no horário combinado.
-    const alvo = sentido === 'IDA' ? horarios.hora_ida : (lerHorario(primeira.escola_saida) ? primeira.escola_saida : null);
+    // Volta: a van deve estar na escola FOLGA_CHEGADA_MIN antes da saída. Ida: no ponto do primeiro aluno no horário combinado.
+    const alvo = sentido === 'IDA' ? horarios.hora_ida : (lerHorario(primeira.escola_saida) ? deMin(paraMin(primeira.escola_saida) - FOLGA_CHEGADA_MIN) : null);
     const agora = agoraMinutosSP();
     const base = { sentido, destino: nomeDestino, distanciaKm: Math.round(km * 10) / 10, minutosAteLa: minutos, margemMin: MARGEM_SAIDA_MIN, agora: deMin(agora) };
     if (!alvo) return res.json({ ...base, horarioAlvo: null, sairAs: null, situacao: 'sem_horario' });
