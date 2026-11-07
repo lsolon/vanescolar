@@ -1779,3 +1779,45 @@ test('Importação em lote: confere a lista, aponta erros e repetidos, exige a a
   assert.equal(g.data.linhas.length, 60);
   assert.equal(g.data.totais.cortadas, 5);
 });
+
+test('Log de uso: registra ações e toques com detalhe, sem nome, endereço, telefone, coordenadas nem texto de mensagem', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'LogUso');
+  const saude = (await jsonReq('GET', '/api/health')).data;
+  assert.equal(saude.logUso, true);
+  const base = { endereco: 'Rua Secreta, 999', pontoReferencia: '', escola: 'Escola LG', nomeResponsavel: 'Dona Segredilda', telefoneResponsavel: '21977776666' };
+  const A = (await jsonReq('POST', '/api/paradas/nova', mot, { ...base, nomeAluno: 'Fulaninho Reservado', latitude: -22.123456, longitude: -43.654321 })).data;
+  const id = A.novaParada.id;
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
+  await jsonReq('POST', `/api/paradas/${id}/status`, mot, { status: 'AUSENTE' });
+  await jsonReq('POST', `/api/paradas/${id}/status`, mot, { status: 'PENDENTE' });
+  await jsonReq('POST', `/api/paradas/${id}/status`, mot, { status: 'INVALIDO' }); // falha também é registrada
+  // toques da tela: o servidor mascara nomes e números
+  const ev = await jsonReq('POST', '/api/log-uso/eventos', mot, { eventos: [
+    { acao: 'clique', tag: 'button', rotulo: 'Subir Fulaninho Reservado', sessao: 'abc123' },
+    { acao: 'clique', tag: 'button', rotulo: 'Ligar 21977776666' },
+    { acao: 'campo', tag: 'input', tipo: 'text', id: 'x', tam: 12 },
+    { acao: 'hackear', rotulo: 'x' }
+  ] });
+  assert.equal(ev.status, 204);
+  assert.equal((await jsonReq('POST', '/api/log-uso/eventos', undefined, { eventos: [] })).status, 401);
+  const lista = (await jsonReq('GET', '/api/admin/log-uso?formato=json', adm)).data;
+  const txt = JSON.stringify(lista.eventos);
+  const meus = lista.eventos.filter((e: any) => e.det?.id_id === id);
+  const st = meus.filter((e: any) => e.rota === '/api/paradas/:id/status');
+  assert.equal(st.length, 3);
+  assert.deepEqual(st.map((e: any) => [e.det.status, e.status]), [['AUSENTE', 200], ['PENDENTE', 200], ['INVALIDO', 400]]);
+  assert.ok(st.every((e: any) => e.papel === 'motorista' && e.origem === 'api' && e.ms >= 0));
+  assert.ok(lista.eventos.some((e: any) => e.acao === 'clique' && e.det.rotulo === 'Subir [nome]' && e.sessao === 'abc123'));
+  assert.ok(lista.eventos.some((e: any) => e.acao === 'clique' && e.det.rotulo === 'Ligar [número]'));
+  assert.ok(lista.eventos.some((e: any) => e.acao === 'campo' && e.det.tam === 12));
+  assert.ok(lista.eventos.some((e: any) => e.acao === 'outro'));
+  for (const proibido of ['Fulaninho', 'Reservado', 'Segredilda', 'Rua Secreta', '21977776666', '-22.123456', '-43.654321']) {
+    assert.ok(!txt.includes(proibido), `o log não pode conter "${proibido}"`);
+  }
+  // só o admin baixa ou apaga; csv abre em planilha
+  assert.equal((await jsonReq('GET', '/api/admin/log-uso', mot)).status, 403);
+  const csv = await fetch(`${BASE}/api/admin/log-uso`, { headers: { Authorization: `Bearer ${adm}` } });
+  assert.match(csv.headers.get('content-type') || '', /text\/csv/);
+  assert.match(await csv.text(), /horario,origem,papel,usuario,sessao,acao,metodo,rota,status,ms,detalhes/);
+});

@@ -598,6 +598,44 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
                   </button>
                 </div>
 
+                <div className="p-6 bg-slate-900 border border-slate-700 rounded-3xl space-y-3">
+                  <h3 className="text-sm font-bold text-slate-100">Log de uso (fase de testes)</h3>
+                  <p className="text-xs text-slate-400">Lista, em ordem, o que foi feito no app: toques, ações, horários e erros. Não guarda nome, endereço, telefone, localização nem texto de mensagem. Só funciona com o modo de teste ligado (ou LOG_USO=true). Apague ao fim dos testes.</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          const blob = await TransportRepository.baixarLogUso('csv');
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = `vanescolar-log-uso-${new Date().toISOString().slice(0, 10)}.csv`;
+                          a.click();
+                          URL.revokeObjectURL(url);
+                          setMsgLimpar({ ok: true, texto: 'Log de uso baixado.' });
+                        } catch (err: any) {
+                          setMsgLimpar({ ok: false, texto: err?.message || 'Falha ao baixar o log.' });
+                        }
+                      }}
+                      className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-100 text-sm font-bold cursor-pointer"
+                    >
+                      Baixar log (planilha)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!window.confirm('Apagar todo o log de uso? Baixe antes se quiser guardar.')) return;
+                        try { await TransportRepository.limparLogUso(); setMsgLimpar({ ok: true, texto: 'Log de uso apagado.' }); }
+                        catch (err: any) { setMsgLimpar({ ok: false, texto: err?.message || 'Falha ao apagar o log.' }); }
+                      }}
+                      className="px-4 py-2.5 rounded-xl bg-slate-800 text-rose-300 text-sm font-bold cursor-pointer"
+                    >
+                      Apagar log
+                    </button>
+                  </div>
+                </div>
+
                 <div className="p-6 bg-rose-950/30 border border-rose-500/40 rounded-3xl space-y-3">
                   <h3 className="text-sm font-bold text-rose-300">Limpar todos os dados</h3>
                   <p className="text-xs text-slate-400">Apaga alunos, paradas, motoristas, responsáveis e convites. Só os acessos de administrador são mantidos. Não tem volta.</p>
