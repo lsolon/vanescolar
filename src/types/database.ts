@@ -58,6 +58,8 @@ export interface Motorista {
   foto_url: string;
   veiculo_modelo: string;
   veiculo_placa: string;
+  /** Bairro/região do motorista (cabeçalho "Van do João • Freguesia"); opcional */
+  bairro?: string;
   veiculo_capacidade: number;
   status_operacional: 'ATIVO' | 'INATIVO' | 'EM_ROTA';
   aceita_enderecos_dinamicos: boolean; // Flag que define se este motorista permite endereços por dia da semana

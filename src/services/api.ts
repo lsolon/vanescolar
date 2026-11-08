@@ -2063,6 +2063,19 @@ export const TransportRepository = {
     return d as PainelManutencao;
   },
 
+  /** Público (sem login): nome e bairro do motorista a partir do link ?m=MOT-… */
+  async abrirVanDoMotorista(codigo: string): Promise<{ motorista: string; bairro: string }> {
+    const res = await fetch(`${getBaseUrl()}/api/van/${encodeURIComponent(codigo)}`);
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Link da van não encontrado.');
+    return d;
+  },
+  async salvarBairroMotorista(bairro: string): Promise<string> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/bairro`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ bairro }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível salvar o bairro.');
+    return d.bairro as string;
+  },
   async obterCodigoMotorista(): Promise<string> {
     const res = await fetch(`${getBaseUrl()}/api/motorista/codigo`, { headers: getAuthHeaders() });
     const d = await res.json().catch(() => ({}));

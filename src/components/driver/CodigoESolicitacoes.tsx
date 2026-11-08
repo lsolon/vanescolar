@@ -21,8 +21,10 @@ export const CodigoMotorista: React.FC<{ nome?: string }> = ({ nome }) => {
     if (!codigo) return;
     try { await navigator.clipboard.writeText(codigo); setCopiado(true); setTimeout(() => setCopiado(false), 2000); } catch {}
   };
+  // O link ?m= abre o app já com o nome do motorista e o código preenchido no cadastro do filho.
+  const link = codigo ? `${window.location.origin}/?m=${codigo}` : '';
   const texto = codigo
-    ? `Olá! Sou ${nome || 'o motorista'} do transporte escolar. Baixe o VanEscolar, crie sua conta e, ao cadastrar seu filho, use o código do motorista: ${codigo}`
+    ? `Olá! Sou ${nome || 'o motorista'} do transporte escolar. Abra o VanEscolar por este link e crie sua conta: ${link}\nAo cadastrar seu filho, o código do motorista já vem preenchido (${codigo}).`
     : '';
 
   return (
@@ -42,8 +44,37 @@ export const CodigoMotorista: React.FC<{ nome?: string }> = ({ nome }) => {
         </a>
         <button type="button" onClick={trocar} className="text-[11px] text-slate-400 underline cursor-pointer min-h-[44px]">Trocar código</button>
       </div>
+      {codigo && <p className="text-[11px] text-slate-500 break-all">Link para as famílias: <span className="select-all text-slate-300">{link}</span></p>}
       {erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
     </section>
+  );
+};
+
+/** Bairro que aparece no cabeçalho ("Van do João • Freguesia") para o motorista e para as famílias. */
+export const BairroDoMotorista: React.FC<{ inicial?: string; nome?: string; onSalvo?: (b: string) => void }> = ({ inicial = '', nome, onSalvo }) => {
+  const [bairro, setBairro] = useState(inicial);
+  const [msg, setMsg] = useState<{ ok: boolean; t: string } | null>(null);
+  const [salvando, setSalvando] = useState(false);
+  useEffect(() => { setBairro(inicial); }, [inicial]);
+  const salvar = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSalvando(true); setMsg(null);
+    try {
+      const b = await TransportRepository.salvarBairroMotorista(bairro);
+      setBairro(b); onSalvo?.(b); setMsg({ ok: true, t: 'Salvo.' });
+    } catch (err: any) { setMsg({ ok: false, t: err.message }); } finally { setSalvando(false); }
+  };
+  const primeiro = (nome || '').trim().split(/\s+/)[0];
+  return (
+    <form onSubmit={salvar} aria-label="Bairro do cabeçalho" className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-2">
+      <h3 className="text-xs font-bold text-amber-300">Bairro no cabeçalho</h3>
+      <p className="text-[11px] text-slate-400">Aparece para você e para as famílias{primeiro ? `: "Van do ${primeiro}${bairro.trim() ? ` • ${bairro.trim()}` : ''}"` : ''}. Pode deixar em branco.</p>
+      <div className="flex items-center gap-2">
+        <input value={bairro} onChange={(e) => setBairro(e.target.value)} maxLength={40} placeholder="Ex.: Freguesia" aria-label="Bairro" className="flex-1 min-w-0 px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-amber-400 min-h-[44px]" />
+        <button type="submit" disabled={salvando} className="px-3 py-2 rounded-xl bg-amber-400 text-slate-950 text-xs font-black min-h-[44px] cursor-pointer disabled:opacity-50">Salvar</button>
+      </div>
+      {msg && <p role={msg.ok ? 'status' : 'alert'} className={`text-[11px] ${msg.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{msg.t}</p>}
+    </form>
   );
 };
 

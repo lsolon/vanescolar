@@ -143,6 +143,8 @@ interface UserRecord {
   motoristasVinculados?: number[];
   veiculoModelo?: string;
   veiculoPlaca?: string;
+  /** Motorista: bairro/região que ele atende (aparece no cabeçalho: "Van do João • Freguesia"). Dado público e opcional. */
+  bairro?: string;
   /** Motorista: módulos (mensalidades, financeiro...) que ele ligou ou desligou. Ausente = padrões de modulos.ts */
   modulos?: Record<string, boolean>;
   /** Motorista: chave Pix e nome/cidade do recebedor, usados só pelo módulo "pagamento-pix". A chave nunca vai para o log. */
@@ -543,6 +545,7 @@ function perfilMotorista(driverId: number) {
     telefone: rec.whatsapp || rec.phone || '',
     veiculo_modelo: rec.veiculoModelo || 'Van escolar',
     veiculo_placa: rec.veiculoPlaca || '',
+    bairro: rec.bairro || '',
     capacidade_alunos: rec.capacidade || 16,
     horarios: rec.horarios || ['Manhã', 'Tarde'],
     aceita_enderecos_dinamicos: (rec as any).aceita_enderecos_dinamicos ?? false,
@@ -1900,6 +1903,25 @@ async function startServer() {
     if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
     if (!rec.codigoMotorista) { rec.codigoMotorista = novoCodigoMotorista(); persistence.scheduleSave(); }
     res.json({ codigo: rec.codigoMotorista });
+  });
+
+  // Bairro/região do motorista: aparece no cabeçalho ("Van do João • Freguesia"). Texto curto, sem links nem símbolos.
+  app.put('/api/motorista/bairro', authenticate, requireDriver, rateLimiter(20, 60000), (req: Request, res: Response) => {
+    const rec = usersDB.find((u) => u.id === ((req as any).user as SessionPayload).userId);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const b = String(req.body?.bairro ?? '').replace(/[^\p{L}\p{N} .,'()\-]/gu, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (b) rec.bairro = b; else delete rec.bairro;
+    persistence.scheduleSave();
+    auditLog('BAIRRO_MOTORISTA_ALTERADO', rec.email, 'Bairro do cabeçalho atualizado');
+    res.json({ bairro: rec.bairro ?? '' });
+  });
+
+  // Público (sem login): o link ?m=MOT-… abre o app com o nome do motorista. Só primeiro nome e bairro; resposta igual para código inexistente.
+  app.get('/api/van/:codigo', rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const cod = String(req.params.codigo ?? '').trim().toUpperCase();
+    const mot = /^MOT-[0-9A-F]{6}$/.test(cod) ? usersDB.find((u) => u.role === 'motorista' && u.codigoMotorista === cod) : undefined;
+    if (!mot) return res.status(404).json({ error: 'Link da van não encontrado.' });
+    res.json({ motorista: String(mot.fullName ?? '').trim().split(/\s+/)[0] || '', bairro: mot.bairro ?? '' });
   });
 
   // ==========================================================================
@@ -3364,10 +3386,17 @@ async function startServer() {
     if (d.length >= 12 && d.startsWith('55')) d = d.slice(2);
     return d.length === 10 || d.length === 11 ? d : null;
   };
-  const mensagemConvite = (motoristaNome: string, p: any) =>
+  /** Link que abre o app já personalizado com o nome do motorista (?m=MOT-…). Sem código, cai no endereço simples. */
+  const linkDaVan = (driverId: number) => {
+    const rec = usersDB.find((u) => u.id === driverId);
+    if (rec && !rec.codigoMotorista) { rec.codigoMotorista = novoCodigoMotorista(); persistence.scheduleSave(); }
+    const cod = rec?.codigoMotorista;
+    return cod ? `${APP_URL_PUBLICA}/?m=${encodeURIComponent(cod)}` : APP_URL_PUBLICA;
+  };
+  const mensagemConvite = (motoristaNome: string, p: any, driverId?: number) =>
     `Olá, ${primeiroNome(p.responsavel_nome) || 'tudo bem'}! Aqui é ${primeiroNome(motoristaNome) || 'o motorista'} do transporte escolar. ` +
     `Cadastrei ${primeiroNome(p.nome_aluno)} no VanEscolar para você acompanhar a van pelo celular.\n\n` +
-    `1) Abra ${APP_URL_PUBLICA}\n2) Crie a sua conta\n3) Digite este código para ver ${primeiroNome(p.nome_aluno)}: ${p.codigo_vinculo}\n\n` +
+    `1) Abra ${driverId != null ? linkDaVan(driverId) : APP_URL_PUBLICA}\n2) Crie a sua conta\n3) Digite este código para ver ${primeiroNome(p.nome_aluno)}: ${p.codigo_vinculo}\n\n` +
     `Qualquer dúvida, é só me chamar.`;
 
   /** Cria o aluno já confirmado na van (cadastro feito pelo motorista), no fim das rotas de ida e volta. */
@@ -3442,7 +3471,7 @@ async function startServer() {
       alunoId: nova.id_aluno,
       codigoVinculo: nova.codigo_vinculo,
       whatsapp: `55${tel}`,
-      mensagem: mensagemConvite(nomeMot, nova),
+      mensagem: mensagemConvite(nomeMot, nova, driverId),
       horarioHerdado: herdou,
       semHorarioDaEscola: !(nova.escola_entrada && nova.escola_saida),
       semPontoNoMapa: !local
@@ -3547,7 +3576,7 @@ async function startServer() {
     const nomeMot = perfilMotorista(driverId)?.nome ?? '';
     const criados = rows.filter((r) => r.status === 'ok').map((r) => {
       const { nova } = criarAlunoConfirmado(driverId, { nomeAluno: r.aluno, escola: r.escola, turno: r.turnoLido!, nomeResp: r.responsavel, tel: r.tel!, endereco: r.endereco, pontoReferencia: r.pontoReferencia });
-      return { paradaId: nova.id, aluno: nova.nome_aluno, responsavel: nova.responsavel_nome, whatsapp: `55${r.tel}`, mensagem: mensagemConvite(nomeMot, nova) };
+      return { paradaId: nova.id, aluno: nova.nome_aluno, responsavel: nova.responsavel_nome, whatsapp: `55${r.tel}`, mensagem: mensagemConvite(nomeMot, nova, driverId) };
     });
     auditLog('ALUNOS_IMPORTADOS_EM_LOTE', user.email, `${criados.length} aluno(s) importado(s) pelo motorista ${driverId}`);
     broadcast('NOVA_PARADA_CADASTRADA', {}, driverId);
@@ -3727,7 +3756,7 @@ async function startServer() {
     res.json({
       disponivel: true,
       codigoVinculo: p.codigo_vinculo,
-      mensagem: mensagemConvite(perfilMotorista(driverId)?.nome ?? '', p),
+      mensagem: mensagemConvite(perfilMotorista(driverId)?.nome ?? '', p, driverId),
       ...(tel ? { whatsapp: `55${tel}` } : {})
     });
   });

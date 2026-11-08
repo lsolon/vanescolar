@@ -72,7 +72,8 @@ import { LiveMap } from '../shared/LiveMap';
 import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 import { MeuIdAcesso } from '../shared/MeuIdAcesso';
 import { CampoHora } from '../shared/CampoHora';
-import { CodigoMotorista, SolicitacoesPendentes } from './CodigoESolicitacoes';
+import { CodigoMotorista, BairroDoMotorista, SolicitacoesPendentes } from './CodigoESolicitacoes';
+import { salvarVan, rotuloDaVan } from '../../services/vanPersonalizada';
 import { QuandoSair } from './QuandoSair';
 import { NovoAlunoMotorista, ConviteFamilia, ConvidarFamilias, ImportarAlunos } from './NovoAluno';
 import { EscolasDoMotorista, HorariosPorEscola, RotasIdaVolta } from './RotaEEscolas';
@@ -430,6 +431,10 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const pendentes = todasParadas.filter((p) => p.vinculo === 'PENDENTE');
   const paradas = todasParadas.filter((p) => p.vinculo !== 'PENDENTE' && p.vinculo !== 'RECUSADO');
   const motorista = viagemZeroCache?.motorista;
+  // Cabeçalho personalizado: "Van do João • Freguesia". O aparelho lembra só o primeiro nome e o bairro (tela inicial).
+  const primeiroNomeMot = (motorista?.nome || '').trim().split(/\s+/)[0] || '';
+  const rotuloVan = rotuloDaVan({ nome: primeiroNomeMot, bairro: motorista?.bairro });
+  useEffect(() => { if (primeiroNomeMot) salvarVan({ nome: primeiroNomeMot, bairro: motorista?.bairro || '' }); }, [primeiroNomeMot, motorista?.bairro]);
   const totalAlunos = paradas.length;
   const embarcados = paradas.filter((p) => p.status_embarque === 'EMBARCOU').length;
   const entregues = paradas.filter((p) => p.status_embarque === 'ENTREGUE').length;
@@ -494,7 +499,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
           </div>
           <div className="min-w-0 flex-1">
-            <h1 className="text-sm font-bold text-slate-100 leading-tight truncate">{motorista?.nome || "Motorista"}</h1>
+            <h1 className="text-sm font-bold text-slate-100 leading-tight truncate" title={motorista?.nome || undefined}>{rotuloVan || "Motorista"}</h1>
             <p className="text-[11px] text-slate-400 flex items-center gap-1.5 truncate">
               <Bus className="w-3 h-3 text-amber-400 shrink-0" />
               <span className="truncate">{motorista?.veiculo_modelo || "Van Escolar"}</span>
@@ -1124,6 +1129,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         </section>
         <InstalarApp />
         <CodigoMotorista nome={motorista?.nome} />
+        <BairroDoMotorista inicial={motorista?.bairro} nome={motorista?.nome} onSalvo={carregarDadosZeroCache} />
         <HorariosPorEscola versao={paradas.length} onMudou={carregarDadosZeroCache} />
         <EscolasDoMotorista versao={paradas.length} />
         <RotasIdaVolta sentidoAtivo={sentidoRota} versao={paradas.length} onAplicado={carregarDadosZeroCache} />

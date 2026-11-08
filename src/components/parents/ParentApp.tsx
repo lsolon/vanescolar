@@ -54,6 +54,7 @@ import {
 } from 'lucide-react';
 import { LiveMap } from '../shared/LiveMap';
 import { GuiaPrimeiroAcesso, useGuiaPrimeiroAcesso } from '../shared/GuiaPrimeiroAcesso';
+import { rotuloDaVan } from '../../services/vanPersonalizada';
 
 interface ParentAppProps {
   coordenadas: GPSCoordinate;
@@ -300,6 +301,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
   const { aluno, responsavel, motorista, parada } = dados;
   const primeiroNomeAluno = aluno.nome?.split(' ')[0] || 'O aluno';
   const primeiroNomeMotorista = motorista?.nome?.split(' ')[0] || 'O motorista';
+  const rotuloVan = rotuloDaVan({ nome: motorista?.nome?.trim().split(/\s+/)[0] || '', bairro: motorista?.bairro });
   const nomeEscola = aluno.escola_destino || 'a escola';
 
   // Status humanizado
@@ -342,6 +344,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
     <div className="flex flex-col h-full bg-slate-950 text-slate-100 font-sans">
       {/* CABEÇALHO DO APP DOS PAIS */}
       <header className="bg-slate-900 border-b border-slate-800 p-4 sticky top-0 z-30 shadow-md">
+        {rotuloVan && <p className="text-[11px] font-bold text-amber-300 mb-2 truncate">🚐 {rotuloVan}</p>}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="relative">
