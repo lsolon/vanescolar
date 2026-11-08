@@ -587,6 +587,8 @@ export interface LinhaMensalidadeMotorista {
   pago_em: string | null; valor_pago: number | null; forma: string | null; meses_em_atraso: number;
   /** Quando o responsável avisou que pagou pelo Pix (aguardando confirmação do motorista); null se não avisou. */
   aviso_em?: string | null;
+  /** Chave da família (mesmo responsável); filhos do mesmo responsável compartilham o valor. */
+  familia?: string;
 }
 export type TipoChavePix = 'CPF' | 'CNPJ' | 'CELULAR' | 'EMAIL' | 'ALEATORIA';
 export interface ConfigPix { tipo: TipoChavePix; chave: string; nome: string; cidade: string }

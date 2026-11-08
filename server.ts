@@ -2330,6 +2330,13 @@ async function startServer() {
   const alunosCobrancaDe = (driverId: number) =>
     serverState.paradas.filter((p: any) => donoDaParada(p) === driverId && confirmada(p));
 
+  // Chave da família (mesmo responsável): conta vinculada; senão o telefone; senão o próprio aluno.
+  const chaveFamilia = (p: any): string => {
+    if (p.vinculado_usuario_id !== undefined && p.vinculado_usuario_id !== null) return `r${p.vinculado_usuario_id}`;
+    const tel = String(p.responsavel_telefone ?? '').replace(/\D/g, '');
+    return tel.length >= 8 ? `t${tel}` : `a${p.id_aluno}`;
+  };
+
   app.get('/api/motorista/mensalidades', authenticate, requireDriver, (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
     const driverId = driverIdFor(user) as number;
@@ -2340,6 +2347,7 @@ async function startServer() {
       ...M.linhaDoAluno(mensalidadesDB, driverId, p.id_aluno, mes, hoje),
       aviso_em: M.avisoDe(mensalidadesDB, driverId, p.id_aluno, mes)?.avisado_em ?? null,
       aluno: p.nome_sanitizado,
+      familia: chaveFamilia(p),
       responsavel_nome: p.responsavel_nome ?? '',
       whatsapp: String(p.responsavel_telefone ?? '').replace(/\D/g, '')
     }));
@@ -2356,7 +2364,7 @@ async function startServer() {
       const p: any = base.find((x: any) => x.id_aluno === a.id_aluno);
       const cfg = mensalidadesDB.configs[M.chaveConfig(driverId, a.id_aluno)];
       if (!p || !cfg) continue;
-      const chave = p.vinculado_usuario_id !== undefined && p.vinculado_usuario_id !== null ? `r${p.vinculado_usuario_id}` : `a${a.id_aluno}`;
+      const chave = chaveFamilia(p);
       const g: GrupoAviso = grupos.get(chave) ?? { familia: chave, responsavel_nome: p.responsavel_nome ?? '', total: 0, itens: [] };
       g.itens.push({ id_aluno: a.id_aluno, aluno: p.nome_sanitizado, mes: a.mes, valor: cfg.valor, avisado_em: a.avisado_em });
       grupos.set(chave, g);
