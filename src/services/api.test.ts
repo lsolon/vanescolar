@@ -2127,3 +2127,158 @@ test('Manutenção: cada motorista cuida dos seus serviços, o km vem dos abaste
   assert.ok(r.status === 401 || r.status === 403, 'responsável não vê a manutenção do motorista');
   assert.equal((await jsonReq('POST', '/api/motorista/manutencao', resp, { nome: 'Óleo', intervalo_km: 1000 })).status === 200, false);
 });
+
+// ---------------------------------------------------------------------------
+// PAGAMENTO POR PIX (módulo em teste): só existe para e-mails liberados em PIX_BETA_EMAILS no servidor.
+// Para rodar o fluxo completo, suba o servidor de teste com PIX_BETA_EMAILS=pix_beta@teste.com
+// ---------------------------------------------------------------------------
+const PIX_BETA_EMAIL = 'pix_beta@teste.com';
+async function motoristaComEmail(adminToken: string, nome: string, email: string) {
+  const conv = await jsonReq('POST', '/api/admin/convites-motorista', adminToken, { nota: nome });
+  const reg = await jsonReq('POST', '/api/auth/register-motorista', undefined, {
+    fullName: nome, email, password: 'senhaSegura123!', phone: '21999990000',
+    vehicleModel: 'Van', vehiclePlate: 'AAA-0000', invitationCode: conv.data.invitation.code, lgpdConsent: true
+  });
+  if (reg.data?.token) return reg.data.token as string;
+  const login = await jsonReq('POST', '/api/auth/login-motorista', undefined, { email, password: 'senhaSegura123!' });
+  assert.ok(login.data?.token, `login de ${email} deve devolver token`);
+  return login.data.token as string;
+}
+
+test('Pix: módulo restrito é invisível e inoperante para motorista não liberado; responsável não vê QR', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const a = await novoMotorista(adm, 'PixNaoLiberado');
+  const mods = (await jsonReq('GET', '/api/motorista/modulos', a)).data.modulos as any[];
+  assert.equal(mods.some((m) => m.chave === 'pagamento-pix'), false, 'não aparece na lista');
+  assert.equal(JSON.stringify(mods).includes('restrito'), false, 'a tela não recebe o detalhe interno');
+  assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'pagamento-pix', ativo: true })).status, 400, 'não dá para ligar');
+  const pix = await jsonReq('GET', '/api/motorista/pix', a);
+  assert.equal(pix.status, 200);
+  assert.deepEqual(pix.data, { ativo: false, config: null });
+  assert.equal((await jsonReq('PUT', '/api/motorista/pix', a, { tipo: 'EMAIL', chave: 'a@b.com', nome: 'Fulano', cidade: 'Rio' })).status, 403);
+  assert.equal((await jsonReq('DELETE', '/api/motorista/pix', a)).status, 403);
+
+  const aluno = (await jsonReq('POST', '/api/paradas/nova', a, {
+    nomeAluno: 'Aluno SemPix', endereco: 'Rua P, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777'
+  })).data;
+  const idAluno = aluno.novaParada.id_aluno;
+  await jsonReq('PUT', `/api/motorista/mensalidades/${idAluno}/config`, a, { valor: '350,00', vencimento_dia: 28 });
+  const resp = await novoResponsavel(aluno.codigoVinculo);
+  const filhos = (await jsonReq('GET', '/api/mensalidades', resp)).data.filhos as any[];
+  assert.equal(filhos.length, 1);
+  assert.ok(!filhos[0].pix, 'sem módulo ligado o responsável não recebe código Pix');
+  const mes = (await jsonReq('GET', '/api/motorista/mensalidades', a)).data.mes;
+  assert.equal((await jsonReq('POST', `/api/mensalidades/${idAluno}/avisar`, resp, { mes })).status, 409, 'não dá para avisar sem o módulo');
+});
+
+test('Pix: fluxo completo (chave, QR do responsável, aviso "já paguei", confirmação do motorista) para o e-mail liberado', async (t) => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await motoristaComEmail(adm, 'PixBeta', PIX_BETA_EMAIL);
+  const lista = (await jsonReq('GET', '/api/motorista/modulos', mot)).data.modulos as any[];
+  const modulo = lista.find((m) => m.chave === 'pagamento-pix');
+  if (!modulo) {
+    console.warn(`[Pix] Fluxo completo PULADO: suba o servidor de teste com PIX_BETA_EMAILS=${PIX_BETA_EMAIL} para exercitá-lo.`);
+    t.skip('servidor sem PIX_BETA_EMAILS');
+    return;
+  }
+  assert.equal(modulo.ativo, false, 'liberado, mas começa desligado');
+
+  // antes de ligar: nada funciona
+  assert.deepEqual((await jsonReq('GET', '/api/motorista/pix', mot)).data, { ativo: false, config: null });
+  assert.equal((await jsonReq('PUT', '/api/motorista/pix', mot, { tipo: 'EMAIL', chave: 'motorista@exemplo.com', nome: 'Solon', cidade: 'Rio' })).status, 403);
+
+  assert.equal((await jsonReq('PUT', '/api/motorista/modulos', mot, { chave: 'pagamento-pix', ativo: true })).status, 200);
+
+  // chave inválida é recusada; válida é salva e normalizada
+  for (const ruim of [
+    { tipo: 'CPF', chave: '111.111.111-11', nome: 'Solon', cidade: 'Rio' },
+    { tipo: 'FOGUETE', chave: 'x', nome: 'Solon', cidade: 'Rio' },
+    { tipo: 'EMAIL', chave: 'sem-arroba', nome: 'Solon', cidade: 'Rio' },
+    { tipo: 'EMAIL', chave: 'motorista@exemplo.com', nome: '', cidade: 'Rio' },
+    { tipo: 'EMAIL', chave: 'motorista@exemplo.com', nome: 'Solon', cidade: '' }
+  ]) assert.equal((await jsonReq('PUT', '/api/motorista/pix', mot, ruim)).status, 400, JSON.stringify(ruim));
+  const salvo = await jsonReq('PUT', '/api/motorista/pix', mot, { tipo: 'CELULAR', chave: '(21) 97268-2614', nome: 'Solon Transporte', cidade: 'Rio de Janeiro' });
+  assert.equal(salvo.status, 200);
+  assert.deepEqual((await jsonReq('GET', '/api/motorista/pix', mot)).data.config, { tipo: 'CELULAR', chave: '+5521972682614', nome: 'SOLON TRANSPORTE', cidade: 'RIO DE JANEIRO' });
+
+  // aluno + mensalidade + responsável
+  const aluno = (await jsonReq('POST', '/api/paradas/nova', mot, {
+    nomeAluno: 'Aluno Pix', endereco: 'Rua Secreta, 99', pontoReferencia: 'Portão verde', escola: 'Colégio Pix', nomeResponsavel: 'Resp Pix', telefoneResponsavel: '21988887777'
+  })).data;
+  const idAluno = aluno.novaParada.id_aluno;
+  const resp = await novoResponsavel(aluno.codigoVinculo);
+  const antes = (await jsonReq('GET', '/api/mensalidades', resp)).data.filhos[0];
+  assert.equal(antes.pix, null, 'sem valor de mensalidade definido não há o que pagar');
+  assert.equal((await jsonReq('PUT', `/api/motorista/mensalidades/${idAluno}/config`, mot, { valor: '350,00', vencimento_dia: 28 })).status, 200);
+
+  // o responsável recebe só o código e o valor: nada de endereço, ponto de referência ou coordenadas
+  const filho = (await jsonReq('GET', '/api/mensalidades', resp)).data.filhos[0];
+  assert.ok(filho.pix, 'responsável vê o Pix da mensalidade');
+  assert.equal(filho.pix.valor, 350);
+  assert.equal(filho.pix.recebedor, 'SOLON TRANSPORTE');
+  assert.equal(filho.pix.avisado_em, null);
+  assert.match(filho.pix.copia_e_cola, /^000201.*6304[0-9A-F]{4}$/);
+  assert.ok(filho.pix.copia_e_cola.includes('br.gov.bcb.pix') && filho.pix.copia_e_cola.includes('+5521972682614'), 'código aponta para a chave do motorista');
+  assert.ok(filho.pix.copia_e_cola.includes('350.00'), 'valor da mensalidade no código');
+  const texto = JSON.stringify(filho);
+  for (const proibido of ['Rua Secreta', 'Portão verde', 'latitude', 'longitude', 'coordenad']) assert.equal(texto.includes(proibido), false, `não vaza ${proibido}`);
+  assert.equal(filho.pix.mes, (await jsonReq('GET', '/api/motorista/mensalidades', mot)).data.mes, 'paga o mês atual (cobrança começou agora)');
+  const mes = filho.pix.mes as string;
+
+  // avisar: só o responsável do aluno, só o mês certo
+  assert.equal((await jsonReq('POST', `/api/mensalidades/${idAluno}/avisar`, undefined, { mes })).status, 401);
+  assert.equal((await jsonReq('POST', `/api/mensalidades/${idAluno}/avisar`, mot, { mes })).status, 403, 'motorista não avisa por responsável');
+  const outro = await novoResponsavelVerificado(adm);
+  assert.equal((await jsonReq('POST', `/api/mensalidades/${idAluno}/avisar`, outro, { mes })).status, 404, 'responsável de outro aluno');
+  assert.equal((await jsonReq('POST', `/api/mensalidades/${idAluno}/avisar`, resp, { mes: '2020-01' })).status, 409, 'mês errado');
+  assert.equal((await jsonReq('POST', `/api/mensalidades/${idAluno}/avisar`, resp, {})).status, 409, 'sem mês');
+  assert.equal((await jsonReq('POST', `/api/mensalidades/${idAluno}/avisar`, resp, { mes })).status, 200);
+  assert.equal((await jsonReq('POST', `/api/mensalidades/${idAluno}/avisar`, resp, { mes })).status, 200, 'avisar de novo é inofensivo');
+
+  // aviso não é baixa: continua em aberto para os dois lados, e o motorista vê o aviso
+  const depois = (await jsonReq('GET', '/api/mensalidades', resp)).data.filhos[0];
+  assert.ok(depois.pix.avisado_em, 'responsável vê que o aviso foi enviado');
+  assert.notEqual(depois.status, 'PAGO');
+  const painel = (await jsonReq('GET', '/api/motorista/mensalidades', mot)).data;
+  const linha = painel.alunos.find((l: any) => l.id_aluno === idAluno);
+  assert.ok(linha.aviso_em, 'motorista vê "avisou que pagou"');
+  assert.notEqual(linha.status, 'PAGO');
+  assert.equal(painel.resumo.recebido, 0, 'nada entra no recebido sem a confirmação do motorista');
+
+  // "não recebi": tira o aviso, continua em aberto, responsável pode avisar de novo
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${idAluno}/aviso/descartar`, resp, { mes })).status, 403);
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${idAluno}/aviso/descartar`, mot, { mes: '2026-13' })).status, 400);
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${idAluno}/aviso/descartar`, mot, { mes })).status, 200);
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${idAluno}/aviso/descartar`, mot, { mes })).status, 404, 'já descartado');
+  assert.equal((await jsonReq('GET', '/api/mensalidades', resp)).data.filhos[0].pix.avisado_em, null);
+  assert.equal((await jsonReq('POST', `/api/mensalidades/${idAluno}/avisar`, resp, { mes })).status, 200);
+
+  // outro motorista não mexe no aviso
+  const intruso = await novoMotorista(adm, 'PixIntruso');
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${idAluno}/aviso/descartar`, intruso, { mes })).status, 404);
+
+  // confirmação do motorista = a baixa de sempre; o aviso some e o responsável vê "Pago"
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${idAluno}/pagar`, mot, { mes, forma: 'PIX' })).status, 200);
+  const pago = (await jsonReq('GET', '/api/motorista/mensalidades', mot)).data;
+  assert.equal(pago.alunos.find((l: any) => l.id_aluno === idAluno).status, 'PAGO');
+  assert.equal(pago.alunos.find((l: any) => l.id_aluno === idAluno).aviso_em, null);
+  assert.equal(pago.resumo.recebido, 350);
+  const final = (await jsonReq('GET', '/api/mensalidades', resp)).data.filhos[0];
+  assert.equal(final.status, 'PAGO');
+  assert.equal(final.pix, null, 'pago: não há mais o que pagar');
+  assert.equal((await jsonReq('POST', `/api/mensalidades/${idAluno}/avisar`, resp, { mes })).status, 409, 'mês pago não aceita aviso');
+
+  // desligar o módulo esconde o QR do responsável sem apagar a chave
+  assert.equal((await jsonReq('POST', `/api/motorista/mensalidades/${idAluno}/desfazer`, mot, { mes })).status, 200);
+  assert.ok((await jsonReq('GET', '/api/mensalidades', resp)).data.filhos[0].pix);
+  assert.equal((await jsonReq('PUT', '/api/motorista/modulos', mot, { chave: 'pagamento-pix', ativo: false })).status, 200);
+  assert.equal((await jsonReq('GET', '/api/mensalidades', resp)).data.filhos[0].pix, null, 'módulo desligado: sem QR');
+  assert.equal((await jsonReq('POST', `/api/mensalidades/${idAluno}/avisar`, resp, { mes })).status, 409);
+  assert.equal((await jsonReq('PUT', '/api/motorista/modulos', mot, { chave: 'pagamento-pix', ativo: true })).status, 200);
+  assert.ok((await jsonReq('GET', '/api/motorista/pix', mot)).data.config, 'a chave continua guardada');
+
+  // remover a chave tira o QR
+  assert.equal((await jsonReq('DELETE', '/api/motorista/pix', mot)).status, 200);
+  assert.equal((await jsonReq('GET', '/api/mensalidades', resp)).data.filhos[0].pix, null);
+  assert.deepEqual((await jsonReq('GET', '/api/motorista/pix', mot)).data, { ativo: true, config: null });
+});

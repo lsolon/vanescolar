@@ -16,6 +16,7 @@ import { LogUso, LogArquivo, LogFirestore, emCsv } from './logUso';
 import * as M from './mensalidades';
 import * as F from './financeiro';
 import * as MOD from './modulos';
+import * as PIX from './pix';
 import * as MAN from './manutencao';
 import * as P from './push';
 import webpush from 'web-push';
@@ -144,6 +145,8 @@ interface UserRecord {
   veiculoPlaca?: string;
   /** Motorista: módulos (mensalidades, financeiro...) que ele ligou ou desligou. Ausente = padrões de modulos.ts */
   modulos?: Record<string, boolean>;
+  /** Motorista: chave Pix e nome/cidade do recebedor, usados só pelo módulo "pagamento-pix". A chave nunca vai para o log. */
+  pix?: PIX.ConfigPix;
   /** Responsável: aparelhos que recebem avisos no celular (push). Só o necessário para enviar; apagados ao desligar ou quando o aparelho some. */
   pushSubs?: P.AssinaturaPush[];
   /** Motorista: revisões da van (óleo, pneus...) com intervalo em km e/ou meses. Dados só dele. */
@@ -1095,6 +1098,7 @@ async function startServer() {
     if (saved.mensalidades && typeof saved.mensalidades === 'object') {
       mensalidadesDB.configs = saved.mensalidades.configs && typeof saved.mensalidades.configs === 'object' ? saved.mensalidades.configs : {};
       mensalidadesDB.pagamentos = Array.isArray(saved.mensalidades.pagamentos) ? saved.mensalidades.pagamentos : [];
+      mensalidadesDB.avisos = Array.isArray(saved.mensalidades.avisos) ? saved.mensalidades.avisos : [];
     }
     if (saved.state) {
       if (Array.isArray(saved.state.paradas)) serverState.paradas = saved.state.paradas;
@@ -1188,7 +1192,7 @@ async function startServer() {
   // de atender e grava logo depois de alterar.
   app.use(async (req: Request, res: Response, next: NextFunction) => {
     const sensivel = req.path.startsWith('/api/auth/') || req.path.startsWith('/api/admin/') || req.path === '/api/vincular'
-      || req.path.startsWith('/api/motorista/mensalidades') || req.path === '/api/mensalidades'
+      || req.path.startsWith('/api/motorista/mensalidades') || req.path.startsWith('/api/mensalidades') || req.path.startsWith('/api/motorista/pix')
       || req.path.startsWith('/api/motorista/financeiro')
       || req.path.startsWith('/api/motorista/mensagens') || req.path.startsWith('/api/conversa');
     if (persistence.kind === 'memory' || !sensivel) return next();
@@ -1204,6 +1208,7 @@ async function startServer() {
       if (saved.mensalidades && typeof saved.mensalidades === 'object') {
         mensalidadesDB.configs = saved.mensalidades.configs ?? {};
         mensalidadesDB.pagamentos = Array.isArray(saved.mensalidades.pagamentos) ? saved.mensalidades.pagamentos : [];
+        mensalidadesDB.avisos = Array.isArray(saved.mensalidades.avisos) ? saved.mensalidades.avisos : [];
       }
       if (saved.financeiro && typeof saved.financeiro === 'object') {
         financeiroDB.lancamentos = Array.isArray(saved.financeiro.lancamentos) ? saved.financeiro.lancamentos : [];
@@ -1723,6 +1728,7 @@ async function startServer() {
     serverState.paradas = [];
     mensalidadesDB.configs = {};
     mensalidadesDB.pagamentos = [];
+    mensalidadesDB.avisos = [];
     financeiroDB.lancamentos = [];
     financeiroDB.custos_fixos = [];
     mensagensDB.mensagens = [];
@@ -2005,23 +2011,26 @@ async function startServer() {
     return usersDB.find((u) => u.id === user.userId) ?? usersDB.find((u) => u.id === (driverIdFor(user) as number));
   };
 
+  // Módulos em teste (restritos) só existem para os e-mails liberados nas variáveis do servidor (ex.: PIX_BETA_EMAILS).
+  const liberadosDe = (rec: { email?: string } | undefined) => MOD.liberadosPara(rec?.email, process.env);
+
   app.get('/api/motorista/modulos', authenticate, requireDriver, (req: Request, res: Response) => {
     const rec = contaDoMotorista(req);
     if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
-    res.json({ modulos: MOD.listarModulos(rec.modulos) });
+    res.json({ modulos: MOD.listarModulos(rec.modulos, liberadosDe(rec)) });
   });
 
   app.put('/api/motorista/modulos', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
     const rec = contaDoMotorista(req);
     if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
     try {
-      rec.modulos = MOD.alterarModulo(rec.modulos, req.body?.chave, req.body?.ativo);
+      rec.modulos = MOD.alterarModulo(rec.modulos, req.body?.chave, req.body?.ativo, liberadosDe(rec));
     } catch (e: any) {
       return res.status(400).json({ error: e?.message || 'Módulo inválido.' });
     }
     persistence.scheduleSave();
     auditLog('MODULO_ALTERADO', rec.email, `${req.body.chave}=${req.body.ativo ? 'ligado' : 'desligado'}`);
-    res.json({ modulos: MOD.listarModulos(rec.modulos) });
+    res.json({ modulos: MOD.listarModulos(rec.modulos, liberadosDe(rec)) });
   });
 
   // ---- Manutenção da van por km e por data (módulo "manutencao", desligado por padrão; os dados são só do motorista) ----
@@ -2329,6 +2338,7 @@ async function startServer() {
     if (!M.mesValido(mes)) return res.status(400).json({ error: 'Mês inválido. Use o formato AAAA-MM.' });
     const alunos = alunosCobrancaDe(driverId).map((p: any) => ({
       ...M.linhaDoAluno(mensalidadesDB, driverId, p.id_aluno, mes, hoje),
+      aviso_em: M.avisoDe(mensalidadesDB, driverId, p.id_aluno, mes)?.avisado_em ?? null,
       aluno: p.nome_sanitizado,
       responsavel_nome: p.responsavel_nome ?? '',
       whatsapp: String(p.responsavel_telefone ?? '').replace(/\D/g, '')
@@ -2336,7 +2346,16 @@ async function startServer() {
     // Mais urgentes primeiro: atrasados, em aberto, sem valor, pagos.
     const peso: Record<string, number> = { ATRASADO: 0, EM_ABERTO: 1, SEM_VALOR: 2, PAGO: 3 };
     alunos.sort((a, b) => peso[a.status] - peso[b.status] || a.responsavel_nome.localeCompare(b.responsavel_nome, 'pt-BR'));
-    res.json({ mes, hoje, alunos, resumo: M.resumir(alunos, mes) });
+    // Avisos de pagamento (Pix) de OUTROS meses: o responsável paga o mês mais antigo em aberto, que pode não ser o que está na tela.
+    const base = alunosCobrancaDe(driverId);
+    const avisos_outros_meses = (mensalidadesDB.avisos ?? [])
+      .filter((a) => a.id_motorista === driverId && a.mes !== mes && !M.pagamentoDe(mensalidadesDB, driverId, a.id_aluno, a.mes))
+      .flatMap((a) => {
+        const p = base.find((x: any) => x.id_aluno === a.id_aluno);
+        return p ? [{ id_aluno: a.id_aluno, aluno: p.nome_sanitizado, responsavel_nome: p.responsavel_nome ?? '', mes: a.mes, avisado_em: a.avisado_em }] : [];
+      })
+      .sort((x, y) => x.mes.localeCompare(y.mes));
+    res.json({ mes, hoje, alunos, resumo: M.resumir(alunos, mes), avisos_outros_meses });
   });
 
   app.put('/api/motorista/mensalidades/:alunoId/config', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
@@ -2416,10 +2435,87 @@ async function startServer() {
         status: atual.status,
         pago_em: atual.pago_em,
         meses_em_atraso: atual.meses_em_atraso,
-        historico
+        historico,
+        pix: pixParaPagar(f.id_aluno, dono, hoje)
       };
     });
     res.json({ filhos });
+  });
+
+  // ---- Pagamento por Pix (módulo "pagamento-pix", em teste: só funciona para e-mails liberados em PIX_BETA_EMAILS) ----
+  // O dinheiro vai direto do responsável para a conta do motorista. O app não recebe aviso do banco:
+  // o responsável avisa ("já paguei") e o motorista confere no banco e confirma com a baixa de sempre.
+  const pixAtivoDe = (rec: UserRecord | undefined) => !!rec && MOD.moduloAtivo(rec.modulos, 'pagamento-pix', liberadosDe(rec));
+
+  /** Dados que o responsável vê para pagar a mensalidade do filho (só o código e o valor: nada de mapa, GPS ou endereço). */
+  function pixParaPagar(alunoId: number, dono: number, hoje: string) {
+    const rec = usersDB.find((u) => u.id === dono);
+    if (!rec?.pix || !pixAtivoDe(rec)) return null;
+    const mes = M.mesParaPagar(mensalidadesDB, dono, alunoId, hoje);
+    const cfg = mensalidadesDB.configs[M.chaveConfig(dono, alunoId)];
+    if (!mes || !cfg) return null;
+    return {
+      mes,
+      valor: cfg.valor,
+      recebedor: rec.pix.nome,
+      copia_e_cola: PIX.gerarCopiaECola({ config: rec.pix, valor: cfg.valor, txid: PIX.txidMensalidade(alunoId, mes) }),
+      avisado_em: M.avisoDe(mensalidadesDB, dono, alunoId, mes)?.avisado_em ?? null
+    };
+  }
+
+  app.get('/api/motorista/pix', authenticate, requireDriver, (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const ativo = pixAtivoDe(rec);
+    res.json({ ativo, config: ativo && rec.pix ? rec.pix : null });
+  });
+
+  app.put('/api/motorista/pix', authenticate, requireDriver, rateLimiter(10, 60000), (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    if (!pixAtivoDe(rec)) return res.status(403).json({ error: 'Ligue o módulo "Pagamento por Pix" em Mais > Rotas e ajustes > Módulos.' });
+    const r = PIX.lerConfigPix(req.body ?? {});
+    if (!r.ok) return res.status(400).json({ error: r.erro });
+    rec.pix = r.config;
+    auditLog('PIX_CONFIGURADO', rec.email, 'Chave Pix do motorista definida');
+    res.json({ ativo: true, config: rec.pix });
+  });
+
+  app.delete('/api/motorista/pix', authenticate, requireDriver, rateLimiter(10, 60000), (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    if (!pixAtivoDe(rec)) return res.status(403).json({ error: 'Ligue o módulo "Pagamento por Pix" em Mais > Rotas e ajustes > Módulos.' });
+    delete rec.pix;
+    auditLog('PIX_REMOVIDO', rec.email, 'Chave Pix do motorista removida');
+    res.json({ ativo: true, config: null });
+  });
+
+  // O responsável avisa que pagou. Isto NÃO dá baixa: só marca "aguardando confirmação do motorista".
+  app.post('/api/mensalidades/:alunoId/avisar', authenticate, rateLimiter(10, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    if (user.role !== 'responsavel') return res.status(403).json({ error: 'Acesso negado.' });
+    const alunoId = parseInt(req.params.alunoId, 10);
+    const filho = filhosDe(user.userId, user.studentId).filter(confirmada).find((f: any) => f.id_aluno === alunoId);
+    if (!filho) return res.status(404).json({ error: 'Aluno não encontrado.' });
+    const dono = donoDaParada(filho);
+    const pix = pixParaPagar(alunoId, dono, M.hojeBrasil());
+    if (!pix) return res.status(409).json({ error: 'O pagamento por Pix não está disponível para este aluno agora.' });
+    if (req.body?.mes !== pix.mes) return res.status(409).json({ error: 'Esta mensalidade mudou. Atualize a tela e confira o mês a pagar.' });
+    M.registrarAviso(mensalidadesDB, dono, alunoId, pix.mes);
+    auditLog('PAGAMENTO_AVISADO', user.email, `Aluno ${alunoId}, ${pix.mes}`);
+    res.json({ sucesso: true, mes: pix.mes });
+  });
+
+  // O motorista não encontrou o dinheiro no banco: tira o aviso (a mensalidade continua em aberto).
+  app.post('/api/motorista/mensalidades/:alunoId/aviso/descartar', authenticate, requireDriver, rateLimiter(60, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const alunoId = parseInt(req.params.alunoId, 10);
+    if (!alunosCobrancaDe(driverId).some((p: any) => p.id_aluno === alunoId)) return res.status(404).json({ error: 'Aluno não encontrado na sua van.' });
+    if (!M.mesValido(req.body?.mes)) return res.status(400).json({ error: 'Mês inválido. Use o formato AAAA-MM.' });
+    if (!M.descartarAviso(mensalidadesDB, driverId, alunoId, req.body.mes)) return res.status(404).json({ error: 'Não há aviso de pagamento neste mês.' });
+    auditLog('PAGAMENTO_AVISO_DESCARTADO', user.email, `Motorista ${driverId}: aluno ${alunoId}, ${req.body.mes}`);
+    res.json({ sucesso: true });
   });
 
 

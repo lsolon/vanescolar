@@ -585,15 +585,25 @@ export interface LinhaMensalidadeMotorista {
   id_aluno: number; aluno: string; responsavel_nome: string; whatsapp: string;
   valor: number | null; vencimento_dia: number | null; status: StatusMensalidade;
   pago_em: string | null; valor_pago: number | null; forma: string | null; meses_em_atraso: number;
+  /** Quando o responsável avisou que pagou pelo Pix (aguardando confirmação do motorista); null se não avisou. */
+  aviso_em?: string | null;
 }
+export type TipoChavePix = 'CPF' | 'CNPJ' | 'CELULAR' | 'EMAIL' | 'ALEATORIA';
+export interface ConfigPix { tipo: TipoChavePix; chave: string; nome: string; cidade: string }
+export interface PixMotorista { ativo: boolean; config: ConfigPix | null }
+/** O que o responsável vê para pagar a mensalidade pelo Pix: só código e valor (sem mapa, GPS ou endereço). */
+export interface PixDoFilho { mes: string; valor: number; recebedor: string; copia_e_cola: string; avisado_em: string | null }
 export interface MensalidadesMotorista {
   mes: string; hoje: string; alunos: LinhaMensalidadeMotorista[];
   resumo: { mes: string; previsto: number; recebido: number; a_vencer: number; atrasado: number; qtd_pagos: number; qtd_a_vencer: number; qtd_atrasados: number; qtd_sem_valor: number };
+  /** Avisos de pagamento (Pix) de meses diferentes do que está na tela. */
+  avisos_outros_meses?: { id_aluno: number; aluno: string; responsavel_nome: string; mes: string; avisado_em: string }[];
 }
 export interface MensalidadeFilho {
   id_aluno: number; aluno: string; motorista: string; mes: string; valor: number | null; vencimento_dia: number | null;
   status: StatusMensalidade; pago_em: string | null; meses_em_atraso: number;
   historico: { mes: string; status: StatusMensalidade; valor: number | null; pago_em: string | null }[];
+  pix?: PixDoFilho | null;
 }
 
 export interface MensagemApp {
@@ -1861,6 +1871,39 @@ export const TransportRepository = {
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível carregar as mensalidades.');
     return d.filhos as MensalidadeFilho[];
+  },
+
+  // ---- Pagamento por Pix (módulo em teste) ----
+  async pixDoMotorista(): Promise<PixMotorista> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/pix`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível carregar o Pix.');
+    return d as PixMotorista;
+  },
+
+  async salvarPix(c: ConfigPix): Promise<PixMotorista> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/pix`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify(c) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível salvar a chave Pix.');
+    return d as PixMotorista;
+  },
+
+  async removerPix(): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/pix`, { method: 'DELETE', headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível remover a chave Pix.');
+  },
+
+  async avisarPagamentoPix(alunoId: number, mes: string): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/mensalidades/${alunoId}/avisar`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ mes }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível enviar o aviso.');
+  },
+
+  async descartarAvisoPagamento(alunoId: number, mes: string): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/mensalidades/${alunoId}/aviso/descartar`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ mes }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível descartar o aviso.');
   },
 
   // ---- Mensagens motorista ↔ família ----

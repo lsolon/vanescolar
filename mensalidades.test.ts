@@ -93,3 +93,46 @@ test('removerAluno apaga configuração e histórico', () => {
   assert.equal(d.pagamentos.length, 0);
   assert.equal(d.configs[M.chaveConfig(1, 201)], undefined);
 });
+
+test('aviso de pagamento: registra uma vez, não vira baixa e some quando o motorista confirma', () => {
+  const d = db();
+  const agora = new Date('2026-11-08T13:00:00Z');
+  const a1 = M.registrarAviso(d, 1, 201, '2026-11', agora);
+  const a2 = M.registrarAviso(d, 1, 201, '2026-11', new Date('2026-11-09T13:00:00Z'));
+  assert.equal(a2.avisado_em, a1.avisado_em, 'avisar de novo mantém o primeiro aviso');
+  assert.equal(d.avisos?.length, 1);
+  assert.equal(M.linhaDoAluno(d, 1, 201, '2026-11', '2026-11-08').status, 'EM_ABERTO', 'aviso não dá baixa');
+  assert.equal(M.avisoDe(d, 1, 202, '2026-11'), undefined, 'outra família não é afetada');
+  assert.equal(M.avisoDe(d, 2, 201, '2026-11'), undefined, 'outro motorista não vê o aviso');
+  M.registrarPagamento(d, { id_motorista: 1, id_aluno: 201, mes: '2026-11', valor: 300, forma: 'PIX', pago_em: '2026-11-08' });
+  assert.equal(M.avisoDe(d, 1, 201, '2026-11'), undefined, 'confirmar apaga o aviso');
+  assert.equal(M.linhaDoAluno(d, 1, 201, '2026-11', '2026-11-08').status, 'PAGO');
+});
+
+test('aviso de pagamento: descartar ("não recebi") e remover o aluno apagam só o que é dele; dados antigos sem avisos funcionam', () => {
+  const d = db();
+  const inicial = d.avisos;
+  assert.equal(inicial, undefined, 'banco novo ou antigo começa sem lista');
+  assert.equal(M.descartarAviso(d, 1, 201, '2026-11'), false);
+  assert.equal(M.avisoDe(d, 1, 201, '2026-11'), undefined);
+  M.registrarAviso(d, 1, 201, '2026-11');
+  M.registrarAviso(d, 1, 201, '2026-10');
+  M.registrarAviso(d, 1, 202, '2026-11');
+  assert.equal(M.descartarAviso(d, 1, 201, '2026-11'), true);
+  assert.equal(d.avisos?.length, 2);
+  M.removerAluno(d, 1, 201);
+  assert.deepEqual(d.avisos?.map((a) => `${a.id_aluno}:${a.mes}`), ['202:2026-11']);
+});
+
+test('mesParaPagar: o mais antigo sem pagamento nos últimos 6 meses, respeitando quando a cobrança começou', () => {
+  const d = M.novoMensalidadesDB();
+  d.configs[M.chaveConfig(1, 201)] = { valor: 300, vencimento_dia: 10, desde: '2026-09' };
+  assert.equal(M.mesParaPagar(d, 1, 201, '2026-11-08'), '2026-09', 'não cobra antes do mês inicial');
+  M.registrarPagamento(d, { id_motorista: 1, id_aluno: 201, mes: '2026-09', valor: 300, forma: 'PIX', pago_em: '2026-09-09' });
+  assert.equal(M.mesParaPagar(d, 1, 201, '2026-11-08'), '2026-10');
+  M.registrarPagamento(d, { id_motorista: 1, id_aluno: 201, mes: '2026-10', valor: 300, forma: 'PIX', pago_em: '2026-10-09' });
+  assert.equal(M.mesParaPagar(d, 1, 201, '2026-11-08'), '2026-11', 'mês atual ainda no prazo também pode ser pago');
+  M.registrarPagamento(d, { id_motorista: 1, id_aluno: 201, mes: '2026-11', valor: 300, forma: 'PIX', pago_em: '2026-11-08' });
+  assert.equal(M.mesParaPagar(d, 1, 201, '2026-11-08'), null, 'tudo pago');
+  assert.equal(M.mesParaPagar(d, 1, 999, '2026-11-08'), null, 'sem valor definido');
+});
