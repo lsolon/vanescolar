@@ -8,6 +8,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { TransportRepository } from '../../services/api';
+import { useVanPersonalizada, rotuloDaVan } from '../../services/vanPersonalizada';
 import {
   Bus,
   Users,
@@ -46,6 +47,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onLimparDados
 }) => {
   const isDemoMode = (typeof window !== 'undefined' && window.location.search.includes('demo=true')) || import.meta.env.VITE_DEMO_MODE === 'true';
+
+  // Link do motorista (?m=MOT-…) ou última van usada neste aparelho: cabeçalho "Van do João • Freguesia"
+  const van = useVanPersonalizada();
+  const rotuloVan = rotuloDaVan(van);
 
   const [activePortal, setActivePortal] = useState<'SELECT' | 'DRIVER' | 'PARENT' | 'REGISTER' | 'FORGOT' | 'DRIVER_REGISTER' | 'DRIVER_FORGOT' | 'ADMIN_INVITES'>('SELECT');
 
@@ -357,7 +362,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <span className="font-extrabold text-base tracking-tight text-white">
                 Van<span className="text-amber-400">Escolar</span>
               </span>
-              <p className="text-[11px] text-slate-400">Freguesia • Jacarepaguá, RJ</p>
+              <p className="text-[11px] text-slate-400">{rotuloVan ?? (isDemoMode ? 'Freguesia • Jacarepaguá, RJ' : 'Transporte escolar')}</p>
             </div>
           </div>
 
@@ -391,9 +396,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         <h1 className="text-3xl sm:text-4xl font-black text-center tracking-tight text-white mb-3">
           Transporte Escolar Seguro e em Tempo Real
         </h1>
-        <p className="text-sm sm:text-base text-slate-400 text-center max-w-xl mb-10">
-          Selecione seu perfil para acessar o painel operacional ou o portal da família.
-        </p>
+        {van ? (
+          <p className="text-sm sm:text-base text-slate-300 text-center max-w-xl mb-10">
+            Você está acessando o transporte escolar do <strong className="text-amber-300">{van.nome}</strong>{van.bairro ? ` (${van.bairro})` : ''}. Família: toque em <strong>Sou Responsável</strong> para acompanhar a van.
+          </p>
+        ) : (
+          <p className="text-sm sm:text-base text-slate-400 text-center max-w-xl mb-10">
+            Selecione seu perfil para acessar o painel operacional ou o portal da família.
+          </p>
+        )}
 
         {modoTeste && activePortal === 'SELECT' && (
           <div className="w-full max-w-2xl mb-6 p-4 rounded-2xl border-2 border-dashed border-rose-500/60 bg-rose-500/10 text-center">

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { TransportRepository, FilhoResumo } from '../../services/api';
 import { CampoHora } from '../shared/CampoHora';
+import { lerVanSalva } from '../../services/vanPersonalizada';
 
 type Motorista = { id: number; nome: string };
 const campo = 'w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-cyan-400 min-h-[44px]';
@@ -75,7 +76,7 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
   const [ref, setRef] = useState('');
   const [turno, setTurno] = useState<'MANHA' | 'TARDE' | ''>('');
   const [tel, setTel] = useState('');
-  const [codigo, setCodigo] = useState('');
+  const [codigo, setCodigo] = useState(() => lerVanSalva()?.codigo ?? ''); // veio do link ?m= do motorista
   const [motoristaId, setMotoristaId] = useState<number | ''>(motoristas[0]?.id ?? '');
   const [erro, setErro] = useState<string | null>(null);
   const [salvando, setSalvando] = useState(false);

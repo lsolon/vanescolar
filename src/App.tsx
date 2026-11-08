@@ -16,6 +16,7 @@ import { GestaoPanel } from './components/gestao/GestaoPanel';
 import { TransportRepository, subscribeToDatabaseChanges } from './services/api';
 import { AuthService } from './services/auth';
 import { CODIGO_VERSAO } from './versao';
+import { useVanPersonalizada, rotuloDaVan } from './services/vanPersonalizada';
 import {
   Bus,
   Users,
@@ -32,6 +33,9 @@ type ModoTela = 'LANDING' | 'DUAL' | 'DRIVER' | 'PARENT' | 'ADMIN' | 'GESTAO';
 
 export default function App() {
   const isDemoMode = (typeof window !== 'undefined' && window.location.search.includes('demo=true')) || import.meta.env.VITE_DEMO_MODE === 'true';
+  // "Van do João • Freguesia": vem do link ?m= ou da última van usada neste aparelho. No modo demonstração, sem van, mantém o texto de exemplo.
+  const van = useVanPersonalizada();
+  const rotuloVan = rotuloDaVan(van) ?? (isDemoMode ? 'Freguesia • Jacarepaguá' : null);
 
   const [viewMode, setViewMode] = useState<ModoTela>('LANDING');
   const [isRotaAtiva, setIsRotaAtiva] = useState<boolean>(false);
@@ -205,9 +209,11 @@ export default function App() {
                     <span className="font-extrabold text-sm tracking-tight text-white">
                       Van<span className="text-amber-400">Escolar</span>
                     </span>
-                    <span className="text-[10px] text-slate-400 ml-2 hidden sm:inline">
-                      Freguesia • Jacarepaguá
-                    </span>
+                    {rotuloVan && (
+                      <span className="text-[10px] text-slate-400 ml-2 hidden sm:inline">
+                        {rotuloVan}
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>

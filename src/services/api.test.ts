@@ -2402,3 +2402,33 @@ test('Pix da família: 3 filhos pagam um Pix único; aviso e confirmação valem
   assert.equal(g.filhos.filter((f: any) => f.pix).length, 1, 'só o que falta tem Pix');
   assert.deepEqual(g.familia_pix, [], 'com um filho só, vale o Pix do filho (sem Pix único)');
 });
+
+test('Van personalizada: bairro do motorista, link ?m= público só com primeiro nome e bairro, e o convite leva o link', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'VanPers');
+
+  // bairro: precisa de login de motorista, limpa símbolos e limita o tamanho
+  assert.equal((await jsonReq('PUT', '/api/motorista/bairro', undefined, { bairro: 'Freguesia' })).status, 401);
+  const b = await jsonReq('PUT', '/api/motorista/bairro', mot, { bairro: '  Freguesia <script>  (Jacarepaguá) ' });
+  assert.equal(b.status, 200);
+  assert.equal(b.data.bairro, 'Freguesia script (Jacarepaguá)');
+  assert.ok(!/[<>]/.test(b.data.bairro));
+  assert.ok(((await jsonReq('PUT', '/api/motorista/bairro', mot, { bairro: 'x'.repeat(200) })).data.bairro as string).length <= 40);
+  await jsonReq('PUT', '/api/motorista/bairro', mot, { bairro: 'Freguesia' });
+
+  // link público: só primeiro nome e bairro; código inventado ou fora do formato dá 404 igual
+  const cod = (await jsonReq('GET', '/api/motorista/codigo', mot)).data.codigo as string;
+  const pub = await jsonReq('GET', `/api/van/${cod}`);
+  assert.equal(pub.status, 200);
+  assert.deepEqual(Object.keys(pub.data).sort(), ['bairro', 'motorista']);
+  assert.equal(pub.data.bairro, 'Freguesia');
+  assert.ok(pub.data.motorista && !/\s/.test(pub.data.motorista), 'só o primeiro nome');
+  assert.equal((await jsonReq('GET', `/api/van/${cod.toLowerCase()}`)).status, 200, 'maiúscula ou minúscula, tanto faz');
+  assert.equal((await jsonReq('GET', '/api/van/MOT-000000')).status, 404);
+  assert.equal((await jsonReq('GET', '/api/van/qualquer-coisa')).status, 404);
+
+  // o perfil do motorista traz o bairro para o cabeçalho
+  const c = (await jsonReq('POST', '/api/motorista/alunos', mot, { nomeAluno: 'Leo Dias', escola: 'Escola VP2', turno: 'MANHA', nomeResponsavel: 'Ana Dias', telefoneResponsavel: '21966665555', endereco: 'Rua Secreta, 7', latitude: -22.9, longitude: -43.2, autorizacaoResponsavel: true })).data;
+  assert.match(c.mensagem, new RegExp(`/\\?m=${cod}`), 'o convite abre o app personalizado');
+  assert.ok(!/Secreta/.test(c.mensagem), 'o convite continua sem endereço');
+});
