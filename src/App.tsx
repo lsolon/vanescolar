@@ -115,7 +115,7 @@ export default function App() {
         window.history.pushState(null, '', '/admin');
         setIsStandaloneMobile(false);
       } else {
-        window.history.pushState(null, '', '/');
+        window.history.pushState(null, '', '/app');
         setIsStandaloneMobile(false);
       }
     }
