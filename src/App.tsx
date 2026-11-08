@@ -15,6 +15,7 @@ import { AdminDashboard } from './components/admin/AdminDashboard';
 import { GestaoPanel } from './components/gestao/GestaoPanel';
 import { TransportRepository, subscribeToDatabaseChanges } from './services/api';
 import { AuthService } from './services/auth';
+import { CODIGO_VERSAO } from './versao';
 import {
   Bus,
   Users,
@@ -154,6 +155,13 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-400 selection:text-slate-950">
+      <div
+        aria-hidden="true"
+        data-testid="codigo-versao"
+        className="pointer-events-none fixed top-0 left-1/2 -translate-x-1/2 z-[60] px-2 text-[9px] leading-4 font-mono tracking-wider text-slate-500/70 select-none"
+      >
+        {CODIGO_VERSAO}
+      </div>
       {/* ==================================================================== */}
       {/* 1. SELEÇÃO DE AMBIENTE: LANDING PAGE COM PORTAIS DE LOGIN SEPARADOS */}
       {/* ==================================================================== */}
