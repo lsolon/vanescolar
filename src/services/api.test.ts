@@ -2007,3 +2007,51 @@ test('Módulos: começam ligados, o motorista liga e desliga só os dele, entrad
   assert.ok(r.status === 401 || r.status === 403, 'responsável não acessa os módulos do motorista');
   assert.equal((await jsonReq('PUT', '/api/motorista/modulos', resp, { chave: 'financeiro', ativo: true })).status === 200, false);
 });
+
+test('Push: só responsável liga avisos no celular; assinatura inválida é recusada; sem chaves do servidor o recurso fica desligado', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const mot = await novoMotorista(adm.data.token, 'PushMot');
+  const aluno = (await jsonReq('POST', '/api/paradas/nova', mot, {
+    nomeAluno: 'Aluno Push', endereco: 'Rua P, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777'
+  })).data;
+  const resp = await novoResponsavel(aluno.codigoVinculo);
+  const assinatura = { endpoint: 'https://fcm.googleapis.com/fcm/send/teste-push-1', keys: { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' } };
+
+  assert.equal((await jsonReq('GET', '/api/push/estado')).status, 401, 'visitante sem sessão');
+  assert.equal((await jsonReq('GET', '/api/push/estado', mot)).status, 403, 'motorista não usa avisos de responsável');
+  assert.equal((await jsonReq('POST', '/api/push/assinar', mot, { assinatura })).status, 403);
+
+  const est = await jsonReq('GET', '/api/push/estado', resp);
+  assert.equal(est.status, 200);
+  assert.equal(typeof est.data.disponivel, 'boolean');
+  assert.equal(est.data.aparelhos, 0);
+  if (!est.data.disponivel) {
+    assert.equal(est.data.chavePublica, null);
+    assert.equal((await jsonReq('POST', '/api/push/assinar', resp, { assinatura })).status, 503, 'sem chaves VAPID, não liga');
+    return;
+  }
+  assert.ok(est.data.chavePublica && !JSON.stringify(est.data).includes('PRIVATE'));
+  assert.equal((await jsonReq('POST', '/api/push/assinar', resp, { assinatura: { ...assinatura, endpoint: 'http://inseguro.com/x' } })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/push/assinar', resp, { assinatura: { endpoint: assinatura.endpoint } })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/push/assinar', resp, {})).status, 400);
+  assert.equal((await jsonReq('GET', '/api/push/estado', resp)).data.aparelhos, 0, 'pedidos inválidos não gravam nada');
+
+  assert.equal((await jsonReq('POST', '/api/push/assinar', resp, { assinatura })).status, 200);
+  assert.equal((await jsonReq('POST', '/api/push/assinar', resp, { assinatura })).status, 200);
+  assert.equal((await jsonReq('GET', '/api/push/estado', resp)).data.aparelhos, 1, 'o mesmo aparelho não duplica');
+
+  // Com um aparelho ligado (endpoint que não existe), GPS e embarque continuam funcionando: o aviso nunca atrapalha a rota.
+  assert.equal((await jsonReq('POST', '/api/gps', mot, { latitude: -22.9, longitude: -43.2 })).status, 200);
+  assert.equal((await jsonReq('POST', `/api/paradas/${aluno.novaParada.id}/status`, mot, { status: 'EMBARCOU' })).status, 200);
+  assert.equal((await jsonReq('POST', `/api/paradas/${aluno.novaParada.id}/status`, mot, { status: 'ENTREGUE' })).status, 200);
+
+  const aluno2 = (await jsonReq('POST', '/api/paradas/nova', mot, {
+    nomeAluno: 'Aluno Push 2', endereco: 'Rua P, 2', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R2', telefoneResponsavel: '21988886666'
+  })).data;
+  const resp2 = await novoResponsavel(aluno2.codigoVinculo);
+  assert.equal((await jsonReq('GET', '/api/push/estado', resp2)).data.aparelhos, 0, 'cada responsável tem os seus aparelhos');
+
+  assert.equal((await jsonReq('DELETE', '/api/push/assinar', resp, { endpoint: assinatura.endpoint })).status, 200);
+  assert.equal((await jsonReq('GET', '/api/push/estado', resp)).data.aparelhos, 0, 'desligar apaga o aparelho');
+  assert.equal((await jsonReq('POST', '/api/push/teste', resp)).status, 409, 'sem aparelho ligado, não há o que testar');
+});

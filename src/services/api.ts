@@ -1076,6 +1076,28 @@ export const TransportRepository = {
     return res.json();
   },
 
+  // ---- Avisos no celular (push): só responsável; a mensagem é genérica (sem nome, endereço ou mapa) ----
+  async pushEstado(): Promise<{ disponivel: boolean; chavePublica: string | null; aparelhos: number }> {
+    const res = await fetch(`${getBaseUrl()}/api/push/estado`, { headers: getAuthHeaders() });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Não foi possível verificar os avisos agora.');
+    return data;
+  },
+  async pushLigar(assinatura: unknown): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/push/assinar`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ assinatura }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Não foi possível ligar os avisos agora.');
+  },
+  async pushDesligar(endpoint?: string): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/push/assinar`, { method: 'DELETE', headers: getAuthHeaders(), body: JSON.stringify({ endpoint }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Não foi possível desligar os avisos agora.');
+  },
+  async pushTeste(): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/push/teste`, { method: 'POST', headers: getAuthHeaders() });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Não foi possível enviar o teste agora.');
+  },
   async salvarPreferenciasProximidade(prefs: PrefsProximidade): Promise<PrefsProximidade> {
     const res = await fetch(`${getBaseUrl()}/api/preferencias`, {
       method: 'PUT',

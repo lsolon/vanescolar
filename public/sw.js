@@ -42,3 +42,32 @@ self.addEventListener('fetch', (event) => {
     );
   }
 });
+
+/*
+ * AVISOS NO CELULAR (push). A mensagem é genérica (sem nome de criança, endereço ou mapa): ver push.ts.
+ * Aqui só mostramos o que o servidor mandou, com limite de tamanho, e abrimos o app ao tocar.
+ */
+self.addEventListener('push', (event) => {
+  let d = {};
+  try { d = event.data ? event.data.json() : {}; } catch { d = {}; }
+  const texto = (v, max, padrao) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : padrao);
+  event.waitUntil(
+    self.registration.showNotification(texto(d.titulo, 80, 'VanEscolar'), {
+      body: texto(d.corpo, 160, 'Abra o app para ver.'),
+      tag: texto(d.tag, 40, 'vanescolar'),
+      renotify: true,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png'
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((janelas) => {
+      const aberta = janelas.find((j) => new URL(j.url).origin === self.location.origin);
+      return aberta ? aberta.focus() : self.clients.openWindow('/');
+    })
+  );
+});

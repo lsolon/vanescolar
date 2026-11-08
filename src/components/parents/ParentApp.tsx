@@ -30,6 +30,7 @@ import { isDemoMode } from '../../services/demo';
 import { ProximidadeBar } from '../shared/ProximidadeBar';
 import { RealMap } from '../shared/RealMap';
 import { PreferenciasProximidade } from './PreferenciasProximidade';
+import { AvisosCelular } from './AvisosCelular';
 import { HorariosEscola } from './HorariosEscola';
 import { AdicionarFilho, BarraFilhos, SituacaoVinculo } from './FilhosParent';
 import { MensalidadeCard } from './MensalidadeCard';
@@ -449,6 +450,7 @@ export const ParentApp: React.FC<ParentAppProps> = ({
             )}
             <ProximidadeBar proximidade={prox} estilo={prefs.estilo} />
             <PreferenciasProximidade prefs={prefs} onChange={setPrefs} />
+            <AvisosCelular />
           </section>
         )}
 

@@ -33,6 +33,7 @@
 <tr><td>Dados do veículo (modelo, placa, capacidade) e telefone</td><td>Motorista</td><td>Identificar a van para as famílias vinculadas</td></tr>
 <tr><td>Localização do celular do motorista (GPS) enquanto a rota está ativa</td><td>Gerada pelo app do motorista</td><td>Calcular a previsão de chegada e, quando faltar uma parada, a aproximação da van</td></tr>
 <tr><td>Valor, vencimento e baixas de mensalidade</td><td>Motorista</td><td>Controle de cobrança. O app não processa pagamentos nem guarda dados bancários</td></tr>
+<tr><td>Código técnico do aparelho para avisos no celular (só se o responsável ligar)</td><td>Gerado pelo navegador</td><td>Enviar o aviso "a van está chegando" e registros de embarque ou entrega, sem nome, endereço ou mapa. Pode ser desligado a qualquer momento</td></tr>
 <tr><td>Registros de segurança (ações na conta, data e hora)</td><td>Gerados pelo sistema</td><td>Prevenção a fraudes e auditoria</td></tr>
 </table>
 <p>Não coletamos fotos de crianças, documentos de identidade, CPF nem dados bancários.</p>
@@ -57,6 +58,7 @@
 <ul>
 <li><strong>O motorista vinculado</strong> ao aluno (dados do transporte) e a <strong>família</strong> (andamento e mensalidade do próprio filho).</li>
 <li><strong>Google (Firebase/Firestore e login com Google):</strong> armazenamento dos dados e autenticação. Os servidores podem estar fora do Brasil; nesse caso a transferência internacional ocorre com as garantias do art. 33 da LGPD.</li>
+<li><strong>Serviço de avisos do seu navegador (Google, Apple ou Mozilla):</strong> só se você ligar os avisos no celular. Eles apenas entregam a mensagem genérica, que não traz nome de criança, endereço nem mapa.</li>
 <li><strong>OpenStreetMap:</strong> carregar os mapas do motorista e localizar o endereço da <em>escola</em> (nunca o endereço de alunos).</li>
 <li>Não vendemos dados nem os usamos para publicidade. Podemos compartilhar com autoridades se a lei exigir.</li>
 </ul>
