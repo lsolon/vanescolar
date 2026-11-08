@@ -15,6 +15,7 @@ import { createPersistence, createFirestoreFromEnv } from './persistence';
 import { LogUso, LogArquivo, LogFirestore, emCsv } from './logUso';
 import * as M from './mensalidades';
 import * as F from './financeiro';
+import * as MOD from './modulos';
 import * as G from './mensagens';
 import * as RR from './src/services/rotaRuas';
 import { hashPassword, verifyPassword, upgradePasswordHash } from './senhas';
@@ -138,6 +139,8 @@ interface UserRecord {
   motoristasVinculados?: number[];
   veiculoModelo?: string;
   veiculoPlaca?: string;
+  /** Motorista: módulos (mensalidades, financeiro...) que ele ligou ou desligou. Ausente = padrões de modulos.ts */
+  modulos?: Record<string, boolean>;
   /** Motorista: local de cada escola atendida (chave = nome normalizado) */
   escolasLocal?: Record<string, { latitude: number; longitude: number }>;
   /** Motorista: horários de entrada e saída por escola e turno (definidos uma vez; o aluno novo herda) */
@@ -1884,6 +1887,31 @@ async function startServer() {
     if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
     if (!rec.codigoMotorista) { rec.codigoMotorista = novoCodigoMotorista(); persistence.scheduleSave(); }
     res.json({ codigo: rec.codigoMotorista });
+  });
+
+  // Módulos: o motorista liga ou desliga recursos de escritório (mensalidades, financeiro...). Desligar só esconde no app: os dados ficam guardados.
+  const contaDoMotorista = (req: Request) => {
+    const user = (req as any).user as SessionPayload;
+    return usersDB.find((u) => u.id === user.userId) ?? usersDB.find((u) => u.id === (driverIdFor(user) as number));
+  };
+
+  app.get('/api/motorista/modulos', authenticate, requireDriver, (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    res.json({ modulos: MOD.listarModulos(rec.modulos) });
+  });
+
+  app.put('/api/motorista/modulos', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    try {
+      rec.modulos = MOD.alterarModulo(rec.modulos, req.body?.chave, req.body?.ativo);
+    } catch (e: any) {
+      return res.status(400).json({ error: e?.message || 'Módulo inválido.' });
+    }
+    persistence.scheduleSave();
+    auditLog('MODULO_ALTERADO', rec.email, `${req.body.chave}=${req.body.ativo ? 'ligado' : 'desligado'}`);
+    res.json({ modulos: MOD.listarModulos(rec.modulos) });
   });
 
   // Trocar o código não desfaz os vínculos já feitos: só impede novos cadastros com o código antigo.

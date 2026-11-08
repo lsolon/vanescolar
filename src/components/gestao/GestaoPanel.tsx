@@ -4,6 +4,7 @@ import { TransportRepository } from '../../services/api';
 import type { MensalidadesMotorista, ResumoFinanceiro } from '../../services/api';
 import { Mensalidades } from '../driver/Mensalidades';
 import { Financeiro } from '../driver/Financeiro';
+import { useModulos } from '../../hooks/useModulos';
 
 /**
  * Área de Gestão do motorista: o "escritório" do negócio (mensalidades, financeiro e, nas próximas fases,
@@ -33,18 +34,23 @@ const Cartao: React.FC<{ rotulo: string; valor: string; sub?: string; cor?: stri
   </button>
 );
 
-const Resumo: React.FC<{ onIr: (s: Secao) => void }> = ({ onIr }) => {
+const Resumo: React.FC<{ onIr: (s: Secao) => void; comFin: boolean; comMen: boolean }> = ({ onIr, comFin, comMen }) => {
   const [fin, setFin] = useState<ResumoFinanceiro | null>(null);
   const [men, setMen] = useState<MensalidadesMotorista | null>(null);
+  const [carregado, setCarregado] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
   useEffect(() => {
     let vivo = true;
-    Promise.all([TransportRepository.resumoFinanceiro(), TransportRepository.listarMensalidades()])
-      .then(([f, m]) => { if (vivo) { setFin(f); setMen(m); } })
+    setCarregado(false);
+    Promise.all([
+      comFin ? TransportRepository.resumoFinanceiro() : Promise.resolve(null),
+      comMen ? TransportRepository.listarMensalidades() : Promise.resolve(null)
+    ])
+      .then(([f, m]) => { if (vivo) { setFin(f); setMen(m); setCarregado(true); } })
       .catch((e: any) => { if (vivo) setErro(e?.message || 'Não foi possível carregar o resumo.'); });
     return () => { vivo = false; };
-  }, []);
+  }, [comFin, comMen]);
 
   if (erro) {
     return (
@@ -53,24 +59,31 @@ const Resumo: React.FC<{ onIr: (s: Secao) => void }> = ({ onIr }) => {
       </p>
     );
   }
-  if (!fin || !men) return <p className="text-xs text-slate-400">Carregando resumo…</p>;
+  if (!carregado) return <p className="text-xs text-slate-400">Carregando resumo…</p>;
 
-  const r = men.resumo;
-  const lucro = fin.resumo.lucro;
+  const r = men?.resumo;
+  const lucro = fin?.resumo.lucro ?? 0;
+  const mes = men?.mes ?? fin?.mes ?? '';
   return (
     <section aria-label="Resumo do mês" className="space-y-3">
-      <h2 className="text-sm font-extrabold text-slate-100">{tituloMes(men.mes)}</h2>
+      {mes && <h2 className="text-sm font-extrabold text-slate-100">{tituloMes(mes)}</h2>}
       <div className="grid grid-cols-2 gap-3">
-        <Cartao rotulo={lucro >= 0 ? 'Lucro do mês' : 'Prejuízo do mês'} valor={brl(lucro)} cor={lucro >= 0 ? 'text-emerald-300' : 'text-rose-300'}
-          sub={`Receita ${brl(fin.resumo.receita_total)} · despesas ${brl(fin.resumo.despesas_total)}`} onClick={() => onIr('financeiro')} />
-        <Cartao rotulo="Recebido no mês" valor={brl(r.recebido)} cor="text-emerald-300"
-          sub={`${r.qtd_pagos} pago(s) de ${brl(r.previsto)} previstos`} onClick={() => onIr('mensalidades')} />
-        <Cartao rotulo="A vencer" valor={brl(r.a_vencer)} cor="text-sky-300"
-          sub={`${r.qtd_a_vencer} mensalidade(s)`} onClick={() => onIr('mensalidades')} />
-        <Cartao rotulo="Em atraso" valor={brl(r.atrasado)} cor={r.qtd_atrasados > 0 ? 'text-rose-300' : 'text-slate-100'}
-          sub={r.qtd_atrasados > 0 ? `${r.qtd_atrasados} mensalidade(s) · cobre pelo WhatsApp` : 'Nenhuma em atraso'} onClick={() => onIr('mensalidades')} />
+        {fin && (
+          <Cartao rotulo={lucro >= 0 ? 'Lucro do mês' : 'Prejuízo do mês'} valor={brl(lucro)} cor={lucro >= 0 ? 'text-emerald-300' : 'text-rose-300'}
+            sub={`Receita ${brl(fin.resumo.receita_total)} · despesas ${brl(fin.resumo.despesas_total)}`} onClick={() => onIr('financeiro')} />
+        )}
+        {r && (
+          <>
+            <Cartao rotulo="Recebido no mês" valor={brl(r.recebido)} cor="text-emerald-300"
+              sub={`${r.qtd_pagos} pago(s) de ${brl(r.previsto)} previstos`} onClick={() => onIr('mensalidades')} />
+            <Cartao rotulo="A vencer" valor={brl(r.a_vencer)} cor="text-sky-300"
+              sub={`${r.qtd_a_vencer} mensalidade(s)`} onClick={() => onIr('mensalidades')} />
+            <Cartao rotulo="Em atraso" valor={brl(r.atrasado)} cor={r.qtd_atrasados > 0 ? 'text-rose-300' : 'text-slate-100'}
+              sub={r.qtd_atrasados > 0 ? `${r.qtd_atrasados} mensalidade(s) · cobre pelo WhatsApp` : 'Nenhuma em atraso'} onClick={() => onIr('mensalidades')} />
+          </>
+        )}
       </div>
-      {r.qtd_sem_valor > 0 && (
+      {r && r.qtd_sem_valor > 0 && (
         <p className="text-[11px] text-amber-200 bg-amber-400/10 border border-amber-400/30 rounded-xl p-3">
           {r.qtd_sem_valor} família(s) sem valor de mensalidade definido. Defina em Mensalidades para entrar na conta.
         </p>
@@ -81,6 +94,13 @@ const Resumo: React.FC<{ onIr: (s: Secao) => void }> = ({ onIr }) => {
 
 export const GestaoPanel: React.FC<{ onVoltar: () => void }> = ({ onVoltar }) => {
   const [secao, setSecao] = useState<Secao>('resumo');
+  const modulos = useModulos();
+  const comMen = modulos.ativo('mensalidades');
+  const comFin = modulos.ativo('financeiro');
+  const secoes = SECOES.filter(([k]) => k === 'resumo' || (k === 'mensalidades' ? comMen : comFin));
+  const nenhum = !comMen && !comFin;
+  // Se o módulo da seção aberta for desligado, volta ao resumo.
+  const secaoAtual: Secao = secoes.some(([k]) => k === secao) ? secao : 'resumo';
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
@@ -95,10 +115,10 @@ export const GestaoPanel: React.FC<{ onVoltar: () => void }> = ({ onVoltar }) =>
           </div>
         </div>
         {/* Celular: abas no topo */}
-        <nav aria-label="Seções da Gestão" role="tablist" className="md:hidden grid grid-cols-3 border-t border-slate-800">
-          {SECOES.map(([k, nome, Icone]) => (
-            <button key={k} type="button" role="tab" aria-selected={secao === k} onClick={() => setSecao(k)}
-              className={`flex flex-col items-center justify-center gap-0.5 py-2 min-h-[52px] text-[11px] font-bold cursor-pointer ${secao === k ? 'text-amber-300 border-b-2 border-amber-300' : 'text-slate-400 border-b-2 border-transparent'}`}>
+        <nav aria-label="Seções da Gestão" role="tablist" style={{ gridTemplateColumns: `repeat(${secoes.length}, minmax(0, 1fr))` }} className="md:hidden grid border-t border-slate-800">
+          {secoes.map(([k, nome, Icone]) => (
+            <button key={k} type="button" role="tab" aria-selected={secaoAtual === k} onClick={() => setSecao(k)}
+              className={`flex flex-col items-center justify-center gap-0.5 py-2 min-h-[52px] text-[11px] font-bold cursor-pointer ${secaoAtual === k ? 'text-amber-300 border-b-2 border-amber-300' : 'text-slate-400 border-b-2 border-transparent'}`}>
               <Icone className="w-5 h-5" />
               {nome}
             </button>
@@ -109,9 +129,9 @@ export const GestaoPanel: React.FC<{ onVoltar: () => void }> = ({ onVoltar }) =>
       <div className="flex-1 w-full max-w-5xl mx-auto px-4 py-4 md:flex md:gap-6">
         {/* Computador: menu lateral */}
         <nav aria-label="Seções da Gestão" className="hidden md:block w-52 shrink-0 space-y-1">
-          {SECOES.map(([k, nome, Icone]) => (
-            <button key={k} type="button" aria-current={secao === k ? 'page' : undefined} onClick={() => setSecao(k)}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 min-h-[44px] rounded-xl text-sm font-bold text-left cursor-pointer ${secao === k ? 'bg-amber-400/15 text-amber-200 border border-amber-400/40' : 'text-slate-300 hover:bg-slate-900 border border-transparent'}`}>
+          {secoes.map(([k, nome, Icone]) => (
+            <button key={k} type="button" aria-current={secaoAtual === k ? 'page' : undefined} onClick={() => setSecao(k)}
+              className={`w-full flex items-center gap-2.5 px-3 py-2.5 min-h-[44px] rounded-xl text-sm font-bold text-left cursor-pointer ${secaoAtual === k ? 'bg-amber-400/15 text-amber-200 border border-amber-400/40' : 'text-slate-300 hover:bg-slate-900 border border-transparent'}`}>
               <Icone className="w-4 h-4" />
               {nome}
             </button>
@@ -119,9 +139,14 @@ export const GestaoPanel: React.FC<{ onVoltar: () => void }> = ({ onVoltar }) =>
         </nav>
 
         <main className="flex-1 min-w-0 md:max-w-2xl space-y-4">
-          {secao === 'resumo' && <Resumo onIr={setSecao} />}
-          {secao === 'mensalidades' && <Mensalidades />}
-          {secao === 'financeiro' && <Financeiro />}
+          {nenhum && (
+            <p role="status" className="text-xs text-slate-300 bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              Nenhum módulo ligado. Para usar a Gestão, ligue Mensalidades ou Financeiro em Painel &gt; Mais &gt; Rotas e ajustes &gt; Módulos.
+            </p>
+          )}
+          {!nenhum && secaoAtual === 'resumo' && <Resumo onIr={setSecao} comFin={comFin} comMen={comMen} />}
+          {secaoAtual === 'mensalidades' && comMen && <Mensalidades />}
+          {secaoAtual === 'financeiro' && comFin && <Financeiro />}
         </main>
       </div>
     </div>

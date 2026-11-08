@@ -614,6 +614,8 @@ export interface LancamentoFin {
   km?: number; litros?: number; valor_litro?: number; combustivel?: string; tanque_cheio?: boolean; posto?: string; obs?: string;
 }
 export interface CustoFixoFin { id: number; nome: string; valor_mensal: number; desde: string; ate?: string }
+/** Módulo de escritório que o motorista liga ou desliga (a lista vem do servidor). */
+export interface ModuloMotorista { chave: string; nome: string; descricao: string; padrao: boolean; ativo: boolean }
 export interface ResumoFinanceiro {
   mes: string; hoje: string;
   resumo: {
@@ -1896,6 +1898,22 @@ export const TransportRepository = {
   async apagarCustoFixo(id: number): Promise<void> {
     const res = await fetch(`${getBaseUrl()}/api/motorista/financeiro/custos-fixos/${id}`, { method: 'DELETE', headers: getAuthHeaders() });
     if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || 'Não foi possível apagar.'); }
+  },
+
+  async listarModulos(): Promise<ModuloMotorista[]> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/modulos`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível carregar os módulos.');
+    return d.modulos as ModuloMotorista[];
+  },
+
+  async alterarModulo(chave: string, ativo: boolean): Promise<ModuloMotorista[]> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/modulos`, {
+      method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ chave, ativo })
+    });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível alterar o módulo.');
+    return d.modulos as ModuloMotorista[];
   },
 
   async obterCodigoMotorista(): Promise<string> {
