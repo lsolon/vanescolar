@@ -1978,21 +1978,21 @@ test('Módulos: começam ligados, o motorista liga e desliga só os dele, entrad
 
   const inicial = await jsonReq('GET', '/api/motorista/modulos', a);
   assert.equal(inicial.status, 200);
-  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true }, 'quem já usava mantém tudo ligado');
+  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true, manutencao: false }, 'quem já usava mantém tudo ligado');
   for (const m of inicial.data.modulos) { assert.ok(m.nome && m.descricao, 'cada módulo traz nome e descrição'); }
 
   const desligar = await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'financeiro', ativo: false });
   assert.equal(desligar.status, 200);
-  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: false });
-  assert.deepEqual(await mapa(b), { mensalidades: true, financeiro: true }, 'o outro motorista não é afetado');
+  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: false, manutencao: false });
+  assert.deepEqual(await mapa(b), { mensalidades: true, financeiro: true, manutencao: false }, 'o outro motorista não é afetado');
 
   assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'financeiro', ativo: true })).status, 200);
-  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true }, 'dá para ligar de novo');
+  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true, manutencao: false }, 'dá para ligar de novo');
 
   assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'foguete', ativo: true })).status, 400);
   assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'financeiro', ativo: 'sim' })).status, 400);
   assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: '__proto__', ativo: true })).status, 400);
-  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true }, 'pedidos inválidos não mudam nada');
+  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true, manutencao: false }, 'pedidos inválidos não mudam nada');
 
   // Desligar só esconde: os dados do financeiro continuam guardados
   assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'financeiro', ativo: false })).status, 200);
@@ -2054,4 +2054,76 @@ test('Push: só responsável liga avisos no celular; assinatura inválida é rec
   assert.equal((await jsonReq('DELETE', '/api/push/assinar', resp, { endpoint: assinatura.endpoint })).status, 200);
   assert.equal((await jsonReq('GET', '/api/push/estado', resp)).data.aparelhos, 0, 'desligar apaga o aparelho');
   assert.equal((await jsonReq('POST', '/api/push/teste', resp)).status, 409, 'sem aparelho ligado, não há o que testar');
+});
+
+test('Manutenção: cada motorista cuida dos seus serviços, o km vem dos abastecimentos, alertas por km e data, entradas inválidas são recusadas e responsável não acessa', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const a = await novoMotorista(adm.data.token, 'ManA');
+  const b = await novoMotorista(adm.data.token, 'ManB');
+
+  const vazio = await jsonReq('GET', '/api/motorista/manutencao', a);
+  assert.equal(vazio.status, 200);
+  assert.deepEqual(vazio.data.itens, []);
+  assert.equal(vazio.data.km_atual, null);
+  assert.ok(vazio.data.sugestoes.length > 0, 'traz sugestões');
+  assert.equal((await jsonReq('GET', '/api/motorista/manutencao')).status, 401, 'visitante sem sessão');
+
+  // inválidos
+  assert.equal((await jsonReq('POST', '/api/motorista/manutencao', a, { nome: 'x', intervalo_km: 1000 })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/motorista/manutencao', a, { nome: 'Pneus' })).status, 400, 'sem intervalo');
+  assert.equal((await jsonReq('POST', '/api/motorista/manutencao', a, { nome: 'Pneus', intervalo_km: -1 })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/motorista/manutencao', a, { nome: 'Pneus', intervalo_km: 10000, ultima_data: '2099-01-01' })).status, 400);
+  assert.deepEqual((await jsonReq('GET', '/api/motorista/manutencao', a)).data.itens, [], 'pedidos inválidos não gravam');
+
+  // sem km conhecido: sem dados, sem inventar alerta
+  const criado = await jsonReq('POST', '/api/motorista/manutencao', a, { nome: 'Troca de óleo', intervalo_km: 10000, ultimo_km: 50000 });
+  assert.equal(criado.status, 200);
+  assert.equal(criado.data.itens[0].situacao, 'EM_DIA', 'o km do serviço já é uma leitura: km atual = 50000');
+  assert.equal(criado.data.km_atual, 50000);
+  const id = criado.data.itens[0].id;
+  assert.equal((await jsonReq('POST', '/api/motorista/manutencao', a, { nome: 'troca de óleo', intervalo_km: 5000 })).status, 400, 'nome repetido');
+
+  // abastecimento com km maior no Financeiro empurra o km atual e vence o serviço
+  const abast = await jsonReq('POST', '/api/motorista/financeiro/lancamentos', a, { tipo: 'DESPESA', categoria: 'COMBUSTIVEL', valor: 200, litros: 40, km: 60500, combustivel: 'GASOLINA', tanque_cheio: true, data: '2026-11-01' });
+  assert.equal(abast.status, 200, JSON.stringify(abast.data));
+  const depois = (await jsonReq('GET', '/api/motorista/manutencao', a)).data;
+  assert.equal(depois.km_atual, 60500);
+  assert.equal(depois.itens[0].situacao, 'VENCIDO');
+  assert.equal(depois.itens[0].faltam_km, -500);
+  assert.equal(depois.resumo.vencidos, 1);
+
+  // outro motorista não vê nada disso
+  assert.deepEqual((await jsonReq('GET', '/api/motorista/manutencao', b)).data.itens, []);
+  assert.equal((await jsonReq('PUT', `/api/motorista/manutencao/${id}/feito`, b, { km: 61000 })).status, 404, 'não mexe no serviço do outro');
+  assert.equal((await jsonReq('DELETE', `/api/motorista/manutencao/${id}`, b)).status, 404);
+
+  // marcar como feito: pede km, aceita, zera o alerta
+  assert.equal((await jsonReq('PUT', `/api/motorista/manutencao/${id}/feito`, a, {})).status, 400, 'sem km');
+  assert.equal((await jsonReq('PUT', `/api/motorista/manutencao/${id}/feito`, a, { km: 61000, data: '2099-01-01' })).status, 400, 'futuro');
+  const feito = await jsonReq('PUT', `/api/motorista/manutencao/${id}/feito`, a, { km: 61000 });
+  assert.equal(feito.status, 200);
+  assert.equal(feito.data.itens[0].situacao, 'EM_DIA');
+  assert.equal(feito.data.itens[0].proximo_km, 71000);
+  assert.equal(feito.data.km_atual, 61000);
+
+  // por data
+  const vist = await jsonReq('POST', '/api/motorista/manutencao', a, { nome: 'Vistoria', intervalo_meses: 12, ultima_data: '2020-01-01' });
+  assert.equal(vist.status, 200);
+  assert.equal(vist.data.itens[0].nome, 'Vistoria', 'vencido vem primeiro');
+  assert.equal(vist.data.itens[0].situacao, 'VENCIDO');
+
+  // remover
+  const rem = await jsonReq('DELETE', `/api/motorista/manutencao/${id}`, a);
+  assert.equal(rem.status, 200);
+  assert.equal(rem.data.itens.length, 1);
+  assert.equal((await jsonReq('DELETE', `/api/motorista/manutencao/${id}`, a)).status, 404);
+
+  // módulo desligado por padrão e responsável não acessa
+  const mods = (await jsonReq('GET', '/api/motorista/modulos', a)).data.modulos as any[];
+  assert.equal(mods.find((m) => m.chave === 'manutencao').ativo, false);
+  const aluno = (await jsonReq('POST', '/api/paradas/nova', a, { nomeAluno: 'Aluno Man', endereco: 'Rua M, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' })).data;
+  const resp = await novoResponsavel(aluno.codigoVinculo);
+  const r = await jsonReq('GET', '/api/motorista/manutencao', resp);
+  assert.ok(r.status === 401 || r.status === 403, 'responsável não vê a manutenção do motorista');
+  assert.equal((await jsonReq('POST', '/api/motorista/manutencao', resp, { nome: 'Óleo', intervalo_km: 1000 })).status === 200, false);
 });

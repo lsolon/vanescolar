@@ -16,6 +16,7 @@ import { LogUso, LogArquivo, LogFirestore, emCsv } from './logUso';
 import * as M from './mensalidades';
 import * as F from './financeiro';
 import * as MOD from './modulos';
+import * as MAN from './manutencao';
 import * as P from './push';
 import webpush from 'web-push';
 import * as G from './mensagens';
@@ -145,6 +146,8 @@ interface UserRecord {
   modulos?: Record<string, boolean>;
   /** Responsável: aparelhos que recebem avisos no celular (push). Só o necessário para enviar; apagados ao desligar ou quando o aparelho some. */
   pushSubs?: P.AssinaturaPush[];
+  /** Motorista: revisões da van (óleo, pneus...) com intervalo em km e/ou meses. Dados só dele. */
+  manutencao?: MAN.ItemManutencao[];
   /** Motorista: local de cada escola atendida (chave = nome normalizado) */
   escolasLocal?: Record<string, { latitude: number; longitude: number }>;
   /** Motorista: horários de entrada e saída por escola e turno (definidos uma vez; o aluno novo herda) */
@@ -2019,6 +2022,61 @@ async function startServer() {
     persistence.scheduleSave();
     auditLog('MODULO_ALTERADO', rec.email, `${req.body.chave}=${req.body.ativo ? 'ligado' : 'desligado'}`);
     res.json({ modulos: MOD.listarModulos(rec.modulos) });
+  });
+
+  // ---- Manutenção da van por km e por data (módulo "manutencao", desligado por padrão; os dados são só do motorista) ----
+  const kmsDoMotorista = (driverId: number) => financeiroDB.lancamentos.filter((l) => l.id_motorista === driverId).map((l) => l.km);
+  const painelManutencao = (rec: UserRecord, driverId: number) => {
+    const itens = rec.manutencao ?? [];
+    const kmAtual = MAN.kmAtualDe(kmsDoMotorista(driverId), itens);
+    const lista = MAN.listarStatus(itens, kmAtual, M.hojeBrasil());
+    return { km_atual: kmAtual, itens: lista, resumo: MAN.resumoManutencao(lista), sugestoes: MAN.SUGESTOES };
+  };
+
+  app.get('/api/motorista/manutencao', authenticate, requireDriver, (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    res.json(painelManutencao(rec, driverIdFor((req as any).user) as number));
+  });
+
+  app.post('/api/motorista/manutencao', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const itens = rec.manutencao ?? [];
+    if (itens.length >= MAN.MAX_ITENS) return res.status(400).json({ error: `Limite de ${MAN.MAX_ITENS} serviços atingido.` });
+    const v = MAN.validarItem(req.body || {}, M.hojeBrasil());
+    if (!v.ok) return res.status(400).json({ error: v.erro });
+    if (itens.some((i) => i.nome.toLowerCase() === v.dados.nome.toLowerCase())) return res.status(400).json({ error: 'Já existe um serviço com esse nome.' });
+    rec.manutencao = [...itens, { ...v.dados, id: MAN.proximoIdItem(itens), criado_em: new Date().toISOString() }];
+    persistence.scheduleSave();
+    auditLog('MANUTENCAO_ITEM_CRIADO', rec.email, v.dados.nome);
+    res.json({ sucesso: true, ...painelManutencao(rec, driverIdFor((req as any).user) as number) });
+  });
+
+  app.put('/api/motorista/manutencao/:id/feito', authenticate, requireDriver, rateLimiter(60, 60000), (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const item = (rec.manutencao ?? []).find((i) => i.id === Number(req.params.id));
+    if (!item) return res.status(404).json({ error: 'Serviço não encontrado.' });
+    const v = MAN.validarServico(req.body || {}, item, M.hojeBrasil());
+    if (!v.ok) return res.status(400).json({ error: v.erro });
+    item.ultima_data = v.data;
+    if (v.km !== undefined) item.ultimo_km = v.km;
+    persistence.scheduleSave();
+    auditLog('MANUTENCAO_FEITA', rec.email, item.nome);
+    res.json({ sucesso: true, ...painelManutencao(rec, driverIdFor((req as any).user) as number) });
+  });
+
+  app.delete('/api/motorista/manutencao/:id', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const id = Number(req.params.id);
+    const antes = rec.manutencao ?? [];
+    if (!antes.some((i) => i.id === id)) return res.status(404).json({ error: 'Serviço não encontrado.' });
+    rec.manutencao = antes.filter((i) => i.id !== id);
+    persistence.scheduleSave();
+    auditLog('MANUTENCAO_ITEM_REMOVIDO', rec.email, `id ${id}`);
+    res.json({ sucesso: true, ...painelManutencao(rec, driverIdFor((req as any).user) as number) });
   });
 
   // Trocar o código não desfaz os vínculos já feitos: só impede novos cadastros com o código antigo.

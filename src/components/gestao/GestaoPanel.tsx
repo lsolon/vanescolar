@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, LayoutDashboard, TrendingUp, Wallet } from 'lucide-react';
+import { ArrowLeft, LayoutDashboard, TrendingUp, Wallet, Wrench } from 'lucide-react';
 import { TransportRepository } from '../../services/api';
-import type { MensalidadesMotorista, ResumoFinanceiro } from '../../services/api';
+import type { MensalidadesMotorista, PainelManutencao, ResumoFinanceiro } from '../../services/api';
 import { Mensalidades } from '../driver/Mensalidades';
 import { Financeiro } from '../driver/Financeiro';
+import { Manutencao } from '../driver/Manutencao';
 import { useModulos } from '../../hooks/useModulos';
 
 /**
@@ -11,12 +12,13 @@ import { useModulos } from '../../hooks/useModulos';
  * manutenção, documentos e relatórios). Usa o mesmo login e os mesmos dados do painel do dia a dia.
  * O servidor só entrega estes dados ao motorista logado; aqui só organizamos a tela.
  */
-type Secao = 'resumo' | 'mensalidades' | 'financeiro';
+type Secao = 'resumo' | 'mensalidades' | 'financeiro' | 'manutencao';
 
 const SECOES: ReadonlyArray<readonly [Secao, string, React.ComponentType<{ className?: string }>]> = [
   ['resumo', 'Resumo', LayoutDashboard],
   ['mensalidades', 'Mensalidades', Wallet],
-  ['financeiro', 'Financeiro', TrendingUp]
+  ['financeiro', 'Financeiro', TrendingUp],
+  ['manutencao', 'Manutenção', Wrench]
 ];
 
 const brl = (n: number | null | undefined) => (n ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -34,9 +36,10 @@ const Cartao: React.FC<{ rotulo: string; valor: string; sub?: string; cor?: stri
   </button>
 );
 
-const Resumo: React.FC<{ onIr: (s: Secao) => void; comFin: boolean; comMen: boolean }> = ({ onIr, comFin, comMen }) => {
+const Resumo: React.FC<{ onIr: (s: Secao) => void; comFin: boolean; comMen: boolean; comMan: boolean }> = ({ onIr, comFin, comMen, comMan }) => {
   const [fin, setFin] = useState<ResumoFinanceiro | null>(null);
   const [men, setMen] = useState<MensalidadesMotorista | null>(null);
+  const [man, setMan] = useState<PainelManutencao | null>(null);
   const [carregado, setCarregado] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -45,12 +48,13 @@ const Resumo: React.FC<{ onIr: (s: Secao) => void; comFin: boolean; comMen: bool
     setCarregado(false);
     Promise.all([
       comFin ? TransportRepository.resumoFinanceiro() : Promise.resolve(null),
-      comMen ? TransportRepository.listarMensalidades() : Promise.resolve(null)
+      comMen ? TransportRepository.listarMensalidades() : Promise.resolve(null),
+      comMan ? TransportRepository.listarManutencao() : Promise.resolve(null)
     ])
-      .then(([f, m]) => { if (vivo) { setFin(f); setMen(m); setCarregado(true); } })
+      .then(([f, m, mt]) => { if (vivo) { setFin(f); setMen(m); setMan(mt); setCarregado(true); } })
       .catch((e: any) => { if (vivo) setErro(e?.message || 'Não foi possível carregar o resumo.'); });
     return () => { vivo = false; };
-  }, [comFin, comMen]);
+  }, [comFin, comMen, comMan]);
 
   if (erro) {
     return (
@@ -83,6 +87,13 @@ const Resumo: React.FC<{ onIr: (s: Secao) => void; comFin: boolean; comMen: bool
           </>
         )}
       </div>
+      {man && (
+        <div className="grid grid-cols-2 gap-3">
+          <Cartao rotulo="Manutenção" cor={man.resumo.vencidos > 0 ? 'text-rose-300' : man.resumo.atencao > 0 ? 'text-amber-200' : 'text-emerald-300'}
+            valor={man.resumo.total === 0 ? 'Sem serviços' : man.resumo.vencidos > 0 ? `${man.resumo.vencidos} vencido(s)` : man.resumo.atencao > 0 ? `${man.resumo.atencao} perto de vencer` : 'Tudo em dia'}
+            sub={man.resumo.total === 0 ? 'Cadastre óleo, pneus, freios...' : `${man.resumo.total} serviço(s) acompanhado(s)`} onClick={() => onIr('manutencao')} />
+        </div>
+      )}
       {r && r.qtd_sem_valor > 0 && (
         <p className="text-[11px] text-amber-200 bg-amber-400/10 border border-amber-400/30 rounded-xl p-3">
           {r.qtd_sem_valor} família(s) sem valor de mensalidade definido. Defina em Mensalidades para entrar na conta.
@@ -97,8 +108,9 @@ export const GestaoPanel: React.FC<{ onVoltar: () => void }> = ({ onVoltar }) =>
   const modulos = useModulos();
   const comMen = modulos.ativo('mensalidades');
   const comFin = modulos.ativo('financeiro');
-  const secoes = SECOES.filter(([k]) => k === 'resumo' || (k === 'mensalidades' ? comMen : comFin));
-  const nenhum = !comMen && !comFin;
+  const comMan = modulos.ativo('manutencao', false);
+  const secoes = SECOES.filter(([k]) => k === 'resumo' || (k === 'mensalidades' ? comMen : k === 'financeiro' ? comFin : comMan));
+  const nenhum = !comMen && !comFin && !comMan;
   // Se o módulo da seção aberta for desligado, volta ao resumo.
   const secaoAtual: Secao = secoes.some(([k]) => k === secao) ? secao : 'resumo';
 
@@ -141,12 +153,13 @@ export const GestaoPanel: React.FC<{ onVoltar: () => void }> = ({ onVoltar }) =>
         <main className="flex-1 min-w-0 md:max-w-2xl space-y-4">
           {nenhum && (
             <p role="status" className="text-xs text-slate-300 bg-slate-900 border border-slate-800 rounded-2xl p-4">
-              Nenhum módulo ligado. Para usar a Gestão, ligue Mensalidades ou Financeiro em Painel &gt; Mais &gt; Rotas e ajustes &gt; Módulos.
+              Nenhum módulo ligado. Para usar a Gestão, ligue Mensalidades, Financeiro ou Manutenção em Painel &gt; Mais &gt; Rotas e ajustes &gt; Módulos.
             </p>
           )}
-          {!nenhum && secaoAtual === 'resumo' && <Resumo onIr={setSecao} comFin={comFin} comMen={comMen} />}
+          {!nenhum && secaoAtual === 'resumo' && <Resumo onIr={setSecao} comFin={comFin} comMen={comMen} comMan={comMan} />}
           {secaoAtual === 'mensalidades' && comMen && <Mensalidades />}
           {secaoAtual === 'financeiro' && comFin && <Financeiro />}
+          {secaoAtual === 'manutencao' && comMan && <Manutencao />}
         </main>
       </div>
     </div>
