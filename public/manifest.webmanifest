@@ -3,7 +3,7 @@
   "short_name": "VanEscolar",
   "description": "Acompanhe a van escolar: horários, aviso de chegada e mensalidades.",
   "lang": "pt-BR",
-  "start_url": "/",
+  "start_url": "/app",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",

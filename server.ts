@@ -3386,17 +3386,17 @@ async function startServer() {
     if (d.length >= 12 && d.startsWith('55')) d = d.slice(2);
     return d.length === 10 || d.length === 11 ? d : null;
   };
-  /** Link que abre o app já personalizado com o nome do motorista (?m=MOT-…). Sem código, cai no endereço simples. */
+  /** Link que abre o app já personalizado com o nome do motorista (?m=MOT-…). Sem código, cai no endereço simples do app (/app). */
   const linkDaVan = (driverId: number) => {
     const rec = usersDB.find((u) => u.id === driverId);
     if (rec && !rec.codigoMotorista) { rec.codigoMotorista = novoCodigoMotorista(); persistence.scheduleSave(); }
     const cod = rec?.codigoMotorista;
-    return cod ? `${APP_URL_PUBLICA}/?m=${encodeURIComponent(cod)}` : APP_URL_PUBLICA;
+    return cod ? `${APP_URL_PUBLICA}/?m=${encodeURIComponent(cod)}` : `${APP_URL_PUBLICA}/app`;
   };
   const mensagemConvite = (motoristaNome: string, p: any, driverId?: number) =>
     `Olá, ${primeiroNome(p.responsavel_nome) || 'tudo bem'}! Aqui é ${primeiroNome(motoristaNome) || 'o motorista'} do transporte escolar. ` +
     `Cadastrei ${primeiroNome(p.nome_aluno)} no VanEscolar para você acompanhar a van pelo celular.\n\n` +
-    `1) Abra ${driverId != null ? linkDaVan(driverId) : APP_URL_PUBLICA}\n2) Crie a sua conta\n3) Digite este código para ver ${primeiroNome(p.nome_aluno)}: ${p.codigo_vinculo}\n\n` +
+    `1) Abra ${driverId != null ? linkDaVan(driverId) : `${APP_URL_PUBLICA}/app`}\n2) Crie a sua conta\n3) Digite este código para ver ${primeiroNome(p.nome_aluno)}: ${p.codigo_vinculo}\n\n` +
     `Qualquer dúvida, é só me chamar.`;
 
   /** Cria o aluno já confirmado na van (cadastro feito pelo motorista), no fim das rotas de ida e volta. */
@@ -3904,6 +3904,13 @@ async function startServer() {
   });
 
   const isProd = process.env.NODE_ENV === 'production';
+  // Página inicial: quem abre o endereço principal vê a landing page, e o app fica em /app.
+  // Os links que já circulam (?m=…, ?pre=…, ?role=…, ?demo=…) têm parâmetros e continuam abrindo o app direto.
+  app.get('/', (req: Request, res: Response, next: NextFunction) => {
+    if (Object.keys(req.query).length > 0) return next();
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(path.resolve(__dirname, isProd ? 'dist' : 'public', 'lp.html'));
+  });
   if (isProd) {
     // O service worker e o manifesto não podem ficar presos no cache do navegador, senão o app não atualiza.
     app.use(express.static(path.resolve(__dirname, 'dist'), {

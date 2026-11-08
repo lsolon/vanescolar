@@ -21,6 +21,12 @@ summary{cursor:pointer}
 </style>
 </head>
 <body>
+<script>
+// Quem já está no app (sessão ativa ou app instalado) vai direto para ele. /lp.html sempre mostra a página.
+try {
+  if (location.pathname !== '/lp.html' && (localStorage.getItem('van_token') || localStorage.getItem('adminToken') || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone)) { location.replace('/app'); }
+} catch (e) {}
+</script>
 <div style="font-family: 'Inter', system-ui, sans-serif; color: #14130F; background: #FFFBF0; line-height: 1.5">
 
 <!-- topo -->
@@ -30,7 +36,7 @@ summary{cursor:pointer}
 <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#14130F" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M3 11h18M7 17v2M17 17v2"/><circle cx="7.5" cy="14" r="0.6"/><circle cx="16.5" cy="14" r="0.6"/></svg>
 VanEscolar
 </div>
-<a href="/" style="background: #14130F; color: #FFC400; text-decoration: none; font-weight: 600; padding: 12px 20px; border-radius: 999px; min-height: 20px">Testar 30 dias grátis</a>
+<a href="/app" style="background: #14130F; color: #FFC400; text-decoration: none; font-weight: 600; padding: 12px 20px; border-radius: 999px; min-height: 20px">Testar 30 dias grátis</a>
 </div>
 </div>
 
@@ -42,7 +48,7 @@ VanEscolar
 <h1 style="font-family: 'Space Grotesk', system-ui, sans-serif; font-weight: 700; font-size: clamp(40px, 6vw, 68px); line-height: 1.02; letter-spacing: -0.02em; margin: 0 0 24px">2027 vai ser diferente. Comece com a van organizada.</h1>
 <p style="font-size: 20px; max-width: 520px; margin: 0 0 32px">Embarque, aviso para as famílias e mensalidades num só lugar, no celular. Teste por 30 dias, sem pressa, e chegue ao início das aulas com tudo pronto.</p>
 <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px 24px">
-<a href="/" style="background: #14130F; color: #FFC400; text-decoration: none; font-weight: 600; font-size: 18px; padding: 16px 28px; border-radius: 999px">Começar meus 30 dias grátis</a>
+<a href="/app" style="background: #14130F; color: #FFC400; text-decoration: none; font-weight: 600; font-size: 18px; padding: 16px 28px; border-radius: 999px">Começar meus 30 dias grátis</a>
 <span style="font-size: 15px">Depois, a partir de R$ 99 por mês.</span>
 </div>
 </div>
@@ -164,7 +170,7 @@ VanEscolar
 <div style="flex: 1 1 360px; min-width: 0">
 <h2 style="font-family: 'Space Grotesk', system-ui, sans-serif; font-size: clamp(28px, 3.5vw, 40px); line-height: 1.1; margin: 0 0 12px">Teste agora e entre em 2027 com a van no ponto.</h2>
 <p style="margin: 0 0 24px; font-size: 18px">Cadastre seus alunos, mande os convites e faça suas rotas durante 30 dias. Depois, a partir de R$ 99 por mês, conforme o número de alunos.</p>
-<a href="/" style="display: inline-block; background: #14130F; color: #FFC400; text-decoration: none; font-weight: 600; font-size: 18px; padding: 16px 28px; border-radius: 999px">Começar meus 30 dias grátis</a>
+<a href="/app" style="display: inline-block; background: #14130F; color: #FFC400; text-decoration: none; font-weight: 600; font-size: 18px; padding: 16px 28px; border-radius: 999px">Começar meus 30 dias grátis</a>
 </div>
 </div>
 </div>

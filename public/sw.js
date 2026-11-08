@@ -67,7 +67,7 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((janelas) => {
       const aberta = janelas.find((j) => new URL(j.url).origin === self.location.origin);
-      return aberta ? aberta.focus() : self.clients.openWindow('/');
+      return aberta ? aberta.focus() : self.clients.openWindow('/app');
     })
   );
 });
