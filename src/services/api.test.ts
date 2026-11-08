@@ -1969,3 +1969,41 @@ test('Modo de teste: cada sessão ganha conta própria e sem sessão volta à co
   const c1 = await entrar('ZZ'); const c2 = await entrar();
   assert.deepEqual(await nomes(c1), await nomes(c2));
 });
+
+test('Módulos: começam ligados, o motorista liga e desliga só os dele, entradas inválidas são recusadas e responsável/visitante não acessam', async () => {
+  const adm = await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD });
+  const a = await novoMotorista(adm.data.token, 'ModA');
+  const b = await novoMotorista(adm.data.token, 'ModB');
+  const mapa = async (tok: string) => Object.fromEntries(((await jsonReq('GET', '/api/motorista/modulos', tok)).data.modulos as any[]).map((m) => [m.chave, m.ativo]));
+
+  const inicial = await jsonReq('GET', '/api/motorista/modulos', a);
+  assert.equal(inicial.status, 200);
+  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true }, 'quem já usava mantém tudo ligado');
+  for (const m of inicial.data.modulos) { assert.ok(m.nome && m.descricao, 'cada módulo traz nome e descrição'); }
+
+  const desligar = await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'financeiro', ativo: false });
+  assert.equal(desligar.status, 200);
+  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: false });
+  assert.deepEqual(await mapa(b), { mensalidades: true, financeiro: true }, 'o outro motorista não é afetado');
+
+  assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'financeiro', ativo: true })).status, 200);
+  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true }, 'dá para ligar de novo');
+
+  assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'foguete', ativo: true })).status, 400);
+  assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'financeiro', ativo: 'sim' })).status, 400);
+  assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: '__proto__', ativo: true })).status, 400);
+  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true }, 'pedidos inválidos não mudam nada');
+
+  // Desligar só esconde: os dados do financeiro continuam guardados
+  assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'financeiro', ativo: false })).status, 200);
+  assert.equal((await jsonReq('GET', '/api/motorista/financeiro/resumo', a)).status, 200);
+
+  assert.equal((await jsonReq('GET', '/api/motorista/modulos')).status, 401, 'visitante sem sessão');
+  const aluno = (await jsonReq('POST', '/api/paradas/nova', a, {
+    nomeAluno: 'Aluno Mod', endereco: 'Rua M, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777'
+  })).data;
+  const resp = await novoResponsavel(aluno.codigoVinculo);
+  const r = await jsonReq('GET', '/api/motorista/modulos', resp);
+  assert.ok(r.status === 401 || r.status === 403, 'responsável não acessa os módulos do motorista');
+  assert.equal((await jsonReq('PUT', '/api/motorista/modulos', resp, { chave: 'financeiro', ativo: true })).status === 200, false);
+});

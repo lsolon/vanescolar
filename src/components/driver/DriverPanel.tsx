@@ -27,6 +27,8 @@ import {
 } from '../../types/database';
 import { InstalarApp } from '../shared/InstalarApp';
 import { LancarAbastecimento } from './Financeiro';
+import { ModulosAjustes } from './ModulosAjustes';
+import { useModulos } from '../../hooks/useModulos';
 import { Mensagens, useNaoLidasMotorista } from './Mensagens';
 import { TransportRepository, subscribeToDatabaseChanges } from '../../services/api';
 import { minutosAgoraBrasil, sentidoPorHorario } from '../../services/sentidoAuto';
@@ -128,6 +130,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   // Modal de Cadastro de Novo Aluno pelo Motorista
   const [aba, setAba] = useState<AbaMotorista>('diario');
   const guia = useGuiaPrimeiroAcesso('motorista');
+  const modulos = useModulos();
   const [verPendentes, setVerPendentes] = useState(false);
   const [abertoId, setAbertoId] = useState<number | string | null>(null);
   /** Faixa embaixo, logo após marcar um aluno: confirma e deixa desfazer por alguns segundos. */
@@ -615,7 +618,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
               ['gestao', 'Gestão', 'Mensalidades, financeiro e controle do negócio', Wallet],
               ['abastecimento', 'Lançar abastecimento', 'Registrar rápido, direto no posto', Fuel],
               ['ajustes', 'Rotas e ajustes', 'Horários das escolas, rotas de ida e volta, código', Settings]
-            ] as const).filter(([k]) => k !== 'gestao' || !!onAbrirGestao).map(([k, titulo, desc, Icone]) => (
+            ] as const).filter(([k]) => (k !== 'gestao' || (!!onAbrirGestao && (modulos.ativo('mensalidades') || modulos.ativo('financeiro')))) && (k !== 'abastecimento' || modulos.ativo('financeiro'))).map(([k, titulo, desc, Icone]) => (
               <button key={k} type="button" onClick={() => (k === 'gestao' ? onAbrirGestao?.() : setAba(k))} className="w-full flex items-center gap-3 px-4 py-3 min-h-[60px] rounded-2xl bg-slate-900 border border-slate-800 text-left cursor-pointer active:scale-[0.99]">
                 <Icone className="w-5 h-5 text-amber-300 shrink-0" />
                 <span className="flex-1 min-w-0">
@@ -1029,6 +1032,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
         {aba === 'ajustes' && (
           <>
+        <ModulosAjustes lista={modulos.lista} onAlterar={modulos.alterar} />
         <section className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3" aria-label="Segurança">
           <h3 className="text-sm font-bold text-slate-100">Segurança</h3>
           <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] font-semibold bg-emerald-950/60 border border-emerald-500/30 px-2.5 py-1.5 rounded-lg">
