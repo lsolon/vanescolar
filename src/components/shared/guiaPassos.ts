@@ -4,7 +4,7 @@
  */
 
 export type PapelGuia = 'motorista' | 'responsavel';
-export type AbaMotorista = 'diario' | 'mapa' | 'mensagens' | 'mais' | 'cadastro' | 'mensalidades' | 'financeiro' | 'ajustes';
+export type AbaMotorista = 'diario' | 'mapa' | 'mensagens' | 'mais' | 'cadastro' | 'abastecimento' | 'ajustes';
 
 export interface PassoGuia {
   id: string;
@@ -132,13 +132,14 @@ export const PASSOS_MOTORISTA: PassoGuia[] = [
   },
   {
     id: 'dinheiro',
-    titulo: 'Mensalidades e Financeiro',
-    texto: 'Ficam em Mais.',
+    titulo: 'Gestão: mensalidades e financeiro',
+    texto: 'Ficam em Mais > Gestão, a área de controle do seu negócio.',
     itens: [
       'Mensalidades: quem pagou e quem está em aberto. Você dá baixa no pagamento à mão.',
-      'Financeiro: receitas, custos e resultado do mês.'
+      'Financeiro: receitas, custos e resultado do mês.',
+      'No posto, use Mais > Lançar abastecimento para registrar rápido.'
     ],
-    aba: 'mensalidades'
+    aba: 'mais'
   },
   {
     id: 'privacidade',

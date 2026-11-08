@@ -348,3 +348,40 @@ export const Financeiro: React.FC = () => {
     </section>
   );
 };
+
+/**
+ * Atalho do app para lançar um abastecimento rápido (no posto), sem abrir a Gestão.
+ * Usa o mesmo formulário do Financeiro, então o lançamento aparece na Gestão.
+ */
+export const LancarAbastecimento: React.FC<{ onConcluir: () => void }> = ({ onConcluir }) => {
+  const [ultimaKm, setUltimaKm] = useState<number | null>(null);
+  const [salvo, setSalvo] = useState(false);
+  const [rodada, setRodada] = useState(0);
+
+  // A última km só serve de dica no campo; se falhar, o formulário continua funcionando.
+  useEffect(() => {
+    let vivo = true;
+    TransportRepository.resumoFinanceiro()
+      .then((r) => { if (vivo) setUltimaKm(r.ultima_km ?? null); })
+      .catch(() => { /* sem dica de km */ });
+    return () => { vivo = false; };
+  }, [rodada]);
+
+  return (
+    <section aria-label="Lançar abastecimento" className="space-y-3">
+      <h2 className="text-sm font-bold text-slate-200">Lançar abastecimento</h2>
+      {salvo ? (
+        <div role="status" className="rounded-2xl border border-emerald-500/40 bg-emerald-950/60 p-4 space-y-3">
+          <p className="text-sm font-bold text-emerald-200">Lançamento salvo.</p>
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={() => { setSalvo(false); setRodada((n) => n + 1); }} className="px-3 py-3 min-h-[48px] rounded-xl bg-slate-900 border border-slate-700 text-xs font-bold text-slate-100 cursor-pointer">Lançar outro</button>
+            <button type="button" onClick={onConcluir} className="px-3 py-3 min-h-[48px] rounded-xl bg-amber-400 text-slate-950 text-xs font-black cursor-pointer">Voltar</button>
+          </div>
+        </div>
+      ) : (
+        <Formulario key={rodada} ultimaKm={ultimaKm} onFechar={onConcluir} onSalvo={() => setSalvo(true)} />
+      )}
+      <p className="text-[11px] text-slate-500">Receitas, despesas, gráficos e custos fixos ficam em Mais &gt; Gestão.</p>
+    </section>
+  );
+};
