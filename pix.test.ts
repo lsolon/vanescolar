@@ -100,3 +100,14 @@ test('txid da mensalidade: só letras e números, até 25 caracteres', () => {
   assert.match(t, /^[A-Za-z0-9]{1,25}$/);
   assert.equal(t, 'VAN123456789M202611');
 });
+
+test('somarReais: conta em centavos, sem erro de ponto flutuante', () => {
+  assert.equal(PIX.somarReais([0.1, 0.2]), 0.3);
+  assert.equal(PIX.somarReais([100, 150, 50.25]), 300.25);
+  assert.equal(PIX.somarReais([]), 0);
+});
+
+test('txidFamilia: só letras e números, até 25 caracteres', () => {
+  assert.equal(PIX.txidFamilia(42, '2026-11'), 'VANF42M202611');
+  assert.match(PIX.txidFamilia(123456789012, '2026-11'), /^[A-Za-z0-9]{1,25}$/);
+});

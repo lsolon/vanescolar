@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { TransportRepository } from '../../services/api';
-import type { LinhaMensalidadeMotorista, MensalidadesMotorista, StatusMensalidade } from '../../services/api';
+import type { AvisoPendente, LinhaMensalidadeMotorista, MensalidadesMotorista, StatusMensalidade } from '../../services/api';
 import { PixConfig } from './PixConfig';
 
 const brl = (n: number | null | undefined) => (n ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -33,6 +33,37 @@ function mensagemCobranca(l: LinhaMensalidadeMotorista, mes: string) {
     `${l.valor ? ` (${brl(l.valor)}${venc ? `, vencimento dia ${venc}` : ''})` : ''}. ` +
     'Se já pagou, pode desconsiderar. Obrigado!';
 }
+
+/** Aviso "já paguei pelo Pix" de uma família (um ou vários filhos): o motorista confere no banco e confirma tudo de uma vez. */
+const CartaoAvisoFamilia: React.FC<{ g: AvisoPendente; onMudou: () => void }> = ({ g, onMudou }) => {
+  const [ocupado, setOcupado] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+  const itens = g.itens.map((i) => ({ id_aluno: i.id_aluno, mes: i.mes }));
+  const varios = g.itens.length > 1;
+  const agir = async (fn: () => Promise<unknown>) => {
+    setOcupado(true); setErro(null);
+    try { await fn(); onMudou(); } catch (e: any) { setErro(e.message); } finally { setOcupado(false); }
+  };
+  return (
+    <div role="status" className="rounded-2xl border border-amber-400/40 bg-amber-400/10 p-4 space-y-3">
+      <p className="text-xs text-amber-100">
+        {g.responsavel_nome || 'Uma família'} avisou em {quando(g.itens[0].avisado_em)} que pagou {brl(g.total)} pelo Pix. Confira no seu banco antes de confirmar.
+      </p>
+      <ul className="text-[11px] text-amber-50/90 space-y-0.5" aria-label="O que foi pago">
+        {g.itens.map((i) => (
+          <li key={`${i.id_aluno}-${i.mes}`} className="flex justify-between gap-2"><span className="truncate">{i.aluno} · {nomeMes(i.mes)}</span><span className="shrink-0 font-bold">{brl(i.valor)}</span></li>
+        ))}
+      </ul>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" disabled={ocupado} onClick={() => agir(() => TransportRepository.confirmarAvisosPagamento(itens))}
+          className="px-4 py-2 min-h-[44px] rounded-xl bg-emerald-600 text-white text-xs font-black cursor-pointer disabled:opacity-50">{varios ? 'Recebi, confirmar tudo' : 'Recebi, confirmar'}</button>
+        <button type="button" disabled={ocupado} onClick={() => { if (window.confirm(varios ? 'Tirar o aviso de todos? As mensalidades continuam em aberto.' : 'Tirar o aviso? A mensalidade continua em aberto.')) void agir(() => TransportRepository.descartarAvisosPagamento(itens)); }}
+          className="px-3 py-2 min-h-[44px] rounded-xl bg-slate-800 text-rose-300 text-xs font-bold cursor-pointer disabled:opacity-50">Não recebi</button>
+      </div>
+      {erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
+    </div>
+  );
+};
 
 const Linha: React.FC<{ l: LinhaMensalidadeMotorista; mes: string; aberta: boolean; onToggle: () => void; onMudou: () => void }> = ({ l, mes, aberta, onToggle, onMudou }) => {
   const [valor, setValor] = useState(l.valor ? String(l.valor).replace('.', ',') : '');
@@ -165,23 +196,12 @@ export const Mensalidades: React.FC = () => {
   const filtrados = filtro === 'TODOS' ? alunos : alunos.filter((a) => a.status === filtro);
   // Quem avisou que pagou vai para o topo: é o que o motorista precisa conferir primeiro.
   const lista = [...filtrados].sort((a, b) => Number(!!b.aviso_em && b.status !== 'PAGO') - Number(!!a.aviso_em && a.status !== 'PAGO'));
-  const avisos = alunos.filter((a) => a.aviso_em && a.status !== 'PAGO').length;
   const mesAtual = dados.hoje.slice(0, 7);
 
   return (
     <section aria-label="Mensalidades" className="space-y-4">
       <PixConfig />
-      {avisos > 0 && (
-        <p role="status" className="rounded-2xl border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-xs text-amber-100">
-          {avisos === 1 ? '1 família avisou que pagou pelo Pix.' : `${avisos} famílias avisaram que pagaram pelo Pix.`} Confira no banco e confirme.
-        </p>
-      )}
-      {(dados.avisos_outros_meses ?? []).map((a) => (
-        <div key={`${a.id_aluno}-${a.mes}`} role="status" className="flex items-center justify-between gap-2 rounded-2xl border border-amber-400/40 bg-amber-400/10 px-4 py-3">
-          <p className="text-xs text-amber-100 min-w-0">{a.responsavel_nome || 'Uma família'} avisou o pagamento de {nomeMes(a.mes)} pelo Pix.</p>
-          <button type="button" onClick={() => setMes(a.mes)} className="shrink-0 px-3 py-2 min-h-[44px] rounded-xl bg-slate-900 text-amber-200 text-xs font-black cursor-pointer">Ver {nomeMes(a.mes).split(' ')[0]}</button>
-        </div>
-      ))}
+      {(dados.avisos_pendentes ?? []).map((g) => <CartaoAvisoFamilia key={g.familia} g={g} onMudou={() => carregar(mes)} />)}
       <div className="flex items-center justify-between gap-2">
         <button type="button" aria-label="Mês anterior" onClick={() => setMes(somarMes(dados.mes, -1))} className="w-11 h-11 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 font-black cursor-pointer">‹</button>
         <div className="text-center">

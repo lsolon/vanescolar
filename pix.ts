@@ -127,3 +127,9 @@ export function gerarCopiaECola({ config, valor, txid }: DadosCopiaECola): strin
   p += '6304';
   return p + crc16(p);
 }
+
+/** Soma valores em reais sem erro de ponto flutuante (conta em centavos). */
+export const somarReais = (valores: readonly number[]): number => Math.round(valores.reduce((acc, v) => acc + Math.round(v * 100), 0)) / 100;
+
+/** Identificador do Pix único da família (só letras e números, até 25): responsável + mês mais antigo pago. */
+export const txidFamilia = (responsavel: number, mes: string) => `VANF${responsavel}M${mes.replace('-', '')}`.replace(/[^A-Za-z0-9]/g, '').slice(0, 25);

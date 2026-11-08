@@ -2346,16 +2346,27 @@ async function startServer() {
     // Mais urgentes primeiro: atrasados, em aberto, sem valor, pagos.
     const peso: Record<string, number> = { ATRASADO: 0, EM_ABERTO: 1, SEM_VALOR: 2, PAGO: 3 };
     alunos.sort((a, b) => peso[a.status] - peso[b.status] || a.responsavel_nome.localeCompare(b.responsavel_nome, 'pt-BR'));
-    // Avisos de pagamento (Pix) de OUTROS meses: o responsável paga o mês mais antigo em aberto, que pode não ser o que está na tela.
+    // Avisos de pagamento (Pix) ainda sem confirmação, de qualquer mês, agrupados por família (mesmo responsável).
+    // O responsável paga o mês mais antigo em aberto, que pode não ser o que está na tela.
     const base = alunosCobrancaDe(driverId);
-    const avisos_outros_meses = (mensalidadesDB.avisos ?? [])
-      .filter((a) => a.id_motorista === driverId && a.mes !== mes && !M.pagamentoDe(mensalidadesDB, driverId, a.id_aluno, a.mes))
-      .flatMap((a) => {
-        const p = base.find((x: any) => x.id_aluno === a.id_aluno);
-        return p ? [{ id_aluno: a.id_aluno, aluno: p.nome_sanitizado, responsavel_nome: p.responsavel_nome ?? '', mes: a.mes, avisado_em: a.avisado_em }] : [];
-      })
-      .sort((x, y) => x.mes.localeCompare(y.mes));
-    res.json({ mes, hoje, alunos, resumo: M.resumir(alunos, mes), avisos_outros_meses });
+    type GrupoAviso = { familia: string; responsavel_nome: string; total: number; itens: { id_aluno: number; aluno: string; mes: string; valor: number; avisado_em: string }[] };
+    const grupos = new Map<string, GrupoAviso>();
+    for (const a of mensalidadesDB.avisos ?? []) {
+      if (a.id_motorista !== driverId || M.pagamentoDe(mensalidadesDB, driverId, a.id_aluno, a.mes)) continue;
+      const p: any = base.find((x: any) => x.id_aluno === a.id_aluno);
+      const cfg = mensalidadesDB.configs[M.chaveConfig(driverId, a.id_aluno)];
+      if (!p || !cfg) continue;
+      const chave = p.vinculado_usuario_id !== undefined && p.vinculado_usuario_id !== null ? `r${p.vinculado_usuario_id}` : `a${a.id_aluno}`;
+      const g: GrupoAviso = grupos.get(chave) ?? { familia: chave, responsavel_nome: p.responsavel_nome ?? '', total: 0, itens: [] };
+      g.itens.push({ id_aluno: a.id_aluno, aluno: p.nome_sanitizado, mes: a.mes, valor: cfg.valor, avisado_em: a.avisado_em });
+      grupos.set(chave, g);
+    }
+    const avisos_pendentes = [...grupos.values()].map((g) => ({
+      ...g,
+      itens: g.itens.sort((x, y) => x.mes.localeCompare(y.mes) || x.aluno.localeCompare(y.aluno, 'pt-BR')),
+      total: PIX.somarReais(g.itens.map((i) => i.valor))
+    })).sort((x, y) => x.itens[0].avisado_em.localeCompare(y.itens[0].avisado_em));
+    res.json({ mes, hoje, alunos, resumo: M.resumir(alunos, mes), avisos_pendentes });
   });
 
   app.put('/api/motorista/mensalidades/:alunoId/config', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
@@ -2417,7 +2428,8 @@ async function startServer() {
     if (user.role !== 'responsavel') return res.status(403).json({ error: 'Acesso negado.' });
     const hoje = M.hojeBrasil();
     const mesAtual = M.mesDe(hoje);
-    const filhos = filhosDe(user.userId, user.studentId).filter(confirmada).map((f: any) => {
+    const confirmados = filhosDe(user.userId, user.studentId).filter(confirmada);
+    const filhos = confirmados.map((f: any) => {
       const dono = donoDaParada(f);
       const historico = [0, 1, 2, 3, 4, 5].map((i) => {
         const mes = M.somarMeses(mesAtual, -i);
@@ -2439,7 +2451,7 @@ async function startServer() {
         pix: pixParaPagar(f.id_aluno, dono, hoje)
       };
     });
-    res.json({ filhos });
+    res.json({ filhos, familia_pix: pixDaFamilia(confirmados, hoje, user.userId) });
   });
 
   // ---- Pagamento por Pix (módulo "pagamento-pix", em teste: só funciona para e-mails liberados em PIX_BETA_EMAILS) ----
@@ -2461,6 +2473,29 @@ async function startServer() {
       copia_e_cola: PIX.gerarCopiaECola({ config: rec.pix, valor: cfg.valor, txid: PIX.txidMensalidade(alunoId, mes) }),
       avisado_em: M.avisoDe(mensalidadesDB, dono, alunoId, mes)?.avisado_em ?? null
     };
+  }
+
+  /**
+   * Pix único por família: soma os filhos do MESMO motorista que ainda têm algo a pagar e não avisaram.
+   * Só existe quando há 2 ou mais (com 1 filho vale o Pix do próprio filho). O responsável vê só código, valor e nomes dos próprios filhos.
+   */
+  function pixDaFamilia(filhosConfirmados: any[], hoje: string, responsavelId: number) {
+    const porMotorista = new Map<number, { id_aluno: number; aluno: string; mes: string; valor: number }[]>();
+    for (const f of filhosConfirmados) {
+      const dono = donoDaParada(f);
+      const pix = pixParaPagar(f.id_aluno, dono, hoje);
+      if (!pix || pix.avisado_em) continue;
+      porMotorista.set(dono, [...(porMotorista.get(dono) ?? []), { id_aluno: f.id_aluno, aluno: f.nome_aluno, mes: pix.mes, valor: pix.valor }]);
+    }
+    const grupos: { recebedor: string; total: number; itens: { id_aluno: number; aluno: string; mes: string; valor: number }[]; copia_e_cola: string }[] = [];
+    for (const [dono, itens] of porMotorista) {
+      const rec = usersDB.find((u) => u.id === dono);
+      if (itens.length < 2 || !rec?.pix) continue;
+      const total = PIX.somarReais(itens.map((i) => i.valor));
+      const maisAntigo = itens.map((i) => i.mes).sort()[0];
+      grupos.push({ recebedor: rec.pix.nome, total, itens, copia_e_cola: PIX.gerarCopiaECola({ config: rec.pix, valor: total, txid: PIX.txidFamilia(responsavelId, maisAntigo) }) });
+    }
+    return grupos;
   }
 
   app.get('/api/motorista/pix', authenticate, requireDriver, (req: Request, res: Response) => {
@@ -2504,6 +2539,78 @@ async function startServer() {
     M.registrarAviso(mensalidadesDB, dono, alunoId, pix.mes);
     auditLog('PAGAMENTO_AVISADO', user.email, `Aluno ${alunoId}, ${pix.mes}`);
     res.json({ sucesso: true, mes: pix.mes });
+  });
+
+  // O responsável pagou o Pix único da família: avisa de todos os filhos de uma vez. Tudo ou nada: se um item não confere, nada é registrado.
+  app.post('/api/mensalidades/avisar-lote', authenticate, rateLimiter(10, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    if (user.role !== 'responsavel') return res.status(403).json({ error: 'Acesso negado.' });
+    const itens = req.body?.itens;
+    if (!Array.isArray(itens) || itens.length < 1 || itens.length > 20) return res.status(400).json({ error: 'Informe os filhos que foram pagos.' });
+    const hoje = M.hojeBrasil();
+    const confirmados = filhosDe(user.userId, user.studentId).filter(confirmada);
+    const vistos = new Set<number>();
+    const alvos: { dono: number; alunoId: number; mes: string }[] = [];
+    for (const it of itens) {
+      const alunoId = Number(it?.id_aluno);
+      if (!Number.isInteger(alunoId) || vistos.has(alunoId)) return res.status(400).json({ error: 'Pedido inválido.' });
+      vistos.add(alunoId);
+      const filho = confirmados.find((f: any) => f.id_aluno === alunoId);
+      if (!filho) return res.status(404).json({ error: 'Aluno não encontrado.' });
+      const dono = donoDaParada(filho);
+      const pix = pixParaPagar(alunoId, dono, hoje);
+      if (!pix) return res.status(409).json({ error: 'O pagamento por Pix não está disponível para este aluno agora.' });
+      if (it?.mes !== pix.mes) return res.status(409).json({ error: 'As mensalidades mudaram. Atualize a tela e confira o que pagar.' });
+      alvos.push({ dono, alunoId, mes: pix.mes });
+    }
+    if (new Set(alvos.map((a) => a.dono)).size !== 1) return res.status(400).json({ error: 'Os filhos precisam ser do mesmo motorista.' });
+    for (const a of alvos) M.registrarAviso(mensalidadesDB, a.dono, a.alunoId, a.mes);
+    auditLog('PAGAMENTO_AVISADO', user.email, `${alvos.length} filho(s) em um Pix único`);
+    res.json({ sucesso: true, avisados: alvos.length });
+  });
+
+  /** Lê e confere uma lista de {id_aluno, mes} do motorista: todos precisam ser dele e ter aviso pendente. */
+  const lerAvisosDoMotorista = (driverId: number, itens: unknown): { alunoId: number; mes: string }[] | { erro: string; status: number } => {
+    if (!Array.isArray(itens) || itens.length < 1 || itens.length > 20) return { erro: 'Informe os avisos.', status: 400 };
+    const base = alunosCobrancaDe(driverId);
+    const vistos = new Set<string>();
+    const out: { alunoId: number; mes: string }[] = [];
+    for (const it of itens) {
+      const alunoId = Number(it?.id_aluno);
+      const mes = it?.mes;
+      if (!Number.isInteger(alunoId) || !M.mesValido(mes) || vistos.has(`${alunoId}:${mes}`)) return { erro: 'Pedido inválido.', status: 400 };
+      vistos.add(`${alunoId}:${mes}`);
+      if (!base.some((p: any) => p.id_aluno === alunoId)) return { erro: 'Aluno não encontrado na sua van.', status: 404 };
+      if (!M.avisoDe(mensalidadesDB, driverId, alunoId, mes)) return { erro: 'Não há aviso de pagamento neste mês.', status: 404 };
+      out.push({ alunoId, mes });
+    }
+    return out;
+  };
+
+  // Confirma de uma vez todos os avisos de uma família (é a baixa de sempre, forma PIX, no valor de cada mensalidade).
+  app.post('/api/motorista/mensalidades/avisos/confirmar', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const lidos = lerAvisosDoMotorista(driverId, req.body?.itens);
+    if (!Array.isArray(lidos)) return res.status(lidos.status).json({ error: lidos.erro });
+    const hoje = M.hojeBrasil();
+    for (const a of lidos) if (!mensalidadesDB.configs[M.chaveConfig(driverId, a.alunoId)]) return res.status(400).json({ error: 'Defina o valor da mensalidade antes de confirmar.' });
+    for (const a of lidos) {
+      const valor = mensalidadesDB.configs[M.chaveConfig(driverId, a.alunoId)].valor;
+      M.registrarPagamento(mensalidadesDB, { id_motorista: driverId, id_aluno: a.alunoId, mes: a.mes, valor, forma: 'PIX', pago_em: hoje });
+    }
+    auditLog('MENSALIDADE_PAGA', user.email, `Motorista ${driverId}: ${lidos.length} aviso(s) de Pix confirmados`);
+    res.json({ sucesso: true, confirmados: lidos.length });
+  });
+
+  app.post('/api/motorista/mensalidades/avisos/descartar', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const lidos = lerAvisosDoMotorista(driverId, req.body?.itens);
+    if (!Array.isArray(lidos)) return res.status(lidos.status).json({ error: lidos.erro });
+    for (const a of lidos) M.descartarAviso(mensalidadesDB, driverId, a.alunoId, a.mes);
+    auditLog('PAGAMENTO_AVISO_DESCARTADO', user.email, `Motorista ${driverId}: ${lidos.length} aviso(s) descartados`);
+    res.json({ sucesso: true, descartados: lidos.length });
   });
 
   // O motorista não encontrou o dinheiro no banco: tira o aviso (a mensalidade continua em aberto).

@@ -596,8 +596,17 @@ export interface PixDoFilho { mes: string; valor: number; recebedor: string; cop
 export interface MensalidadesMotorista {
   mes: string; hoje: string; alunos: LinhaMensalidadeMotorista[];
   resumo: { mes: string; previsto: number; recebido: number; a_vencer: number; atrasado: number; qtd_pagos: number; qtd_a_vencer: number; qtd_atrasados: number; qtd_sem_valor: number };
-  /** Avisos de pagamento (Pix) de meses diferentes do que está na tela. */
-  avisos_outros_meses?: { id_aluno: number; aluno: string; responsavel_nome: string; mes: string; avisado_em: string }[];
+  /** Avisos de pagamento (Pix) ainda sem confirmação, de qualquer mês, agrupados por família. */
+  avisos_pendentes?: AvisoPendente[];
+}
+export interface AvisoPendente {
+  familia: string; responsavel_nome: string; total: number;
+  itens: { id_aluno: number; aluno: string; mes: string; valor: number; avisado_em: string }[];
+}
+/** Pix único da família: soma dos filhos do mesmo motorista que ainda têm algo a pagar. */
+export interface PixFamilia {
+  recebedor: string; total: number; copia_e_cola: string;
+  itens: { id_aluno: number; aluno: string; mes: string; valor: number }[];
 }
 export interface MensalidadeFilho {
   id_aluno: number; aluno: string; motorista: string; mes: string; valor: number | null; vencimento_dia: number | null;
@@ -1867,10 +1876,15 @@ export const TransportRepository = {
   },
 
   async minhasMensalidades(): Promise<MensalidadeFilho[]> {
+    return (await this.minhasMensalidadesCompleto()).filhos;
+  },
+
+  /** Mensalidades dos filhos e, quando o módulo Pix está ligado, o Pix único de cada grupo de irmãos. */
+  async minhasMensalidadesCompleto(): Promise<{ filhos: MensalidadeFilho[]; familia_pix: PixFamilia[] }> {
     const res = await fetch(`${getBaseUrl()}/api/mensalidades`, { headers: getAuthHeaders() });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível carregar as mensalidades.');
-    return d.filhos as MensalidadeFilho[];
+    return { filhos: d.filhos as MensalidadeFilho[], familia_pix: (d.familia_pix ?? []) as PixFamilia[] };
   },
 
   // ---- Pagamento por Pix (módulo em teste) ----
@@ -1898,6 +1912,24 @@ export const TransportRepository = {
     const res = await fetch(`${getBaseUrl()}/api/mensalidades/${alunoId}/avisar`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ mes }) });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível enviar o aviso.');
+  },
+
+  async avisarPagamentoPixLote(itens: { id_aluno: number; mes: string }[]): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/mensalidades/avisar-lote`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ itens }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível enviar o aviso.');
+  },
+
+  async confirmarAvisosPagamento(itens: { id_aluno: number; mes: string }[]): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/mensalidades/avisos/confirmar`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ itens }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível confirmar.');
+  },
+
+  async descartarAvisosPagamento(itens: { id_aluno: number; mes: string }[]): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/mensalidades/avisos/descartar`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ itens }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível descartar.');
   },
 
   async descartarAvisoPagamento(alunoId: number, mes: string): Promise<void> {

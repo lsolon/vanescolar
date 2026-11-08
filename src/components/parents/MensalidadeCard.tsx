@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { TransportRepository } from '../../services/api';
-import type { MensalidadeFilho, PixDoFilho, StatusMensalidade } from '../../services/api';
+import type { MensalidadeFilho, PixDoFilho, PixFamilia, StatusMensalidade } from '../../services/api';
 
 const brl = (n: number | null) => (n ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
@@ -33,8 +33,14 @@ async function copiar(texto: string): Promise<boolean> {
   } catch { return false; }
 }
 
-/** Pagar a mensalidade por Pix (módulo em teste): QR Code, código copia e cola e o aviso "já paguei". Sem mapa, GPS ou endereço. */
-const PagarPix: React.FC<{ alunoId: number; pix: PixDoFilho; onAvisou: () => void }> = ({ alunoId, pix, onAvisou }) => {
+/**
+ * Painel de pagamento por Pix (módulo em teste): QR Code, código copia e cola e o aviso "já paguei".
+ * Serve ao Pix de um filho e ao Pix único da família. Mostra só código, valor e nome do recebedor (sem mapa, GPS ou endereço).
+ */
+const PainelPix: React.FC<{
+  rotuloBotao: string; valor: number; recebedor: string; copiaECola: string; detalhe?: React.ReactNode;
+  avisadoEm?: string | null; textoAvisado?: string; onAvisar: () => Promise<void>;
+}> = ({ rotuloBotao, valor, recebedor, copiaECola, detalhe, avisadoEm, textoAvisado, onAvisar }) => {
   const [aberto, setAberto] = useState(false);
   const [qr, setQr] = useState<string | null>(null);
   const [copiado, setCopiado] = useState(false);
@@ -44,31 +50,31 @@ const PagarPix: React.FC<{ alunoId: number; pix: PixDoFilho; onAvisou: () => voi
   useEffect(() => {
     if (!aberto) return;
     let vivo = true;
-    QRCode.toDataURL(pix.copia_e_cola, { width: 240, margin: 2, errorCorrectionLevel: 'M' }).then((u) => { if (vivo) setQr(u); }).catch(() => { if (vivo) setQr(null); });
+    QRCode.toDataURL(copiaECola, { width: 240, margin: 2, errorCorrectionLevel: 'M' }).then((u) => { if (vivo) setQr(u); }).catch(() => { if (vivo) setQr(null); });
     return () => { vivo = false; };
-  }, [aberto, pix.copia_e_cola]);
+  }, [aberto, copiaECola]);
 
-  if (pix.avisado_em) {
-    return <p role="status" className="text-[11px] text-amber-200 bg-amber-400/10 border border-amber-400/30 rounded-xl px-3 py-2">Você avisou em {quando(pix.avisado_em)} que pagou {mesLongo(pix.mes)}. O motorista vai conferir e confirmar.</p>;
+  if (avisadoEm) {
+    return <p role="status" className="text-[11px] text-amber-200 bg-amber-400/10 border border-amber-400/30 rounded-xl px-3 py-2">Você avisou em {quando(avisadoEm)} que pagou{textoAvisado ? ` ${textoAvisado}` : ''}. O motorista vai conferir e confirmar.</p>;
   }
 
   const avisar = async () => {
     setOcupado(true); setErro(null);
-    try { await TransportRepository.avisarPagamentoPix(alunoId, pix.mes); onAvisou(); }
-    catch (e: any) { setErro(e.message); } finally { setOcupado(false); }
+    try { await onAvisar(); } catch (e: any) { setErro(e.message); } finally { setOcupado(false); }
   };
 
   return (
     <div className="space-y-2">
       {!aberto ? (
-        <button type="button" onClick={() => setAberto(true)} className="w-full px-4 py-3 min-h-[44px] rounded-xl bg-sky-600 text-white text-xs font-black cursor-pointer">Pagar {mesLongo(pix.mes)} por Pix · {brl(pix.valor)}</button>
+        <button type="button" onClick={() => setAberto(true)} className="w-full px-4 py-3 min-h-[44px] rounded-xl bg-sky-600 text-white text-xs font-black cursor-pointer">{rotuloBotao}</button>
       ) : (
         <div className="rounded-xl border border-sky-400/30 bg-slate-950/60 p-3 space-y-3">
-          <p className="text-xs text-slate-200">Pague {brl(pix.valor)} para <span className="font-bold">{pix.recebedor}</span>. No app do seu banco, escolha Pix e leia o QR Code ou use o código.</p>
+          <p className="text-xs text-slate-200">Pague {brl(valor)} para <span className="font-bold">{recebedor}</span>. No app do seu banco, escolha Pix e leia o QR Code ou use o código.</p>
+          {detalhe}
           <div className="flex justify-center">
             {qr ? <img src={qr} alt="QR Code do Pix da mensalidade" width={240} height={240} className="rounded-xl bg-white" /> : <p className="text-[11px] text-slate-400">Gerando o QR Code…</p>}
           </div>
-          <button type="button" onClick={async () => { setCopiado(await copiar(pix.copia_e_cola)); setTimeout(() => setCopiado(false), 2500); }}
+          <button type="button" onClick={async () => { setCopiado(await copiar(copiaECola)); setTimeout(() => setCopiado(false), 2500); }}
             className="w-full px-4 py-3 min-h-[44px] rounded-xl bg-slate-800 text-slate-100 text-xs font-bold cursor-pointer">{copiado ? 'Código copiado!' : 'Copiar código Pix'}</button>
           <div className="pt-2 border-t border-slate-800 space-y-2">
             <p className="text-[11px] text-slate-400">Depois de pagar, avise o motorista. Ele confere no banco e confirma aqui.</p>
@@ -81,16 +87,38 @@ const PagarPix: React.FC<{ alunoId: number; pix: PixDoFilho; onAvisou: () => voi
   );
 };
 
+/** Pix de um filho. */
+const PagarPix: React.FC<{ alunoId: number; pix: PixDoFilho; onAvisou: () => void }> = ({ alunoId, pix, onAvisou }) => (
+  <PainelPix rotuloBotao={`Pagar ${mesLongo(pix.mes)} por Pix · ${brl(pix.valor)}`} valor={pix.valor} recebedor={pix.recebedor} copiaECola={pix.copia_e_cola}
+    avisadoEm={pix.avisado_em} textoAvisado={mesLongo(pix.mes)}
+    onAvisar={async () => { await TransportRepository.avisarPagamentoPix(alunoId, pix.mes); onAvisou(); }} />
+);
+
+/** Pix único da família: um QR com a soma dos filhos; o aviso vale para todos de uma vez. */
+const PagarPixFamilia: React.FC<{ grupo: PixFamilia; onAvisou: () => void }> = ({ grupo, onAvisou }) => (
+  <PainelPix rotuloBotao={`Pagar tudo por Pix (${grupo.itens.length} filhos) · ${brl(grupo.total)}`} valor={grupo.total} recebedor={grupo.recebedor} copiaECola={grupo.copia_e_cola}
+    detalhe={
+      <ul className="text-[11px] text-slate-300 space-y-0.5" aria-label="O que este Pix paga">
+        {grupo.itens.map((i) => <li key={i.id_aluno} className="flex justify-between gap-2"><span className="truncate">{i.aluno} · {mesLongo(i.mes)}</span><span className="shrink-0 font-bold">{brl(i.valor)}</span></li>)}
+      </ul>
+    }
+    onAvisar={async () => { await TransportRepository.avisarPagamentoPixLote(grupo.itens.map((i) => ({ id_aluno: i.id_aluno, mes: i.mes }))); onAvisou(); }} />
+);
+
 /** Mensalidade dos filhos: o responsável vê o valor, o vencimento e o que já foi pago (e, no teste, paga por Pix). */
 export const MensalidadeCard: React.FC = () => {
   const [filhos, setFilhos] = useState<MensalidadeFilho[] | null>(null);
-  const carregar = () => TransportRepository.minhasMensalidades().then(setFilhos).catch(() => setFilhos([]));
+  const [familias, setFamilias] = useState<PixFamilia[]>([]);
+  const carregar = () => TransportRepository.minhasMensalidadesCompleto()
+    .then((d) => { setFilhos(d.filhos); setFamilias(d.familia_pix); })
+    .catch(() => { setFilhos([]); setFamilias([]); });
   useEffect(() => { void carregar(); }, []);
   if (!filhos || filhos.length === 0) return null;
 
   return (
     <section aria-label="Mensalidade" className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
       <h3 className="text-xs font-bold text-slate-200">Mensalidade</h3>
+      {familias.map((g) => <PagarPixFamilia key={g.itens.map((i) => i.id_aluno).join('-')} grupo={g} onAvisou={() => { void carregar(); }} />)}
       {filhos.map((f) => {
         const r = ROTULO[f.status];
         return (
