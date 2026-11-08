@@ -16,6 +16,8 @@ import { LogUso, LogArquivo, LogFirestore, emCsv } from './logUso';
 import * as M from './mensalidades';
 import * as F from './financeiro';
 import * as MOD from './modulos';
+import * as P from './push';
+import webpush from 'web-push';
 import * as G from './mensagens';
 import * as RR from './src/services/rotaRuas';
 import { hashPassword, verifyPassword, upgradePasswordHash } from './senhas';
@@ -141,6 +143,8 @@ interface UserRecord {
   veiculoPlaca?: string;
   /** Motorista: módulos (mensalidades, financeiro...) que ele ligou ou desligou. Ausente = padrões de modulos.ts */
   modulos?: Record<string, boolean>;
+  /** Responsável: aparelhos que recebem avisos no celular (push). Só o necessário para enviar; apagados ao desligar ou quando o aparelho some. */
+  pushSubs?: P.AssinaturaPush[];
   /** Motorista: local de cada escola atendida (chave = nome normalizado) */
   escolasLocal?: Record<string, { latitude: number; longitude: number }>;
   /** Motorista: horários de entrada e saída por escola e turno (definidos uma vez; o aluno novo herda) */
@@ -1687,7 +1691,7 @@ async function startServer() {
       versao: 2,
       geradoEm: new Date().toISOString(),
       inclui_senhas: comSenhas,
-      users: usersDB.map((u) => comSenhas ? u : { ...u, passwordHash: undefined }),
+      users: usersDB.map((u) => comSenhas ? u : { ...u, passwordHash: undefined, pushSubs: undefined }),
       invitations: driverInvitationsDB,
       state: {
         paradas: serverState.paradas,
@@ -1887,6 +1891,109 @@ async function startServer() {
     if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
     if (!rec.codigoMotorista) { rec.codigoMotorista = novoCodigoMotorista(); persistence.scheduleSave(); }
     res.json({ codigo: rec.codigoMotorista });
+  });
+
+  // ==========================================================================
+  // AVISOS NO CELULAR (push) — só para responsáveis, só mensagens genéricas (ver push.ts).
+  // Precisa das chaves VAPID nos Secrets (VAPID_PUBLIC_KEY e VAPID_PRIVATE_KEY); sem elas, o recurso fica desligado.
+  // ==========================================================================
+  const APP_URL_BASE = String(process.env.APP_URL || 'https://vanescolar.ai.studio').replace(/\/+$/, '');
+  const VAPID_PUBLICA = String(process.env.VAPID_PUBLIC_KEY || '').trim();
+  const VAPID_PRIVADA = String(process.env.VAPID_PRIVATE_KEY || '').trim();
+  let pushLigado = false;
+  if (VAPID_PUBLICA && VAPID_PRIVADA) {
+    try {
+      webpush.setVapidDetails(String(process.env.VAPID_SUBJECT || APP_URL_BASE), VAPID_PUBLICA, VAPID_PRIVADA);
+      pushLigado = true;
+    } catch { console.warn('[VanEscolar] AVISO: chaves VAPID inválidas; avisos no celular ficam desligados.'); }
+  } else {
+    console.warn('[VanEscolar] Avisos no celular desligados: faltam VAPID_PUBLIC_KEY e VAPID_PRIVATE_KEY nos Secrets.');
+  }
+  const diaDeHoje = () => new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+  const avisosFeitos = new P.AvisosFeitos();
+
+  /** Envia a mensagem genérica a todos os aparelhos do responsável; apaga os que não existem mais. */
+  const enviarPush = async (u: UserRecord, tipo: P.TipoAviso, minutos?: number) => {
+    if (!pushLigado || !u.pushSubs?.length) return;
+    const corpo = JSON.stringify(P.montarMensagem(tipo, minutos));
+    const mortos: string[] = [];
+    await Promise.all(u.pushSubs.map(async (sub) => {
+      try { await webpush.sendNotification(sub, corpo, { TTL: 600, urgency: 'high' }); }
+      catch (e: any) { if (e?.statusCode === 404 || e?.statusCode === 410) mortos.push(sub.endpoint); }
+    }));
+    if (mortos.length) {
+      u.pushSubs = mortos.reduce((l, ep) => P.removerAssinatura(l, ep), u.pushSubs);
+      persistence.scheduleSave();
+    }
+  };
+
+  /** "A van está chegando": uma vez por dia, aluno e sentido, quando a previsão cruza o tempo escolhido pelo responsável. */
+  const avisarVanChegando = (driverId: number) => {
+    if (!pushLigado) return;
+    const dia = diaDeHoje();
+    const sentido = sentidoDaViagem(getTrip(driverId));
+    for (const u of usersDB) {
+      if (u.role !== 'responsavel' || !u.pushSubs?.length) continue;
+      for (const p of filhosDe(u.id)) {
+        if (donoDaParada(p) !== driverId || !confirmada(p)) continue;
+        const r = computeProximityBase(driverId, p.id_aluno, prefsDe(u.id).avisoMin);
+        if (!r?.avisoAtivo || r.minutos === null) continue;
+        if (!avisosFeitos.marcar(P.chaveAviso(u.id, p.id_aluno, sentido, 'van_chegando', dia), dia)) continue;
+        void enviarPush(u, 'van_chegando', r.minutos);
+      }
+    }
+  };
+
+  /** Embarque ou entrega registrado pelo motorista: avisa só a família daquele aluno. */
+  const avisarFamilia = (parada: any, tipo: 'embarque' | 'entrega') => {
+    if (!pushLigado || parada?.vinculado_usuario_id === undefined) return;
+    const u = usersDB.find((x) => x.id === parada.vinculado_usuario_id && x.role === 'responsavel');
+    if (!u?.pushSubs?.length) return;
+    const dia = diaDeHoje();
+    const sentido = sentidoDaViagem(getTrip(donoDaParada(parada) as number));
+    if (!avisosFeitos.marcar(P.chaveAviso(u.id, parada.id_aluno, sentido, tipo, dia), dia)) return;
+    void enviarPush(u, tipo);
+  };
+
+  const soResponsavel = (req: Request, res: Response, next: NextFunction) => {
+    const user = (req as any).user as SessionPayload;
+    if (!user || user.role !== 'responsavel') return res.status(403).json({ error: 'Os avisos no celular são para responsáveis.' });
+    next();
+  };
+  const contaDoResponsavel = (req: Request) => usersDB.find((u) => u.id === ((req as any).user as SessionPayload).userId);
+
+  app.get('/api/push/estado', authenticate, soResponsavel, (req: Request, res: Response) => {
+    const rec = contaDoResponsavel(req);
+    res.json({ disponivel: pushLigado, chavePublica: pushLigado ? VAPID_PUBLICA : null, aparelhos: rec?.pushSubs?.length ?? 0 });
+  });
+
+  app.post('/api/push/assinar', authenticate, soResponsavel, rateLimiter(20, 60000), (req: Request, res: Response) => {
+    if (!pushLigado) return res.status(503).json({ error: 'Avisos no celular ainda não estão disponíveis.' });
+    const rec = contaDoResponsavel(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const sub = P.validarAssinatura(req.body?.assinatura);
+    if (!sub) return res.status(400).json({ error: 'Assinatura inválida.' });
+    rec.pushSubs = P.adicionarAssinatura(rec.pushSubs, sub);
+    persistence.scheduleSave();
+    auditLog('PUSH_LIGADO', rec.email, 'Aparelho ligou os avisos no celular');
+    res.json({ sucesso: true, aparelhos: rec.pushSubs.length });
+  });
+
+  app.delete('/api/push/assinar', authenticate, soResponsavel, rateLimiter(20, 60000), (req: Request, res: Response) => {
+    const rec = contaDoResponsavel(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const endpoint = typeof req.body?.endpoint === 'string' ? req.body.endpoint : '';
+    rec.pushSubs = endpoint ? P.removerAssinatura(rec.pushSubs, endpoint) : [];
+    persistence.scheduleSave();
+    auditLog('PUSH_DESLIGADO', rec.email, 'Aparelho desligou os avisos no celular');
+    res.json({ sucesso: true, aparelhos: rec.pushSubs.length });
+  });
+
+  app.post('/api/push/teste', authenticate, soResponsavel, rateLimiter(5, 60000), async (req: Request, res: Response) => {
+    const rec = contaDoResponsavel(req);
+    if (!pushLigado || !rec?.pushSubs?.length) return res.status(409).json({ error: 'Ligue os avisos neste aparelho primeiro.' });
+    await enviarPush(rec, 'teste');
+    res.json({ sucesso: true });
   });
 
   // Módulos: o motorista liga ou desliga recursos de escritório (mensalidades, financeiro...). Desligar só esconde no app: os dados ficam guardados.
@@ -2877,6 +2984,7 @@ async function startServer() {
     const timestamp = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
     broadcast('STATUS_EMBARQUE_ATUALIZADO', { paradaId: parada.id, status, timestamp, alunoId: parada.id_aluno }, donoDaParada(parada));
+    try { if (status === 'EMBARCOU') avisarFamilia(parada, 'embarque'); else if (status === 'ENTREGUE') avisarFamilia(parada, 'entrega'); } catch { /* idem */ }
     res.json({ sucesso: true, parada });
   });
 
@@ -2975,6 +3083,7 @@ async function startServer() {
       etaNextStopMinutes: etaNextStopMinutes ?? trip.gpsAtual.etaNextStopMinutes
     };
     broadcast('GPS_ATUALIZADO', trip.gpsAtual, driverId);
+    try { avisarVanChegando(driverId); } catch { /* o aviso nunca atrapalha o GPS */ }
     res.json({ sucesso: true });
   });
 
