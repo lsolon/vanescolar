@@ -26,8 +26,7 @@ import {
   GPSCoordinate
 } from '../../types/database';
 import { InstalarApp } from '../shared/InstalarApp';
-import { Mensalidades } from './Mensalidades';
-import { Financeiro } from './Financeiro';
+import { LancarAbastecimento } from './Financeiro';
 import { Mensagens, useNaoLidasMotorista } from './Mensagens';
 import { TransportRepository, subscribeToDatabaseChanges } from '../../services/api';
 import { minutosAgoraBrasil, sentidoPorHorario } from '../../services/sentidoAuto';
@@ -63,6 +62,7 @@ import {
   ChevronRight,
   ArrowLeft,
   Wallet,
+  Fuel,
   Settings,
   HelpCircle
 } from 'lucide-react';
@@ -75,6 +75,7 @@ import { QuandoSair } from './QuandoSair';
 import { NovoAlunoMotorista, ConviteFamilia, ConvidarFamilias, ImportarAlunos } from './NovoAluno';
 import { EscolasDoMotorista, HorariosPorEscola, RotasIdaVolta } from './RotaEEscolas';
 import { GuiaPrimeiroAcesso, useGuiaPrimeiroAcesso } from '../shared/GuiaPrimeiroAcesso';
+import type { AbaMotorista } from '../shared/guiaPassos';
 
 interface DriverPanelProps {
   coordenadas: GPSCoordinate;
@@ -82,6 +83,8 @@ interface DriverPanelProps {
   onToggleRota: (sentido?: 'IDA' | 'VOLTA') => void;
   onSelectAluno?: (alunoId: number) => void;
   onLogout?: () => void;
+  /** Abre a área de Gestão (mensalidades, financeiro). Sem esta função, o atalho não aparece em "Mais". */
+  onAbrirGestao?: () => void;
   erroGps?: 'permissao_negada' | 'indisponivel' | 'sem_suporte' | null;
 }
 
@@ -98,6 +101,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   isRotaAtiva,
   onToggleRota,
   onLogout,
+  onAbrirGestao,
   erroGps
 }) => {
   const [viagemZeroCache, setViagemZeroCache] = useState<ViagemMotoristaZeroCache | null>(null);
@@ -122,7 +126,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const [erroPin, setErroPin] = useState<string | null>(null);
 
   // Modal de Cadastro de Novo Aluno pelo Motorista
-  const [aba, setAba] = useState<'diario' | 'mapa' | 'mensagens' | 'mais' | 'cadastro' | 'mensalidades' | 'financeiro' | 'ajustes'>('diario');
+  const [aba, setAba] = useState<AbaMotorista>('diario');
   const guia = useGuiaPrimeiroAcesso('motorista');
   const [verPendentes, setVerPendentes] = useState(false);
   const [abertoId, setAbertoId] = useState<number | string | null>(null);
@@ -597,7 +601,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         )}
 
         {/* Sub-telas de "Mais": voltar para o menu */}
-        {['cadastro', 'mensalidades', 'financeiro', 'ajustes'].includes(aba) && (
+        {['cadastro', 'abastecimento', 'ajustes'].includes(aba) && (
           <button type="button" onClick={() => setAba('mais')} className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-xl bg-slate-900 border border-slate-800 text-xs font-bold text-slate-300 cursor-pointer">
             <ArrowLeft className="w-4 h-4" /> Mais
           </button>
@@ -608,11 +612,11 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             <h2 className="text-sm font-bold text-slate-200">Mais</h2>
             {([
               ['cadastro', 'Cadastrar alunos', 'Convidar famílias, novo aluno e importar lista', UserPlus],
-              ['mensalidades', 'Mensalidades', 'Quem pagou e quem está em aberto', Wallet],
-              ['financeiro', 'Financeiro', 'Receitas, custos e resultado do mês', Wallet],
+              ['gestao', 'Gestão', 'Mensalidades, financeiro e controle do negócio', Wallet],
+              ['abastecimento', 'Lançar abastecimento', 'Registrar rápido, direto no posto', Fuel],
               ['ajustes', 'Rotas e ajustes', 'Horários das escolas, rotas de ida e volta, código', Settings]
-            ] as const).map(([k, titulo, desc, Icone]) => (
-              <button key={k} type="button" onClick={() => setAba(k)} className="w-full flex items-center gap-3 px-4 py-3 min-h-[60px] rounded-2xl bg-slate-900 border border-slate-800 text-left cursor-pointer active:scale-[0.99]">
+            ] as const).filter(([k]) => k !== 'gestao' || !!onAbrirGestao).map(([k, titulo, desc, Icone]) => (
+              <button key={k} type="button" onClick={() => (k === 'gestao' ? onAbrirGestao?.() : setAba(k))} className="w-full flex items-center gap-3 px-4 py-3 min-h-[60px] rounded-2xl bg-slate-900 border border-slate-800 text-left cursor-pointer active:scale-[0.99]">
                 <Icone className="w-5 h-5 text-amber-300 shrink-0" />
                 <span className="flex-1 min-w-0">
                   <span className="block text-sm font-bold text-slate-100">{titulo}</span>
@@ -1021,9 +1025,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
         {aba === 'mensagens' && <Mensagens />}
 
-        {aba === 'mensalidades' && <Mensalidades />}
-
-        {aba === 'financeiro' && <Financeiro />}
+        {aba === 'abastecimento' && <LancarAbastecimento onConcluir={() => setAba('mais')} />}
 
         {aba === 'ajustes' && (
           <>
@@ -1127,7 +1129,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         )}
       </main>
 
-      {/* MENU FIXO EMBAIXO: ao alcance do polegar. Cadastro, mensalidades, financeiro e ajustes ficam em "Mais". */}
+      {/* MENU FIXO EMBAIXO: ao alcance do polegar. Cadastro, Gestão (mensalidades e financeiro), abastecimento e ajustes ficam em "Mais". */}
       <div className="sticky bottom-0 z-30 shrink-0 bg-slate-900">
       <GuiaPrimeiroAcesso guia={guia} onIrParaAba={setAba} onExemplos={carregarDadosZeroCache} />
       {faixa && (
@@ -1146,7 +1148,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           ['mensagens', 'Mensagens', MessageCircle, naoLidasMsgs],
           ['mais', 'Mais', MenuIcon, 0]
         ] as const).map(([k, nome, Icone, n]) => {
-          const ativa = k === 'mais' ? ['mais', 'cadastro', 'mensalidades', 'financeiro', 'ajustes'].includes(aba) : aba === k;
+          const ativa = k === 'mais' ? ['mais', 'cadastro', 'abastecimento', 'ajustes'].includes(aba) : aba === k;
           return (
             <button key={k} type="button" role="tab" aria-selected={ativa} onClick={() => setAba(k)}
               className={`relative flex flex-col items-center justify-center gap-0.5 py-2 min-h-[56px] text-[11px] font-bold cursor-pointer ${ativa ? 'text-amber-300' : 'text-slate-400'}`}>

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PASSOS_MOTORISTA, PASSOS_RESPONSAVEL } from './guiaPassos';
 
-const ABAS = ['diario', 'mapa', 'mensagens', 'mais', 'cadastro', 'mensalidades', 'financeiro', 'ajustes'];
+const ABAS = ['diario', 'mapa', 'mensagens', 'mais', 'cadastro', 'abastecimento', 'ajustes'];
 const textoDe = (p: { titulo: string; texto: string; itens?: string[] }) => [p.titulo, p.texto, ...(p.itens || [])].join(' ');
 
 test('Guia: passos com id único, título, texto e abas válidas', () => {

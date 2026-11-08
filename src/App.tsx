@@ -12,6 +12,7 @@ import { ArchitectureModal } from './components/shared/ArchitectureModal';
 import { RealTestModal } from './components/shared/RealTestModal';
 import { LandingPage } from './components/auth/LandingPage';
 import { AdminDashboard } from './components/admin/AdminDashboard';
+import { GestaoPanel } from './components/gestao/GestaoPanel';
 import { TransportRepository, subscribeToDatabaseChanges } from './services/api';
 import { AuthService } from './services/auth';
 import {
@@ -26,10 +27,12 @@ import {
   Home
 } from 'lucide-react';
 
+type ModoTela = 'LANDING' | 'DUAL' | 'DRIVER' | 'PARENT' | 'ADMIN' | 'GESTAO';
+
 export default function App() {
   const isDemoMode = (typeof window !== 'undefined' && window.location.search.includes('demo=true')) || import.meta.env.VITE_DEMO_MODE === 'true';
 
-  const [viewMode, setViewMode] = useState<'LANDING' | 'DUAL' | 'DRIVER' | 'PARENT' | 'ADMIN'>('LANDING');
+  const [viewMode, setViewMode] = useState<ModoTela>('LANDING');
   const [isRotaAtiva, setIsRotaAtiva] = useState<boolean>(false);
   const [isFastGPS, setIsFastGPS] = useState<boolean>(true); // 3s para testar rapidamente na UI, ou 10s padrão
   const [isArchModalOpen, setIsArchModalOpen] = useState<boolean>(false);
@@ -54,6 +57,9 @@ export default function App() {
         setIsStandaloneMobile(true);
       } else if ((role === 'dupla' || role === 'dual' || role === 'simulador') && isDemoMode) {
         setViewMode('DUAL');
+      } else if (window.location.pathname === '/gestao') {
+        // Gestão do motorista: precisa de login (o servidor também confere o papel de motorista)
+        setViewMode(temSessao ? 'GESTAO' : 'LANDING');
       } else if (window.location.pathname === '/admin' || role === 'admin') {
         setViewMode('ADMIN');
       } else {
@@ -84,17 +90,21 @@ export default function App() {
   }, []);
 
   // Navegação entre ambientes com sincronização da URL no navegador
-  const navigateTo = (mode: 'LANDING' | 'DUAL' | 'DRIVER' | 'PARENT' | 'ADMIN') => {
+  const navigateTo = (mode: ModoTela) => {
     setViewMode(mode);
     if (typeof window !== 'undefined') {
+      // Endereços começam em "/" para não herdar o caminho atual (ex.: sair de /gestao para o painel).
       if (mode === 'DRIVER') {
-        window.history.pushState(null, '', '?role=motorista');
+        window.history.pushState(null, '', '/?role=motorista');
         setIsStandaloneMobile(true);
       } else if (mode === 'PARENT') {
-        window.history.pushState(null, '', '?role=pais');
+        window.history.pushState(null, '', '/?role=pais');
         setIsStandaloneMobile(true);
       } else if (mode === 'DUAL') {
-        window.history.pushState(null, '', '?role=dupla');
+        window.history.pushState(null, '', '/?role=dupla');
+        setIsStandaloneMobile(false);
+      } else if (mode === 'GESTAO') {
+        window.history.pushState(null, '', '/gestao');
         setIsStandaloneMobile(false);
       } else if (mode === 'ADMIN') {
         window.history.pushState(null, '', '/admin');
@@ -108,7 +118,8 @@ export default function App() {
 
   // Apenas o celular do motorista ou a visão dupla emite coordenadas de simulação GPS
   // O aplicativo dos pais opera puramente como RECEPTOR das coordenadas transmitidas pelo motorista
-  const isDriverRole = viewMode === 'DRIVER' || viewMode === 'DUAL';
+  // A Gestão é do motorista: com a rota em andamento, o GPS continua enviando enquanto ele consulta a Gestão.
+  const isDriverRole = viewMode === 'DRIVER' || viewMode === 'DUAL' || viewMode === 'GESTAO';
   const intervalMs = isFastGPS ? 3000 : 10000;
   const { coordenadas, resetRota, erroGps } = useGPS(isRotaAtiva && isDriverRole, { intervalMs });
 
@@ -158,6 +169,8 @@ export default function App() {
         />
       ) : viewMode === 'ADMIN' ? (
         <AdminDashboard onLogout={() => navigateTo('LANDING')} />
+      ) : viewMode === 'GESTAO' ? (
+        <GestaoPanel onVoltar={() => navigateTo('DRIVER')} />
       ) : (
         <>
           {/* ==================================================================== */}
@@ -295,6 +308,7 @@ export default function App() {
                   isRotaAtiva={isRotaAtiva}
                   onToggleRota={handleToggleRota}
                   onLogout={() => navigateTo('LANDING')}
+                  onAbrirGestao={() => navigateTo('GESTAO')}
                   erroGps={erroGps}
                 />
               </div>
