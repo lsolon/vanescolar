@@ -615,6 +615,28 @@ export interface LancamentoFin {
 }
 export interface CustoFixoFin { id: number; nome: string; valor_mensal: number; desde: string; ate?: string }
 /** Módulo de escritório que o motorista liga ou desliga (a lista vem do servidor). */
+export type SituacaoManutencao = 'EM_DIA' | 'ATENCAO' | 'VENCIDO' | 'SEM_DADOS';
+export interface ItemManutencaoStatus {
+  id: number;
+  nome: string;
+  intervalo_km?: number;
+  intervalo_meses?: number;
+  ultimo_km?: number;
+  ultima_data?: string;
+  situacao: SituacaoManutencao;
+  faltam_km: number | null;
+  faltam_dias: number | null;
+  proximo_km: number | null;
+  proxima_data: string | null;
+}
+export interface PainelManutencao {
+  km_atual: number | null;
+  itens: ItemManutencaoStatus[];
+  resumo: { total: number; vencidos: number; atencao: number };
+  sugestoes: { nome: string; intervalo_km?: number; intervalo_meses?: number }[];
+}
+export interface NovoItemManutencao { nome: string; intervalo_km?: number | string; intervalo_meses?: number | string; ultimo_km?: number | string; ultima_data?: string }
+
 export interface ModuloMotorista { chave: string; nome: string; descricao: string; padrao: boolean; ativo: boolean }
 export interface ResumoFinanceiro {
   mes: string; hoje: string;
@@ -1936,6 +1958,32 @@ export const TransportRepository = {
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível alterar o módulo.');
     return d.modulos as ModuloMotorista[];
+  },
+
+  // ---- Manutenção da van (módulo desligado por padrão) ----
+  async listarManutencao(): Promise<PainelManutencao> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/manutencao`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível carregar a manutenção.');
+    return d as PainelManutencao;
+  },
+  async adicionarManutencao(dados: NovoItemManutencao): Promise<PainelManutencao> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/manutencao`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(dados) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível salvar o serviço.');
+    return d as PainelManutencao;
+  },
+  async marcarManutencaoFeita(id: number, dados: { km?: number | string; data?: string }): Promise<PainelManutencao> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/manutencao/${id}/feito`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify(dados) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível registrar o serviço.');
+    return d as PainelManutencao;
+  },
+  async apagarManutencao(id: number): Promise<PainelManutencao> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/manutencao/${id}`, { method: 'DELETE', headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível apagar.');
+    return d as PainelManutencao;
   },
 
   async obterCodigoMotorista(): Promise<string> {

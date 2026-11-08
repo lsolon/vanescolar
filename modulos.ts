@@ -41,6 +41,12 @@ export const MODULOS: readonly ModuloDef[] = [
     nome: 'Financeiro',
     descricao: 'Receitas, despesas, custos fixos, abastecimento e lucro do mês.',
     padrao: true
+  },
+  {
+    chave: 'manutencao',
+    nome: 'Manutenção',
+    descricao: 'Revisões da van por km e por data (óleo, pneus, freios...), com aviso de quanto falta.',
+    padrao: false
   }
 ];
 
