@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { TransportRepository } from '../../services/api';
 import type { LinhaMensalidadeMotorista, MensalidadesMotorista, StatusMensalidade } from '../../services/api';
+import { PixConfig } from './PixConfig';
 
 const brl = (n: number | null | undefined) => (n ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
@@ -11,6 +12,12 @@ const somarMes = (m: string, d: number) => {
   return `${Math.floor(idx / 12)}-${String((idx % 12) + 1).padStart(2, '0')}`;
 };
 const dataBR = (iso: string | null) => (iso ? iso.split('-').reverse().join('/') : '');
+/** Data e hora (Brasília) de um instante ISO, ex.: 08/11 às 10:42. */
+const quando = (iso: string) => {
+  const d = new Date(iso);
+  const f = (o: Intl.DateTimeFormatOptions) => d.toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', ...o });
+  return `${f({ day: '2-digit', month: '2-digit' })} às ${f({ hour: '2-digit', minute: '2-digit' })}`;
+};
 
 const ROTULO: Record<StatusMensalidade, { texto: string; cor: string }> = {
   PAGO: { texto: 'Pago', cor: 'bg-emerald-500/15 text-emerald-300 border-emerald-400/40' },
@@ -49,6 +56,13 @@ const Linha: React.FC<{ l: LinhaMensalidadeMotorista; mes: string; aberta: boole
     if (!window.confirm('Desfazer a baixa deste mês?')) return;
     return agir(() => TransportRepository.desfazerPagamentoMensalidade(l.id_aluno, mes));
   };
+  // Aviso do responsável ("já paguei pelo Pix"): o motorista confere no banco e confirma, ou diz que não recebeu.
+  const avisou = l.status !== 'PAGO' && !!l.aviso_em;
+  const confirmarAviso = () => agir(() => TransportRepository.registrarPagamentoMensalidade(l.id_aluno, { mes, forma: 'PIX' }));
+  const naoRecebi = () => {
+    if (!window.confirm('Tirar o aviso? A mensalidade continua em aberto.')) return;
+    return agir(() => TransportRepository.descartarAvisoPagamento(l.id_aluno, mes));
+  };
 
   const r = ROTULO[l.status];
   return (
@@ -65,6 +79,7 @@ const Linha: React.FC<{ l: LinhaMensalidadeMotorista; mes: string; aberta: boole
         <div className="text-right shrink-0">
           <p className="text-sm font-extrabold text-slate-100">{l.valor ? brl(l.status === 'PAGO' ? l.valor_pago : l.valor) : '—'}</p>
           <span className={`inline-block mt-0.5 px-2 py-0.5 rounded-full border text-[10px] font-black ${r.cor}`}>{r.texto}</span>
+          {avisou && <span className="block mt-1 px-2 py-0.5 rounded-full border border-amber-400/50 bg-amber-400/15 text-amber-200 text-[10px] font-black">Avisou que pagou</span>}
         </div>
       </button>
 
@@ -77,6 +92,15 @@ const Linha: React.FC<{ l: LinhaMensalidadeMotorista; mes: string; aberta: boole
             </>
           ) : (
             <>
+              {avisou && l.aviso_em && (
+                <div className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 space-y-2">
+                  <p className="text-xs text-amber-100">A família avisou em {quando(l.aviso_em)} que pagou {brl(l.valor)} pelo Pix. Confira no seu banco antes de confirmar.</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" disabled={ocupado} onClick={confirmarAviso} className="px-4 py-2 min-h-[44px] rounded-xl bg-emerald-600 text-white text-xs font-black cursor-pointer disabled:opacity-50">Recebi, confirmar</button>
+                    <button type="button" disabled={ocupado} onClick={naoRecebi} className="px-3 py-2 min-h-[44px] rounded-xl bg-slate-800 text-rose-300 text-xs font-bold cursor-pointer disabled:opacity-50">Não recebi</button>
+                  </div>
+                </div>
+              )}
               {(l.status === 'SEM_VALOR' || !l.valor) && <p className="text-xs text-amber-200">Informe o valor mensal e o dia de vencimento desta família.</p>}
               <div className="grid grid-cols-2 gap-2">
                 <label className="text-[11px] text-slate-400">Valor mensal (R$)
@@ -138,11 +162,26 @@ export const Mensalidades: React.FC = () => {
 
   const { resumo, alunos } = dados;
   const pct = resumo.previsto > 0 ? Math.min(100, Math.round((resumo.recebido / resumo.previsto) * 100)) : 0;
-  const lista = filtro === 'TODOS' ? alunos : alunos.filter((a) => a.status === filtro);
+  const filtrados = filtro === 'TODOS' ? alunos : alunos.filter((a) => a.status === filtro);
+  // Quem avisou que pagou vai para o topo: é o que o motorista precisa conferir primeiro.
+  const lista = [...filtrados].sort((a, b) => Number(!!b.aviso_em && b.status !== 'PAGO') - Number(!!a.aviso_em && a.status !== 'PAGO'));
+  const avisos = alunos.filter((a) => a.aviso_em && a.status !== 'PAGO').length;
   const mesAtual = dados.hoje.slice(0, 7);
 
   return (
     <section aria-label="Mensalidades" className="space-y-4">
+      <PixConfig />
+      {avisos > 0 && (
+        <p role="status" className="rounded-2xl border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-xs text-amber-100">
+          {avisos === 1 ? '1 família avisou que pagou pelo Pix.' : `${avisos} famílias avisaram que pagaram pelo Pix.`} Confira no banco e confirme.
+        </p>
+      )}
+      {(dados.avisos_outros_meses ?? []).map((a) => (
+        <div key={`${a.id_aluno}-${a.mes}`} role="status" className="flex items-center justify-between gap-2 rounded-2xl border border-amber-400/40 bg-amber-400/10 px-4 py-3">
+          <p className="text-xs text-amber-100 min-w-0">{a.responsavel_nome || 'Uma família'} avisou o pagamento de {nomeMes(a.mes)} pelo Pix.</p>
+          <button type="button" onClick={() => setMes(a.mes)} className="shrink-0 px-3 py-2 min-h-[44px] rounded-xl bg-slate-900 text-amber-200 text-xs font-black cursor-pointer">Ver {nomeMes(a.mes).split(' ')[0]}</button>
+        </div>
+      ))}
       <div className="flex items-center justify-between gap-2">
         <button type="button" aria-label="Mês anterior" onClick={() => setMes(somarMes(dados.mes, -1))} className="w-11 h-11 rounded-xl bg-slate-900 border border-slate-800 text-slate-200 font-black cursor-pointer">‹</button>
         <div className="text-center">

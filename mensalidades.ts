@@ -33,9 +33,18 @@ export interface Pagamento {
   registrado_em: string;  // ISO
 }
 
+/** Aviso do responsável ("já paguei pelo Pix"). Não é baixa: o motorista confere no banco e confirma. */
+export interface AvisoPagamento {
+  id_motorista: number;
+  id_aluno: number;
+  mes: string;            // AAAA-MM
+  avisado_em: string;     // ISO
+}
+
 export interface MensalidadesDB {
   configs: Record<string, ConfigMensalidade>; // chave `${motorista}:${aluno}`
   pagamentos: Pagamento[];
+  avisos?: AvisoPagamento[]; // ausente em dados antigos
 }
 
 export const novoMensalidadesDB = (): MensalidadesDB => ({ configs: {}, pagamentos: [] });
@@ -154,8 +163,47 @@ export function resumir(linhas: LinhaMensalidade[], mes: string): ResumoMensalid
   return r;
 }
 
-/** Dá baixa (ou substitui a baixa existente) de uma competência. */
+const mesmoAviso = (a: AvisoPagamento, motorista: number, aluno: number, mes: string) => a.id_motorista === motorista && a.id_aluno === aluno && a.mes === mes;
+
+export function avisoDe(db: MensalidadesDB, motorista: number, aluno: number, mes: string): AvisoPagamento | undefined {
+  return (db.avisos ?? []).find((a) => mesmoAviso(a, motorista, aluno, mes));
+}
+
+/** Registra o aviso do responsável. Avisar de novo não muda nada: vale o primeiro aviso. */
+export function registrarAviso(db: MensalidadesDB, motorista: number, aluno: number, mes: string, agora: Date = new Date()): AvisoPagamento {
+  const existente = avisoDe(db, motorista, aluno, mes);
+  if (existente) return existente;
+  const novo: AvisoPagamento = { id_motorista: motorista, id_aluno: aluno, mes, avisado_em: agora.toISOString() };
+  db.avisos = [...(db.avisos ?? []), novo];
+  return novo;
+}
+
+export function descartarAviso(db: MensalidadesDB, motorista: number, aluno: number, mes: string): boolean {
+  const antes = (db.avisos ?? []).length;
+  db.avisos = (db.avisos ?? []).filter((a) => !mesmoAviso(a, motorista, aluno, mes));
+  return db.avisos.length < antes;
+}
+
+/**
+ * Qual mês o responsável deve pagar agora: o mais antigo ainda sem pagamento (atrasado ou em aberto)
+ * entre os últimos 6 meses, respeitando o mês em que a cobrança começou. Sem valor definido ou tudo pago: null.
+ */
+export function mesParaPagar(db: MensalidadesDB, motorista: number, aluno: number, hoje: string): string | null {
+  const config = db.configs[chaveConfig(motorista, aluno)];
+  if (!config) return null;
+  const atual = mesDe(hoje);
+  for (let i = 5; i >= 0; i--) {
+    const m = somarMeses(atual, -i);
+    if (config.desde && m < config.desde) continue;
+    const st = statusDoMes(config, pagamentoDe(db, motorista, aluno, m), m, hoje);
+    if (st === 'ATRASADO' || st === 'EM_ABERTO') return m;
+  }
+  return null;
+}
+
+/** Dá baixa (ou substitui a baixa existente) de uma competência. O aviso do responsável, se houver, deixa de ser necessário. */
 export function registrarPagamento(db: MensalidadesDB, p: Omit<Pagamento, 'registrado_em'>, agora: Date = new Date()): Pagamento {
+  descartarAviso(db, p.id_motorista, p.id_aluno, p.mes);
   db.pagamentos = db.pagamentos.filter((x) => !(x.id_motorista === p.id_motorista && x.id_aluno === p.id_aluno && x.mes === p.mes));
   const novo: Pagamento = { ...p, registrado_em: agora.toISOString() };
   db.pagamentos.push(novo);
@@ -172,4 +220,5 @@ export function desfazerPagamento(db: MensalidadesDB, motorista: number, aluno: 
 export function removerAluno(db: MensalidadesDB, motorista: number, aluno: number) {
   delete db.configs[chaveConfig(motorista, aluno)];
   db.pagamentos = db.pagamentos.filter((x) => !(x.id_motorista === motorista && x.id_aluno === aluno));
+  db.avisos = (db.avisos ?? []).filter((a) => !(a.id_motorista === motorista && a.id_aluno === aluno));
 }
