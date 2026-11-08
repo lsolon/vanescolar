@@ -2282,3 +2282,115 @@ test('Pix: fluxo completo (chave, QR do responsável, aviso "já paguei", confir
   assert.equal((await jsonReq('GET', '/api/mensalidades', resp)).data.filhos[0].pix, null);
   assert.deepEqual((await jsonReq('GET', '/api/motorista/pix', mot)).data, { ativo: true, config: null });
 });
+
+test('Pix da família: 3 filhos pagam um Pix único; aviso e confirmação valem para todos de uma vez (tudo ou nada)', async (t) => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await motoristaComEmail(adm, 'PixBeta', PIX_BETA_EMAIL);
+  const modulo = ((await jsonReq('GET', '/api/motorista/modulos', mot)).data.modulos as any[]).find((m) => m.chave === 'pagamento-pix');
+  if (!modulo) {
+    console.warn(`[Pix] Fluxo da família PULADO: suba o servidor de teste com PIX_BETA_EMAILS=${PIX_BETA_EMAIL} para exercitá-lo.`);
+    t.skip('servidor sem PIX_BETA_EMAILS');
+    return;
+  }
+  assert.equal((await jsonReq('PUT', '/api/motorista/modulos', mot, { chave: 'pagamento-pix', ativo: true })).status, 200);
+  assert.equal((await jsonReq('PUT', '/api/motorista/pix', mot, { tipo: 'EMAIL', chave: 'motorista@exemplo.com', nome: 'Solon Transporte', cidade: 'Rio de Janeiro' })).status, 200);
+
+  // família com 3 filhos no mesmo motorista, todos confirmados
+  const codigo = (await jsonReq('GET', '/api/motorista/codigo', mot)).data.codigo;
+  const fam = await novoResponsavelVerificado(adm);
+  assert.equal((await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: 'Ana Luz', codigoMotorista: codigo })).status, 200);
+  const motId = (await jsonReq('GET', '/api/estado', fam)).data.motoristas[0].id;
+  for (const nome of ['Beto Luz', 'Caio Luz']) assert.equal((await jsonReq('POST', '/api/filhos', fam, { ...FILHO, nomeAluno: nome, motoristaId: motId })).status, 200);
+  const pendentes = ((await jsonReq('GET', '/api/estado', mot)).data.paradas as any[]).filter((p) => p.vinculo === 'PENDENTE');
+  assert.ok(pendentes.length >= 3, 'três pedidos pendentes');
+  for (const p of pendentes) assert.equal((await jsonReq('POST', `/api/paradas/${p.id}/confirmar`, mot)).status, 200);
+  const ids: number[] = ((await jsonReq('GET', '/api/mensalidades', fam)).data.filhos as any[]).map((f) => f.id_aluno);
+  assert.equal(ids.length, 3);
+
+  // valores com centavos para provar a soma
+  const valores = ['100,00', '150,00', '50,25'];
+  for (let i = 0; i < 3; i++) assert.equal((await jsonReq('PUT', `/api/motorista/mensalidades/${ids[i]}/config`, mot, { valor: valores[i], vencimento_dia: 28 })).status, 200);
+
+  // o responsável vê um Pix por filho E um Pix único com a soma
+  const recebidoAntes = (await jsonReq('GET', '/api/motorista/mensalidades', mot)).data.resumo.recebido as number;
+  let g = (await jsonReq('GET', '/api/mensalidades', fam)).data;
+  assert.equal(g.filhos.length, 3);
+  assert.ok(g.filhos.every((f: any) => f.pix), 'cada filho tem o seu Pix');
+  assert.equal(g.familia_pix.length, 1);
+  assert.equal(g.familia_pix[0].total, 300.25);
+  assert.equal(g.familia_pix[0].itens.length, 3);
+  assert.equal(g.familia_pix[0].recebedor, 'SOLON TRANSPORTE');
+  assert.match(g.familia_pix[0].copia_e_cola, /^000201.*6304[0-9A-F]{4}$/);
+  assert.ok(g.familia_pix[0].copia_e_cola.includes('300.25') && g.familia_pix[0].copia_e_cola.includes('VANF'), 'valor somado e identificador da família no código');
+  const texto = JSON.stringify(g.familia_pix);
+  for (const proibido of ['Rua das Flores', 'Portão azul', 'latitude', 'longitude']) assert.equal(texto.includes(proibido), false, `não vaza ${proibido}`);
+  const mesDe = (id: number) => g.filhos.find((f: any) => f.id_aluno === id).pix.mes as string;
+  const todos = () => ids.map((id) => ({ id_aluno: id, mes: mesDe(id) }));
+
+  // validações do aviso em lote
+  const outroResp = await novoResponsavelVerificado(adm);
+  assert.equal((await jsonReq('POST', '/api/mensalidades/avisar-lote', undefined, { itens: todos() })).status, 401);
+  assert.equal((await jsonReq('POST', '/api/mensalidades/avisar-lote', mot, { itens: todos() })).status, 403, 'motorista não avisa por responsável');
+  assert.equal((await jsonReq('POST', '/api/mensalidades/avisar-lote', fam, {})).status, 400, 'sem itens');
+  assert.equal((await jsonReq('POST', '/api/mensalidades/avisar-lote', fam, { itens: [] })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/mensalidades/avisar-lote', fam, { itens: [todos()[0], todos()[0]] })).status, 400, 'filho repetido');
+  assert.equal((await jsonReq('POST', '/api/mensalidades/avisar-lote', fam, { itens: [{ id_aluno: 'x', mes: '2026-11' }] })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/mensalidades/avisar-lote', outroResp, { itens: todos() })).status, 404, 'filhos de outra família');
+  assert.equal((await jsonReq('POST', '/api/mensalidades/avisar-lote', fam, { itens: [todos()[0], { ...todos()[1], mes: '2020-01' }] })).status, 409, 'mês errado em um item');
+  g = (await jsonReq('GET', '/api/mensalidades', fam)).data;
+  assert.ok(g.filhos.every((f: any) => f.pix.avisado_em === null), 'tudo ou nada: o item certo também não foi registrado');
+  assert.equal(g.familia_pix.length, 1);
+
+  // aviso do Pix único: os três filhos ficam "aguardando", sem baixa
+  const av = await jsonReq('POST', '/api/mensalidades/avisar-lote', fam, { itens: todos() });
+  assert.equal(av.status, 200, JSON.stringify(av.data));
+  assert.equal(av.data.avisados, 3);
+  g = (await jsonReq('GET', '/api/mensalidades', fam)).data;
+  assert.ok(g.filhos.every((f: any) => f.pix.avisado_em && f.status !== 'PAGO'));
+  assert.deepEqual(g.familia_pix, [], 'já avisado: some o Pix único');
+  let painel = (await jsonReq('GET', '/api/motorista/mensalidades', mot)).data;
+  assert.equal(painel.avisos_pendentes.length, 1, 'uma família, um cartão de aviso');
+  assert.equal(painel.avisos_pendentes[0].itens.length, 3);
+  assert.equal(painel.avisos_pendentes[0].total, 300.25);
+  assert.equal(Math.round((painel.resumo.recebido - recebidoAntes) * 100), 0, 'aviso não entra no recebido');
+
+  // confirmar/descartar em lote: validações
+  const lote = painel.avisos_pendentes[0].itens.map((i: any) => ({ id_aluno: i.id_aluno, mes: i.mes }));
+  assert.equal((await jsonReq('POST', '/api/motorista/mensalidades/avisos/confirmar', fam, { itens: lote })).status, 403);
+  assert.equal((await jsonReq('POST', '/api/motorista/mensalidades/avisos/confirmar', undefined, { itens: lote })).status, 401);
+  assert.equal((await jsonReq('POST', '/api/motorista/mensalidades/avisos/confirmar', mot, { itens: [] })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/motorista/mensalidades/avisos/confirmar', mot, { itens: [{ id_aluno: lote[0].id_aluno, mes: '2026-13' }] })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/motorista/mensalidades/avisos/confirmar', mot, { itens: [lote[0], lote[0]] })).status, 400, 'repetido');
+  assert.equal((await jsonReq('POST', '/api/motorista/mensalidades/avisos/confirmar', mot, { itens: [lote[0], { id_aluno: lote[1].id_aluno, mes: '2020-01' }] })).status, 404, 'sem aviso nesse mês: nada é confirmado');
+  const intruso = await novoMotorista(adm, 'PixIntruso2');
+  assert.equal((await jsonReq('POST', '/api/motorista/mensalidades/avisos/confirmar', intruso, { itens: lote })).status, 404, 'outro motorista não confirma');
+  assert.equal((await jsonReq('POST', '/api/motorista/mensalidades/avisos/descartar', intruso, { itens: lote })).status, 404);
+  assert.equal(((await jsonReq('GET', '/api/motorista/mensalidades', mot)).data.avisos_pendentes[0].itens as any[]).length, 3, 'nada mudou depois das recusas');
+
+  // "não recebi" de um filho só: os outros continuam aguardando
+  assert.equal((await jsonReq('POST', '/api/motorista/mensalidades/avisos/descartar', mot, { itens: [lote[0]] })).status, 200);
+  painel = (await jsonReq('GET', '/api/motorista/mensalidades', mot)).data;
+  assert.equal(painel.avisos_pendentes[0].itens.length, 2);
+  assert.equal(painel.avisos_pendentes[0].total, Math.round((painel.avisos_pendentes[0].itens as any[]).reduce((a, i) => a + i.valor * 100, 0)) / 100);
+
+  // confirmar tudo (os 2 que sobraram) = baixa de sempre, forma PIX, no valor de cada mensalidade
+  const restantes = painel.avisos_pendentes[0].itens.map((i: any) => ({ id_aluno: i.id_aluno, mes: i.mes }));
+  const somaRestantes = painel.avisos_pendentes[0].total as number;
+  const conf = await jsonReq('POST', '/api/motorista/mensalidades/avisos/confirmar', mot, { itens: restantes });
+  assert.equal(conf.status, 200, JSON.stringify(conf.data));
+  assert.equal(conf.data.confirmados, 2);
+  painel = (await jsonReq('GET', '/api/motorista/mensalidades', mot)).data;
+  assert.deepEqual(painel.avisos_pendentes, []);
+  assert.equal(Math.round((painel.resumo.recebido - recebidoAntes) * 100), Math.round(somaRestantes * 100), 'recebido cresce só com o que foi confirmado');
+  for (const r of restantes) {
+    const l = painel.alunos.find((x: any) => x.id_aluno === r.id_aluno);
+    assert.equal(l.status, 'PAGO'); assert.equal(l.forma, 'PIX');
+  }
+  assert.equal((await jsonReq('POST', '/api/motorista/mensalidades/avisos/confirmar', mot, { itens: restantes })).status, 404, 'já confirmado');
+
+  // o filho do "não recebi" continua em aberto e o responsável vê os outros como Pago
+  g = (await jsonReq('GET', '/api/mensalidades', fam)).data;
+  assert.equal(g.filhos.filter((f: any) => f.status === 'PAGO').length, 2);
+  assert.equal(g.filhos.filter((f: any) => f.pix).length, 1, 'só o que falta tem Pix');
+  assert.deepEqual(g.familia_pix, [], 'com um filho só, vale o Pix do filho (sem Pix único)');
+});
