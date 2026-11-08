@@ -2311,6 +2311,14 @@ test('Pix da família: 3 filhos pagam um Pix único; aviso e confirmação valem
   const valores = ['100,00', '150,00', '50,25'];
   for (let i = 0; i < 3; i++) assert.equal((await jsonReq('PUT', `/api/motorista/mensalidades/${ids[i]}/config`, mot, { valor: valores[i], vencimento_dia: 28 })).status, 200);
 
+  // painel do motorista: irmãos compartilham a chave da família; um aluno de outro responsável fica de fora
+  const avulso = (await jsonReq('POST', '/api/paradas/nova', mot, { nomeAluno: 'Dora Avulsa', endereco: 'Rua B, 2', pontoReferencia: 'Muro', escola: 'Colégio Pix', nomeResponsavel: 'Outra Pessoa', telefoneResponsavel: '21977776666' })).data;
+  const linhasPainel = (await jsonReq('GET', '/api/motorista/mensalidades', mot)).data.alunos as any[];
+  const chaves = ids.map((id) => linhasPainel.find((l) => l.id_aluno === id).familia);
+  assert.ok(chaves[0] && chaves.every((c) => c === chaves[0]), 'irmãos na mesma família');
+  const chaveAvulso = linhasPainel.find((l) => l.id_aluno === avulso.novaParada.id_aluno)?.familia;
+  if (chaveAvulso) assert.notEqual(chaveAvulso, chaves[0], 'outro responsável, outra família');
+
   // o responsável vê um Pix por filho E um Pix único com a soma
   const recebidoAntes = (await jsonReq('GET', '/api/motorista/mensalidades', mot)).data.resumo.recebido as number;
   let g = (await jsonReq('GET', '/api/mensalidades', fam)).data;

@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { TransportRepository } from '../../services/api';
 import type { AvisoPendente, LinhaMensalidadeMotorista, MensalidadesMotorista, StatusMensalidade } from '../../services/api';
 import { PixConfig } from './PixConfig';
+import { agruparPorFamilia } from './familias';
+import type { FamiliaMensalidade } from './familias';
 
 const brl = (n: number | null | undefined) => (n ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
@@ -65,7 +67,49 @@ const CartaoAvisoFamilia: React.FC<{ g: AvisoPendente; onMudou: () => void }> = 
   );
 };
 
-const Linha: React.FC<{ l: LinhaMensalidadeMotorista; mes: string; aberta: boolean; onToggle: () => void; onMudou: () => void }> = ({ l, mes, aberta, onToggle, onMudou }) => {
+function mensagemCobrancaFamilia(f: FamiliaMensalidade, mes: string) {
+  const abertos = f.filhos.filter((x) => x.status !== 'PAGO' && x.valor);
+  const total = abertos.reduce((t, x) => t + Math.round((x.valor ?? 0) * 100), 0) / 100;
+  const lista = abertos.map((x) => `${x.aluno} (${brl(x.valor)})`).join(', ');
+  return `Olá, ${f.responsavel_nome.split(' ')[0] || ''}! Passando para lembrar da mensalidade do transporte escolar de ${nomeMes(mes)}: ${lista}, total de ${brl(total)}. ` +
+    'Se já pagou, pode desconsiderar. Obrigado!';
+}
+
+/** Uma família com mais de um filho: cabeçalho com o total e a situação, e cada filho logo abaixo. */
+const FamiliaCartao: React.FC<{ f: FamiliaMensalidade; mes: string; aberta: number | null; setAberta: (id: number | null) => void; onMudou: () => void }> = ({ f, mes, aberta, setAberta, onMudou }) => {
+  const r = ROTULO[f.status];
+  const textoStatus = f.status === 'PAGO' ? 'Todos pagos' : f.pagos > 0 ? `${f.pagos} de ${f.filhos.length} pagos` : r.texto;
+  const abertos = f.filhos.filter((x) => x.status !== 'PAGO' && x.valor);
+  const fone = f.whatsapp ? (f.whatsapp.length <= 11 ? '55' + f.whatsapp : f.whatsapp) : '';
+  return (
+    <li className="rounded-2xl border border-slate-700 bg-slate-900/60 p-2 space-y-2" aria-label={`Família de ${f.responsavel_nome || 'responsável'}`}>
+      <div className="flex items-center gap-3 px-1 pt-1">
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-extrabold text-slate-100 truncate">{f.responsavel_nome || 'Responsável'}</p>
+          <p className="text-[11px] text-slate-400">{f.filhos.length} filhos · {brl(f.total)} por mês</p>
+        </div>
+        <div className="text-right shrink-0 space-y-1">
+          <span className={`inline-block px-2 py-0.5 rounded-full border text-[10px] font-black ${r.cor}`}>{textoStatus}</span>
+          {f.avisou && <span className="block px-2 py-0.5 rounded-full border border-amber-400/50 bg-amber-400/15 text-amber-200 text-[10px] font-black">Avisou que pagou</span>}
+        </div>
+      </div>
+      <ul className="space-y-2">
+        {f.filhos.map((l) => (
+          <Linha key={`${mes}-${l.id_aluno}`} l={l} mes={mes} dentroDeFamilia aberta={aberta === l.id_aluno}
+            onToggle={() => setAberta(aberta === l.id_aluno ? null : l.id_aluno)} onMudou={onMudou} />
+        ))}
+      </ul>
+      {fone && abertos.length > 0 && (
+        <div className="px-1 pb-1">
+          <a href={`https://wa.me/${fone}?text=${encodeURIComponent(mensagemCobrancaFamilia(f, mes))}`} target="_blank" rel="noreferrer"
+            className="px-4 py-2 min-h-[44px] rounded-xl bg-slate-800 text-emerald-300 text-xs font-bold inline-flex items-center">Cobrar a família no WhatsApp</a>
+        </div>
+      )}
+    </li>
+  );
+};
+
+const Linha: React.FC<{ l: LinhaMensalidadeMotorista; mes: string; aberta: boolean; onToggle: () => void; onMudou: () => void; dentroDeFamilia?: boolean }> = ({ l, mes, aberta, onToggle, onMudou, dentroDeFamilia }) => {
   const [valor, setValor] = useState(l.valor ? String(l.valor).replace('.', ',') : '');
   const [dia, setDia] = useState(String(l.vencimento_dia ?? 10));
   const [forma, setForma] = useState('PIX');
@@ -100,10 +144,10 @@ const Linha: React.FC<{ l: LinhaMensalidadeMotorista; mes: string; aberta: boole
     <li className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
       <button type="button" onClick={onToggle} aria-expanded={aberta} className="w-full flex items-center gap-3 p-3 text-left min-h-[56px] cursor-pointer">
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-bold text-slate-100 truncate">{l.responsavel_nome || 'Responsável'}</p>
+          <p className="text-sm font-bold text-slate-100 truncate">{dentroDeFamilia ? l.aluno : l.responsavel_nome || 'Responsável'}</p>
           <p className="text-[11px] text-slate-400 truncate">
-            {l.aluno}
-            {l.vencimento_dia ? ` · vence dia ${String(l.vencimento_dia).padStart(2, '0')}` : ''}
+            {dentroDeFamilia ? '' : l.aluno}
+            {l.vencimento_dia ? `${dentroDeFamilia ? '' : ' · '}vence dia ${String(l.vencimento_dia).padStart(2, '0')}` : ''}
             {l.meses_em_atraso > 1 || (l.status !== 'ATRASADO' && l.meses_em_atraso > 0) ? ` · ${l.meses_em_atraso} mês(es) vencido(s)` : ''}
           </p>
         </div>
@@ -194,8 +238,8 @@ export const Mensalidades: React.FC = () => {
   const { resumo, alunos } = dados;
   const pct = resumo.previsto > 0 ? Math.min(100, Math.round((resumo.recebido / resumo.previsto) * 100)) : 0;
   const filtrados = filtro === 'TODOS' ? alunos : alunos.filter((a) => a.status === filtro);
-  // Quem avisou que pagou vai para o topo: é o que o motorista precisa conferir primeiro.
-  const lista = [...filtrados].sort((a, b) => Number(!!b.aviso_em && b.status !== 'PAGO') - Number(!!a.aviso_em && a.status !== 'PAGO'));
+  // Filtro vale por filho; depois agrupa por responsável (quem avisou que pagou e os mais urgentes vêm primeiro).
+  const familias = agruparPorFamilia(filtrados);
   const mesAtual = dados.hoje.slice(0, 7);
 
   return (
@@ -217,19 +261,19 @@ export const Mensalidades: React.FC = () => {
         <div className="h-2.5 rounded-full bg-slate-800 overflow-hidden" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Percentual recebido">
           <div className="h-full bg-emerald-400" style={{ width: `${pct}%` }} />
         </div>
-        <p className="text-[11px] text-slate-300">{pct}% de {brl(resumo.previsto)} previstos · {resumo.qtd_pagos} de {alunos.length} famílias pagaram</p>
+        <p className="text-[11px] text-slate-300">{pct}% de {brl(resumo.previsto)} previstos · {resumo.qtd_pagos} de {alunos.length} alunos pagaram</p>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
         <div className="rounded-2xl p-3 bg-slate-900 border border-rose-400/30">
           <p className="text-[10px] font-bold text-rose-300 uppercase">Em atraso</p>
           <p className="text-lg font-black text-rose-200">{brl(resumo.atrasado)}</p>
-          <p className="text-[10px] text-slate-400">{resumo.qtd_atrasados} família(s)</p>
+          <p className="text-[10px] text-slate-400">{resumo.qtd_atrasados} aluno(s)</p>
         </div>
         <div className="rounded-2xl p-3 bg-slate-900 border border-sky-400/30">
           <p className="text-[10px] font-bold text-sky-300 uppercase">A vencer</p>
           <p className="text-lg font-black text-sky-200">{brl(resumo.a_vencer)}</p>
-          <p className="text-[10px] text-slate-400">{resumo.qtd_a_vencer} família(s)</p>
+          <p className="text-[10px] text-slate-400">{resumo.qtd_a_vencer} aluno(s)</p>
         </div>
       </div>
 
@@ -242,13 +286,15 @@ export const Mensalidades: React.FC = () => {
 
       {alunos.length === 0 ? (
         <p className="text-xs text-slate-400 bg-slate-900 border border-slate-800 rounded-2xl p-4">Nenhum aluno confirmado na van ainda. Quando você confirmar os alunos, as mensalidades aparecem aqui.</p>
-      ) : lista.length === 0 ? (
-        <p className="text-xs text-slate-400">Nenhuma família nesta situação.</p>
+      ) : familias.length === 0 ? (
+        <p className="text-xs text-slate-400">Nenhum aluno nesta situação.</p>
       ) : (
         <ul className="space-y-2">
-          {lista.map((l) => (
-            <Linha key={`${dados.mes}-${l.id_aluno}`} l={l} mes={dados.mes} aberta={aberta === l.id_aluno}
-              onToggle={() => setAberta(aberta === l.id_aluno ? null : l.id_aluno)} onMudou={() => carregar(mes)} />
+          {familias.map((f) => f.filhos.length > 1 ? (
+            <FamiliaCartao key={f.chave} f={f} mes={dados.mes} aberta={aberta} setAberta={setAberta} onMudou={() => carregar(mes)} />
+          ) : (
+            <Linha key={`${dados.mes}-${f.filhos[0].id_aluno}`} l={f.filhos[0]} mes={dados.mes} aberta={aberta === f.filhos[0].id_aluno}
+              onToggle={() => setAberta(aberta === f.filhos[0].id_aluno ? null : f.filhos[0].id_aluno)} onMudou={() => carregar(mes)} />
           ))}
         </ul>
       )}
