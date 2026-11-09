@@ -161,7 +161,9 @@ interface UserRecord {
   linkPreCadastro?: { token: string; criadoEm: string; expiraEm: number; envios: number; revogado?: boolean };
   /** Motorista: regras do serviço de transporte que a família precisa aceitar no pré-cadastro (opcional) */
   regrasServico?: string;
-  horariosEscola?: Record<string, { nome: string; turnos: Partial<Record<'MANHA' | 'TARDE', { entrada: string; saida: string }>> }>;
+  horariosEscola?: Record<string, { nome: string; turnos: Partial<Record<'MANHA' | 'TARDE' | 'NOITE', { entrada: string; saida: string }>> }>;
+  /** Motorista: viagens nomeadas ("Manhã 1", "Manhã 2"...), cada uma com turno e escola principal. O aluno fica fixo em uma viagem (parada.viagem_nomeada_id). */
+  viagens?: { id: string; nome: string; turno: 'MANHA' | 'TARDE' | 'NOITE'; escola: string }[];
   /** rota por ruas: por sentido, o fator ruas/linha reta medido (usado na previsão ao vivo) */
   rotaAuto?: Partial<Record<'IDA' | 'VOLTA', { fatorRuas: number; criadaEm: string }>>;
   capacidade?: number;
@@ -675,10 +677,10 @@ function localDaEscola(driverId: number, nome: unknown): { latitude: number; lon
   const rec = usersDB.find((u) => u.id === driverId);
   return rec?.escolasLocal?.[chaveEscola(nome)] ?? null;
 }
-type Turno = 'MANHA' | 'TARDE';
+type Turno = 'MANHA' | 'TARDE' | 'NOITE';
 const lerTurno = (v: unknown): Turno | null => {
   const t = String(v ?? '').trim().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  return t === 'MANHA' || t === 'TARDE' ? t : null;
+  return t === 'MANHA' || t === 'TARDE' || t === 'NOITE' ? t : null;
 };
 function horarioDaEscolaTurno(driverId: number, escola: unknown, turno: Turno | null | undefined): { entrada: string; saida: string } | null {
   if (!turno) return null;
@@ -2316,7 +2318,7 @@ async function startServer() {
     const nome = String(req.body?.nome ?? '').trim().slice(0, 120);
     if (nome.length < 2) return res.status(400).json({ error: 'Informe o nome da escola.' });
     const turno = lerTurno(req.body?.turno);
-    if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã ou tarde.' });
+    if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã, tarde ou noite.' });
     const k = chaveEscola(nome);
     const atual = rec.horariosEscola?.[k] ?? { nome, turnos: {} };
     if (req.body?.remover === true) {
@@ -2352,12 +2354,121 @@ async function startServer() {
     const parada: any = serverState.paradas.find((p: any) => p.id === parseInt(req.params.id, 10));
     if (!parada || donoDaParada(parada) !== user.userId) return res.status(404).json({ error: 'Parada não encontrada' });
     const turno = lerTurno(req.body?.turno);
-    if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã ou tarde.' });
+    if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã, tarde ou noite.' });
     parada.turno = turno;
     const herdou = herdarHorarioDaEscola(parada);
     if (!herdou) delete parada.horario_da_escola;
     broadcast('HORARIOS_ATUALIZADOS', { paradaId: parada.id }, donoDaParada(parada));
     res.json({ sucesso: true, turno, herdouHorario: herdou, ...horariosDaParada(parada) });
+  });
+
+  // ---- Viagens: listas nomeadas ("Manhã 1", "Manhã 2"...) criadas uma vez pelo motorista; cada aluno fica fixo em uma viagem ----
+  const MAX_VIAGENS = 12;
+  const NOME_TURNO_MSG: Record<Turno, string> = { MANHA: 'manhã', TARDE: 'tarde', NOITE: 'noite' };
+  const registroDoMotorista = (user: SessionPayload, driverId: number) => usersDB.find((u) => u.id === user.userId) ?? usersDB.find((u) => u.id === driverId);
+  const viagensDe = (driverId: number) => (usersDB.find((u) => u.id === driverId)?.viagens ?? []);
+  const acharViagem = (driverId: number, id: unknown) => (typeof id === 'string' && id ? viagensDe(driverId).find((v) => v.id === id) ?? null : null);
+  const resumoViagens = (driverId: number) => {
+    const alunos = (serverState.paradas as any[]).filter((p) => donoDaParada(p) === driverId && p.vinculo !== 'RECUSADO');
+    return {
+      viagens: viagensDe(driverId).map((v) => ({ ...v, alunos: alunos.filter((p) => p.viagem_nomeada_id === v.id).length })),
+      semViagem: alunos.filter((p) => confirmada(p) && !acharViagem(driverId, p.viagem_nomeada_id)).length
+    };
+  };
+  const lerNomeViagem = (v: unknown) => String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, 40);
+
+  app.get('/api/motorista/viagens', authenticate, requireDriver, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    res.json(resumoViagens(driverIdFor(user) as number));
+  });
+
+  app.post('/api/motorista/viagens', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const rec = registroDoMotorista(user, driverId);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const nome = lerNomeViagem(req.body?.nome), turno = lerTurno(req.body?.turno), escola = String(req.body?.escola ?? '').trim().replace(/\s+/g, ' ').slice(0, 120);
+    if (nome.length < 2) return res.status(400).json({ error: 'Dê um nome à viagem. Exemplo: Manhã 1.' });
+    if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã, tarde ou noite.' });
+    if (escola.length < 2) return res.status(400).json({ error: 'Informe a escola principal da viagem.' });
+    const lista = rec.viagens ?? [];
+    if (lista.length >= MAX_VIAGENS) return res.status(400).json({ error: `Limite de ${MAX_VIAGENS} viagens.` });
+    if (lista.some((v) => v.nome.toLowerCase() === nome.toLowerCase())) return res.status(409).json({ error: 'Já existe uma viagem com esse nome.' });
+    const nova = { id: `V${crypto.randomBytes(4).toString('hex')}`, nome, turno, escola };
+    rec.viagens = [...lista, nova];
+    auditLog('VIAGEM_CRIADA', rec.email, `Viagem criada pelo motorista ${driverId}`);
+    broadcast('HORARIOS_ATUALIZADOS', {}, driverId);
+    res.json({ sucesso: true, viagem: nova, ...resumoViagens(driverId) });
+  });
+
+  // Muda nome, turno ou escola principal. Os alunos da viagem acompanham o turno novo (e herdam os horários da escola nesse turno).
+  app.put('/api/motorista/viagens/:id', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const rec = registroDoMotorista(user, driverId);
+    const v = rec?.viagens?.find((x) => x.id === req.params.id);
+    if (!rec || !v) return res.status(404).json({ error: 'Viagem não encontrada.' });
+    const b = req.body || {};
+    if (b.nome !== undefined) {
+      const nome = lerNomeViagem(b.nome);
+      if (nome.length < 2) return res.status(400).json({ error: 'Dê um nome à viagem. Exemplo: Manhã 1.' });
+      if (rec.viagens!.some((x) => x.id !== v.id && x.nome.toLowerCase() === nome.toLowerCase())) return res.status(409).json({ error: 'Já existe uma viagem com esse nome.' });
+      v.nome = nome;
+    }
+    if (b.escola !== undefined) {
+      const escola = String(b.escola).trim().replace(/\s+/g, ' ').slice(0, 120);
+      if (escola.length < 2) return res.status(400).json({ error: 'Informe a escola principal da viagem.' });
+      v.escola = escola;
+    }
+    if (b.turno !== undefined) {
+      const turno = lerTurno(b.turno);
+      if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã, tarde ou noite.' });
+      if (turno !== v.turno) {
+        v.turno = turno;
+        for (const p of serverState.paradas as any[]) {
+          if (donoDaParada(p) !== driverId || p.viagem_nomeada_id !== v.id) continue;
+          p.turno = turno;
+          if (!herdarHorarioDaEscola(p)) delete p.horario_da_escola;
+        }
+      }
+    }
+    broadcast('HORARIOS_ATUALIZADOS', {}, driverId);
+    res.json({ sucesso: true, viagem: v, ...resumoViagens(driverId) });
+  });
+
+  // Apagar uma viagem NÃO apaga alunos: eles só ficam sem viagem até o motorista distribuí-los de novo.
+  app.delete('/api/motorista/viagens/:id', authenticate, requireDriver, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const rec = registroDoMotorista(user, driverId);
+    if (!rec || !rec.viagens?.some((x) => x.id === req.params.id)) return res.status(404).json({ error: 'Viagem não encontrada.' });
+    rec.viagens = rec.viagens.filter((x) => x.id !== req.params.id);
+    for (const p of serverState.paradas as any[]) if (donoDaParada(p) === driverId && p.viagem_nomeada_id === req.params.id) delete p.viagem_nomeada_id;
+    auditLog('VIAGEM_APAGADA', rec.email, `Viagem apagada pelo motorista ${driverId}`);
+    broadcast('HORARIOS_ATUALIZADOS', {}, driverId);
+    res.json({ sucesso: true, ...resumoViagens(driverId) });
+  });
+
+  // O motorista coloca um aluno numa viagem (ou tira, com viagemId null). O aluno passa a ter o turno da viagem.
+  app.put('/api/paradas/:id/viagem', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const parada: any = serverState.paradas.find((p: any) => p.id === parseInt(req.params.id, 10));
+    if (!parada || donoDaParada(parada) !== driverId) return res.status(404).json({ error: 'Parada não encontrada' });
+    if (req.body?.viagemId === null || req.body?.viagemId === '') {
+      delete parada.viagem_nomeada_id;
+      broadcast('HORARIOS_ATUALIZADOS', { paradaId: parada.id }, driverId);
+      return res.json({ sucesso: true, viagemId: null });
+    }
+    const v = acharViagem(driverId, req.body?.viagemId);
+    if (!v) return res.status(404).json({ error: 'Viagem não encontrada.' });
+    parada.viagem_nomeada_id = v.id;
+    parada.turno = v.turno;
+    const herdou = herdarHorarioDaEscola(parada);
+    if (!herdou) delete parada.horario_da_escola;
+    const outraEscola = !!parada.escola_destino && chaveEscola(parada.escola_destino) !== chaveEscola(v.escola);
+    broadcast('HORARIOS_ATUALIZADOS', { paradaId: parada.id }, driverId);
+    res.json({ sucesso: true, viagemId: v.id, turno: v.turno, herdouHorario: herdou, outraEscola });
   });
 
   // ---- Mensalidades: controle de cobrança por família (baixa manual, sem integração bancária) ----
@@ -3426,7 +3537,7 @@ async function startServer() {
     `Qualquer dúvida, é só me chamar.`;
 
   /** Cria o aluno já confirmado na van (cadastro feito pelo motorista), no fim das rotas de ida e volta. */
-  function criarAlunoConfirmado(driverId: number, c: { nomeAluno: string; escola: string; turno: Turno; nomeResp: string; tel: string; endereco: string; pontoReferencia: string; local?: { latitude: number; longitude: number } | null; entrada?: string | null; saida?: string | null }) {
+  function criarAlunoConfirmado(driverId: number, c: { nomeAluno: string; escola: string; turno: Turno; nomeResp: string; tel: string; endereco: string; pontoReferencia: string; local?: { latitude: number; longitude: number } | null; entrada?: string | null; saida?: string | null; viagemId?: string | null }) {
     const novoId = serverState.paradas.reduce((m: number, p: any) => Math.max(m, p.id % 1000, (p.id_aluno ?? 0) - 210), 0) + 1;
     const nova: any = {
       id: 1000 + novoId,
@@ -3438,6 +3549,7 @@ async function startServer() {
       status_embarque: 'PENDENTE',
       ...(c.entrada && c.saida ? { escola_entrada: c.entrada, escola_saida: c.saida } : {}),
       turno: c.turno,
+      ...(c.viagemId ? { viagem_nomeada_id: c.viagemId } : {}),
       latitude: c.local ? c.local.latitude : null,
       longitude: c.local ? c.local.longitude : null,
       nome_aluno: c.nomeAluno,
@@ -3469,11 +3581,14 @@ async function startServer() {
     const texto = (v: unknown, max: number) => String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, max);
     const nomeAluno = texto(b.nomeAluno, 80), escola = texto(b.escola, 120), endereco = texto(b.endereco, 200);
     const nomeResp = texto(b.nomeResponsavel, 80);
-    const turno = lerTurno(b.turno);
+    // Se escolheu uma viagem, o turno do aluno é o da viagem.
+    const viagem = b.viagemId ? acharViagem(driverId, b.viagemId) : null;
+    if (b.viagemId && !viagem) return res.status(404).json({ error: 'Viagem não encontrada.' });
+    const turno = viagem ? viagem.turno : lerTurno(b.turno);
     const tel = telefoneBR(b.telefoneResponsavel);
     if (nomeAluno.length < 2) return res.status(400).json({ error: 'Informe o nome do aluno.' });
     if (escola.length < 2) return res.status(400).json({ error: 'Informe a escola.' });
-    if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã ou tarde.' });
+    if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã, tarde ou noite.' });
     if (nomeResp.length < 2) return res.status(400).json({ error: 'Informe o nome do responsável.' });
     if (!tel) return res.status(400).json({ error: 'Informe o WhatsApp do responsável com DDD.' });
     if (endereco.length < 3) return res.status(400).json({ error: 'Informe o endereço de embarque.' });
@@ -3487,7 +3602,7 @@ async function startServer() {
 
     if (jaCadastrado(driverId, nomeAluno, escola, turno)) return res.status(409).json({ error: 'Este aluno já está cadastrado nessa escola e turno.' });
 
-    const { nova, herdou } = criarAlunoConfirmado(driverId, { nomeAluno, escola, turno, nomeResp, tel, endereco, pontoReferencia: texto(b.pontoReferencia, 120), local, entrada, saida });
+    const { nova, herdou } = criarAlunoConfirmado(driverId, { nomeAluno, escola, turno, nomeResp, tel, endereco, pontoReferencia: texto(b.pontoReferencia, 120), local, entrada, saida, viagemId: viagem?.id ?? null });
     auditLog('ALUNO_CADASTRADO_PELO_MOTORISTA', user.email, `Aluno ${nova.id_aluno} cadastrado pelo motorista ${driverId}`);
     broadcast('NOVA_PARADA_CADASTRADA', { paradaId: nova.id }, driverId);
     const nomeMot = perfilMotorista(driverId)?.nome ?? '';
@@ -3511,6 +3626,7 @@ async function startServer() {
     const t = semAcento(v.trim());
     if (t === 'm' || t.startsWith('manh')) return 'MANHA';
     if (t === 't' || t.startsWith('tard')) return 'TARDE';
+    if (t === 'n' || t.startsWith('noit')) return 'NOITE';
     return null;
   };
   function lerListaDeAlunos(texto: unknown, driverId: number) {
@@ -3527,16 +3643,24 @@ async function startServer() {
     const rows = linhas.slice(0, IMPORT_MAX_LINHAS).map((l, i) => {
       const n = i + 1;
       const sp = sep(l);
-      const base = { n, aluno: '', escola: '', turno: '' as string, responsavel: '', telefone: '', endereco: '', pontoReferencia: '', status: 'erro' as 'ok' | 'erro' | 'duplicado', erro: '' as string, turnoLido: null as Turno | null, tel: null as string | null };
+      const base = { n, aluno: '', escola: '', turno: '' as string, viagem: '', viagemId: null as string | null, responsavel: '', telefone: '', endereco: '', pontoReferencia: '', status: 'erro' as 'ok' | 'erro' | 'duplicado', erro: '' as string, turnoLido: null as Turno | null, tel: null as string | null };
       if (!sp) return { ...base, erro: 'Separe as colunas com tab (copiado da planilha) ou ponto e vírgula.' };
       const c = l.split(sp).map((x) => x.trim().replace(/\s+/g, ' '));
       if (c.length < 6) return { ...base, aluno: (c[0] ?? '').slice(0, 80), erro: 'Faltam colunas. Use: aluno, escola, turno, responsável, WhatsApp, endereço.' };
-      const [aluno, escola, turnoTxt, resp, telTxt, endereco, ref = ''] = c;
+      const [aluno, escola, turnoTxt, resp, telTxt, endereco, ref = '', viagemTxt = ''] = c;
       const turnoLido = turnoDaLista(turnoTxt), tel = telefoneBR(telTxt);
       const r = { ...base, aluno: aluno.slice(0, 80), escola: escola.slice(0, 120), turno: turnoLido ?? turnoTxt.slice(0, 20), responsavel: resp.slice(0, 80), telefone: tel ? `(${tel.slice(0, 2)}) *****-${tel.slice(-4)}` : telTxt.slice(0, 4), endereco: endereco.slice(0, 200), pontoReferencia: ref.slice(0, 120), turnoLido, tel };
       if (aluno.length < 2) return { ...r, erro: 'Falta o nome do aluno.' };
       if (escola.length < 2) return { ...r, erro: 'Falta a escola.' };
-      if (!turnoLido) return { ...r, erro: 'Turno deve ser manhã ou tarde.' };
+      if (!turnoLido) return { ...r, erro: 'Turno deve ser manhã, tarde ou noite.' };
+      let viagemId: string | null = null;
+      if (viagemTxt) {
+        const v = viagensDe(driverId).find((x) => x.nome.toLowerCase() === viagemTxt.toLowerCase());
+        if (!v) return { ...r, viagem: viagemTxt.slice(0, 40), erro: `A viagem "${viagemTxt.slice(0, 40)}" não existe. Cadastre em Rotas e ajustes ou deixe a coluna vazia.` };
+        if (v.turno !== turnoLido) return { ...r, viagem: v.nome, erro: `A viagem ${v.nome} é do turno ${NOME_TURNO_MSG[v.turno]}.` };
+        viagemId = v.id;
+      }
+      Object.assign(r, { viagem: viagemTxt ? viagemTxt.slice(0, 40) : '', viagemId });
       if (resp.length < 2) return { ...r, erro: 'Falta o nome do responsável.' };
       if (!tel) return { ...r, erro: 'WhatsApp inválido. Use DDD + número.' };
       if (endereco.length < 3) return { ...r, erro: 'Falta o endereço.' };
@@ -3593,7 +3717,7 @@ async function startServer() {
     const driverId = driverIdFor(user) as number;
     const { rows, cortadas } = lerListaDeAlunos(req.body?.texto, driverId);
     if (rows.length === 0) return res.status(400).json({ error: 'Cole a lista de alunos, uma linha por aluno.' });
-    const resumo = rows.map((r) => ({ n: r.n, aluno: r.aluno, escola: r.escola, turno: r.turno, responsavel: r.responsavel, telefone: r.telefone, status: r.status, erro: r.erro || undefined }));
+    const resumo = rows.map((r) => ({ n: r.n, aluno: r.aluno, escola: r.escola, turno: r.turno, viagem: r.viagem || undefined, responsavel: r.responsavel, telefone: r.telefone, status: r.status, erro: r.erro || undefined }));
     const totais = { ok: rows.filter((r) => r.status === 'ok').length, erro: rows.filter((r) => r.status === 'erro').length, duplicado: rows.filter((r) => r.status === 'duplicado').length, cortadas };
     if (req.body?.confirmar !== true) return res.json({ confirmado: false, linhas: resumo, totais });
     // LGPD (menores): uma confirmação do motorista para a lista toda.
@@ -3601,7 +3725,7 @@ async function startServer() {
     if (totais.ok === 0) return res.status(400).json({ error: 'Nenhuma linha válida para importar.' });
     const nomeMot = perfilMotorista(driverId)?.nome ?? '';
     const criados = rows.filter((r) => r.status === 'ok').map((r) => {
-      const { nova } = criarAlunoConfirmado(driverId, { nomeAluno: r.aluno, escola: r.escola, turno: r.turnoLido!, nomeResp: r.responsavel, tel: r.tel!, endereco: r.endereco, pontoReferencia: r.pontoReferencia });
+      const { nova } = criarAlunoConfirmado(driverId, { nomeAluno: r.aluno, escola: r.escola, turno: r.turnoLido!, nomeResp: r.responsavel, tel: r.tel!, endereco: r.endereco, pontoReferencia: r.pontoReferencia, viagemId: r.viagemId });
       return { paradaId: nova.id, aluno: nova.nome_aluno, responsavel: nova.responsavel_nome, whatsapp: `55${r.tel}`, mensagem: mensagemConvite(nomeMot, nova, driverId) };
     });
     auditLog('ALUNOS_IMPORTADOS_EM_LOTE', user.email, `${criados.length} aluno(s) importado(s) pelo motorista ${driverId}`);
@@ -3728,7 +3852,7 @@ async function startServer() {
     const turno = lerTurno(b.turno), tel = telefoneBR(b.telefoneResponsavel);
     if (nomeAluno.length < 2) return res.status(400).json({ error: 'Informe o nome do aluno.' });
     if (escola.length < 2) return res.status(400).json({ error: 'Informe a escola.' });
-    if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã ou tarde.' });
+    if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã, tarde ou noite.' });
     if (nomeResp.length < 2) return res.status(400).json({ error: 'Informe o seu nome.' });
     if (!tel) return res.status(400).json({ error: 'Informe o seu WhatsApp com DDD.' });
     if (endereco.length < 3) return res.status(400).json({ error: 'Informe o endereço de embarque.' });

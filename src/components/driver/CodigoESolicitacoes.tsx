@@ -122,7 +122,7 @@ export const SolicitacoesPendentes: React.FC<{ pendentes: ParadaMotoristaSanitiz
             <div className="text-xs text-slate-200">
               <strong>{p.nome_completo_para_chamada || p.nome_aluno_sanitizado}</strong>
               <div className="text-slate-400">{p.endereco_mascarado}</div>
-              <div className="text-slate-500">{p.escola_nome ? `${p.escola_nome} · ` : ''}{p.turno ? `${p.turno === 'MANHA' ? 'manhã' : 'tarde'} · ` : ''}entra {p.escola_entrada || '--:--'}, sai {p.escola_saida || '--:--'}</div>
+              <div className="text-slate-500">{p.escola_nome ? `${p.escola_nome} · ` : ''}{p.turno ? `${p.turno === 'MANHA' ? 'manhã' : p.turno === 'NOITE' ? 'noite' : 'tarde'} · ` : ''}entra {p.escola_entrada || '--:--'}, sai {p.escola_saida || '--:--'}</div>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <label className="text-[11px] text-slate-300 flex items-center gap-1.5">

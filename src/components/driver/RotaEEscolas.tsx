@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { TransportRepository } from '../../services/api';
-import type { SugestaoRota, EscolaMotorista, PropostaCronograma } from '../../services/api';
+import type { SugestaoRota, EscolaMotorista, PropostaCronograma, Viagem, ResumoViagens } from '../../services/api';
 import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 import { CampoHora } from '../shared/CampoHora';
 import type { Turno } from '../../services/api';
+import { NOME_TURNO } from '../../services/api';
 
 /** O motorista define onde fica cada escola: é o destino da barra de deslocamento do aluno a bordo. */
 export const EscolasDoMotorista: React.FC<{ versao?: number }> = ({ versao }) => {
@@ -80,7 +81,6 @@ export const EscolasDoMotorista: React.FC<{ versao?: number }> = ({ versao }) =>
   );
 };
 
-const NOME_TURNO: Record<Turno, string> = { MANHA: 'Manhã', TARDE: 'Tarde' };
 
 /** O motorista define uma vez a entrada e a saída de cada escola por turno; os alunos daquela escola e turno herdam. */
 export const HorariosPorEscola: React.FC<{ versao?: number; onMudou?: () => void }> = ({ versao, onMudou }) => {
@@ -132,7 +132,7 @@ export const HorariosPorEscola: React.FC<{ versao?: number; onMudou?: () => void
         {lista.map((e) => (
           <li key={e.nome} className="rounded-xl bg-slate-950 border border-slate-800 p-3 space-y-2">
             <div className="text-xs font-semibold text-slate-100">{e.nome}</div>
-            {(['MANHA', 'TARDE'] as Turno[]).map((t) => {
+            {(['MANHA', 'TARDE', 'NOITE'] as Turno[]).map((t) => {
               const h = e.horarios?.[t];
               const aberto = editando?.nome === e.nome && editando.turno === t;
               return (
@@ -146,8 +146,8 @@ export const HorariosPorEscola: React.FC<{ versao?: number; onMudou?: () => void
                   {aberto && (
                     <div className="space-y-2">
                       <div className="grid grid-cols-2 gap-2">
-                        <div className="text-[11px] text-slate-300 space-y-1"><span>Entrada na escola</span><CampoHora label={`Entrada ${NOME_TURNO[t]}`} value={entrada} onChange={setEntrada} horaPadrao={t === 'MANHA' ? '07' : '13'} /></div>
-                        <div className="text-[11px] text-slate-300 space-y-1"><span>Saída da escola</span><CampoHora label={`Saída ${NOME_TURNO[t]}`} value={saida} onChange={setSaida} horaPadrao={t === 'MANHA' ? '12' : '17'} /></div>
+                        <div className="text-[11px] text-slate-300 space-y-1"><span>Entrada na escola</span><CampoHora label={`Entrada ${NOME_TURNO[t]}`} value={entrada} onChange={setEntrada} horaPadrao={t === 'MANHA' ? '07' : t === 'TARDE' ? '13' : '19'} /></div>
+                        <div className="text-[11px] text-slate-300 space-y-1"><span>Saída da escola</span><CampoHora label={`Saída ${NOME_TURNO[t]}`} value={saida} onChange={setSaida} horaPadrao={t === 'MANHA' ? '12' : t === 'TARDE' ? '17' : '22'} /></div>
                       </div>
                       <div className="flex gap-2">
                         <button type="button" disabled={!entrada || !saida || salvando} onClick={salvar} className="px-3 py-2 rounded-xl bg-amber-400 text-slate-950 text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50">{salvando ? 'Salvando…' : 'Salvar horários'}</button>
@@ -306,6 +306,110 @@ export const RotasIdaVolta: React.FC<{ sentidoAtivo?: Sent; versao?: number; onA
           {editado && <button type="button" onClick={() => carregar('atual')} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Descartar</button>}
         </div>
       </div>
+    </section>
+  );
+};
+
+/** O motorista cria as viagens do dia ("Manhã 1", "Manhã 2"...): cada uma tem turno e escola principal. Cada aluno fica fixo em uma viagem. */
+export const ViagensDoMotorista: React.FC<{ versao?: number; onMudou?: () => void }> = ({ versao, onMudou }) => {
+  const [dados, setDados] = useState<ResumoViagens>({ viagens: [], semViagem: 0 });
+  const [escolas, setEscolas] = useState<string[]>([]);
+  const [aberto, setAberto] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [nome, setNome] = useState('');
+  const [turno, setTurno] = useState<Turno | ''>('');
+  const [escola, setEscola] = useState('');
+  const [erro, setErro] = useState<string | null>(null);
+  const [salvando, setSalvando] = useState(false);
+  const [apagando, setApagando] = useState<string | null>(null);
+
+  const carregar = () => TransportRepository.obterViagens().then(setDados).catch(() => {});
+  useEffect(() => { carregar(); TransportRepository.obterEscolas().then((l) => setEscolas(l.map((e) => e.nome))).catch(() => {}); }, [versao]);
+
+  const limpar = () => { setAberto(false); setEditId(null); setNome(''); setTurno(''); setEscola(''); setErro(null); };
+  const novaViagem = () => { limpar(); setAberto(true); };
+  const editar = (v: Viagem) => { setErro(null); setAberto(true); setEditId(v.id); setNome(v.nome); setTurno(v.turno); setEscola(v.escola); };
+  const salvar = async () => {
+    setErro(null);
+    if (!turno) { setErro('Escolha o turno: manhã, tarde ou noite.'); return; }
+    setSalvando(true);
+    try {
+      const r = editId
+        ? await TransportRepository.atualizarViagem(editId, { nome: nome.trim(), turno, escola: escola.trim() })
+        : await TransportRepository.criarViagem({ nome: nome.trim(), turno, escola: escola.trim() });
+      setDados(r); limpar(); onMudou?.();
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao salvar.'); }
+    finally { setSalvando(false); }
+  };
+  const apagar = async (id: string) => {
+    setErro(null);
+    try { setDados(await TransportRepository.apagarViagem(id)); setApagando(null); onMudou?.(); }
+    catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao apagar.'); }
+  };
+  const campo = 'w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 focus:outline-none focus:border-amber-400 min-h-[44px]';
+
+  return (
+    <section aria-label="Viagens" className="bg-slate-900 border border-amber-400/30 rounded-2xl p-4 space-y-3">
+      <h3 className="text-xs font-bold text-amber-300">Viagens</h3>
+      <p className="text-[11px] text-slate-400">Se você faz mais de uma viagem no mesmo turno, crie uma lista para cada uma (ex.: Manhã 1, Manhã 2). Cada aluno fica sempre na mesma viagem. Quem não tem viagem continua funcionando como antes.</p>
+      {dados.viagens.length === 0 && !aberto && <p className="text-[11px] text-slate-500">Nenhuma viagem criada.</p>}
+      <ul className="space-y-2">
+        {dados.viagens.map((v) => (
+          <li key={v.id} className="rounded-xl bg-slate-950 border border-slate-800 p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-slate-100">{v.nome} <span className="font-normal text-slate-400">· {NOME_TURNO[v.turno]}</span></div>
+                <div className="text-[11px] text-slate-400 truncate">{v.escola} · {v.alunos} aluno(s)</div>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => editar(v)} className="px-3 py-2 rounded-xl bg-amber-400/10 border border-amber-400/40 text-amber-200 text-xs font-bold min-h-[44px] cursor-pointer">Alterar</button>
+                <button type="button" onClick={() => setApagando(apagando === v.id ? null : v.id)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Apagar</button>
+              </div>
+            </div>
+            {apagando === v.id && (
+              <div className="p-2 rounded-xl bg-rose-950/40 border border-rose-500/30 text-[11px] text-rose-200 space-y-2">
+                <p>Apagar {v.nome}? Os {v.alunos} aluno(s) não são apagados, só ficam sem viagem.</p>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => apagar(v.id)} className="px-3 py-2 rounded-xl bg-rose-500/20 border border-rose-400 text-rose-100 font-bold min-h-[44px] cursor-pointer">Sim, apagar</button>
+                  <button type="button" onClick={() => setApagando(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-200 font-bold min-h-[44px] cursor-pointer">Cancelar</button>
+                </div>
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      {dados.viagens.length > 0 && dados.semViagem > 0 && (
+        <p className="text-[11px] text-amber-200/90">{dados.semViagem} aluno(s) ainda sem viagem. Escolha a viagem no cartão do aluno (Diário de Bordo).</p>
+      )}
+      {aberto ? (
+        <div className="space-y-2 rounded-xl border border-slate-800 p-3">
+          <label className="text-[11px] text-slate-300 block">Nome da viagem
+            <input value={nome} onChange={(e) => setNome(e.target.value)} maxLength={40} placeholder="Ex.: Manhã 1" autoComplete="off" className={`${campo} mt-1`} />
+          </label>
+          <div className="space-y-1" role="group" aria-label="Turno da viagem">
+            <span className="text-[11px] text-slate-300">Turno</span>
+            <div className="grid grid-cols-3 gap-2">
+              {(['MANHA', 'TARDE', 'NOITE'] as Turno[]).map((t) => (
+                <button key={t} type="button" aria-pressed={turno === t} onClick={() => setTurno(t)}
+                  className={`py-2.5 rounded-xl text-xs font-bold border min-h-[44px] cursor-pointer ${turno === t ? 'bg-amber-400/20 border-amber-400 text-amber-200' : 'bg-slate-950 border-slate-700 text-slate-300'}`}>{NOME_TURNO[t]}</button>
+              ))}
+            </div>
+          </div>
+          <label className="text-[11px] text-slate-300 block">Escola principal
+            <input value={escola} onChange={(e) => setEscola(e.target.value)} maxLength={120} list="escolas-das-viagens" autoComplete="off" className={`${campo} mt-1`} />
+            <datalist id="escolas-das-viagens">{escolas.map((n) => <option key={n} value={n} />)}</datalist>
+          </label>
+          {editId && <p className="text-[10px] text-slate-500">Se mudar o turno, os alunos da viagem passam para o turno novo.</p>}
+          {erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
+          <div className="flex gap-2">
+            <button type="button" disabled={salvando} onClick={salvar} className="flex-1 px-3 py-2 rounded-xl bg-amber-400 text-slate-950 text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50">{salvando ? 'Salvando…' : editId ? 'Salvar viagem' : 'Criar viagem'}</button>
+            <button type="button" onClick={limpar} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-bold min-h-[44px] cursor-pointer">Cancelar</button>
+          </div>
+        </div>
+      ) : (
+        <button type="button" onClick={novaViagem} className="w-full px-3 py-2.5 rounded-xl bg-amber-400/10 border border-amber-400/40 text-amber-200 text-xs font-bold min-h-[44px] cursor-pointer">+ Nova viagem</button>
+      )}
+      {!aberto && erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
     </section>
   );
 };

@@ -28,7 +28,7 @@ export const PreCadastroFamilia: React.FC<{ token: string }> = ({ token }) => {
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
     setErro(null);
-    if (!turno) { setErro('Escolha o turno: manhã ou tarde.'); return; }
+    if (!turno) { setErro('Escolha o turno: manhã, tarde ou noite.'); return; }
     if (!aceiteLgpd) { setErro('Para continuar, marque a autorização do uso dos dados.'); return; }
     if (info?.regras && !aceiteRegras) { setErro('Para continuar, marque que aceita as regras do transporte.'); return; }
     setEnviando(true);
@@ -79,8 +79,8 @@ export const PreCadastroFamilia: React.FC<{ token: string }> = ({ token }) => {
       </label>
       <div className="space-y-1" role="group" aria-label="Turno">
         <span className="text-sm text-slate-300">Turno do aluno na van</span>
-        <div className="grid grid-cols-2 gap-3">
-          {([['MANHA', 'Manhã'], ['TARDE', 'Tarde']] as const).map(([v, n]) => (
+        <div className="grid grid-cols-3 gap-3">
+          {([['MANHA', 'Manhã'], ['TARDE', 'Tarde'], ['NOITE', 'Noite']] as const).map(([v, n]) => (
             <button key={v} type="button" aria-pressed={turno === v} onClick={() => setTurno(v)}
               className={`py-4 rounded-xl text-base font-bold border min-h-[56px] cursor-pointer ${turno === v ? 'bg-amber-400/20 border-amber-400 text-amber-200' : 'bg-slate-900 border-slate-700 text-slate-300'}`}>{n}</button>
           ))}
