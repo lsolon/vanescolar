@@ -2456,3 +2456,38 @@ test('Quando sair: funciona antes de iniciar a rota mesmo com os alunos ENTREGUE
   assert.equal((await jsonReq('POST', url, mot, { ...pos, sentido: 'VOLTA' })).status, 409, 'ausente na volta');
   assert.equal((await jsonReq('POST', url, mot, { ...pos, sentido: 'IDA' })).status, 200, 'ausência só da volta não afeta a ida');
 });
+
+test('Histórico de viagens: um registro por trecho, só nome abreviado, isolado por motorista e apagável', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'HistoricoA');
+  const outro = await novoMotorista(adm, 'HistoricoB');
+  const c = (await jsonReq('POST', '/api/motorista/alunos', mot, { nomeAluno: 'Clara Medeiros Souza', escola: 'Escola HV', turno: 'MANHA', nomeResponsavel: 'Paula', telefoneResponsavel: '21955554444', endereco: 'Rua Muito Secreta, 77', latitude: -22.90, longitude: -43.20, autorizacaoResponsavel: true })).data;
+  assert.equal((await jsonReq('GET', '/api/motorista/historico', mot)).data.trechos.length, 0, 'começa vazio');
+  // ida
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.90, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.91, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  await jsonReq('POST', `/api/paradas/${c.paradaId}/status`, mot, { status: 'EMBARCOU' });
+  await jsonReq('POST', `/api/paradas/${c.paradaId}/status`, mot, { status: 'ENTREGUE' });
+  await jsonReq('POST', '/api/rotas/encerrar', mot, {});
+  // volta (sem entregar: fica não atendido)
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'VOLTA' });
+  await jsonReq('POST', '/api/rotas/encerrar', mot, {});
+  const h = await jsonReq('GET', '/api/motorista/historico?dias=7', mot);
+  assert.equal(h.status, 200);
+  assert.equal(h.data.trechos.length, 2);
+  const [volta, ida] = h.data.trechos; // mais novo primeiro
+  assert.equal(ida.sentido, 'IDA'); assert.equal(volta.sentido, 'VOLTA');
+  assert.equal(ida.totais.entregues, 1); assert.ok(ida.km > 1 && ida.km < 1.3, `km=${ida.km}`);
+  assert.equal(volta.totais.nao_atendidos, 1);
+  assert.match(ida.alunos[0].nome, /^Clara M\.$/);
+  assert.match(ida.alunos[0].entregue_em, /^\d{2}:\d{2}$/);
+  const texto = JSON.stringify(h.data);
+  for (const proibido of ['Secreta', '21955554444', 'Medeiros', 'Souza', 'latitude', 'longitude', '-22.9', 'Paula']) assert.ok(!texto.includes(proibido), `vazou: ${proibido}`);
+  // isolamento: outro motorista não vê; sem login e responsável não entram
+  assert.equal((await jsonReq('GET', '/api/motorista/historico', outro)).data.trechos.length, 0);
+  assert.equal((await jsonReq('GET', '/api/motorista/historico')).status, 401);
+  // apagar
+  assert.equal((await jsonReq('DELETE', '/api/motorista/historico', mot)).data.apagados, 2);
+  assert.equal((await jsonReq('GET', '/api/motorista/historico', mot)).data.trechos.length, 0);
+});

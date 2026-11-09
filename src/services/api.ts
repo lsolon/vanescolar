@@ -1791,6 +1791,18 @@ export const TransportRepository = {
     return d;
   },
 
+  /** Histórico dos trechos encerrados (só nome abreviado, resultado, horas e km; sem endereço nem coordenadas). */
+  async historicoDeViagens(dias = 30): Promise<{ dias: number; retencaoDias: number; trechos: any[] }> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/historico?dias=${dias}`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível carregar o histórico.');
+    return d;
+  },
+  async apagarHistoricoDeViagens(): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/historico`, { method: 'DELETE', headers: getAuthHeaders() });
+    if (!res.ok) throw new Error('Não foi possível apagar o histórico.');
+  },
+
   /** Convite (código + mensagem de WhatsApp) para reenviar enquanto a família não se vinculou. */
   async obterConviteDoAluno(paradaId: number | string): Promise<{ disponivel: boolean; codigoVinculo?: string; mensagem?: string; whatsapp?: string }> {
     const res = await fetch(`${getBaseUrl()}/api/paradas/${paradaId}/convite`, { headers: getAuthHeaders() });

@@ -21,6 +21,7 @@ import * as MAN from './manutencao';
 import * as P from './push';
 import webpush from 'web-push';
 import * as G from './mensagens';
+import * as HV from './historico';
 import * as RR from './src/services/rotaRuas';
 import { hashPassword, verifyPassword, upgradePasswordHash } from './senhas';
 
@@ -458,6 +459,15 @@ interface Trip {
   mensagens: typeof serverState.mensagens;
   /** maior distância (km) vista por aluno desde o início da rota: base da barra de deslocamento */
   refKm?: Record<string, number>;
+  /** trecho (ida ou volta) em andamento, para o histórico */
+  trechoAtual?: HV.TrechoAtual;
+  /** histórico dos trechos encerrados (só nome abreviado, resultado, horas e km; ver historico.ts) */
+  historico?: HV.TrechoHistorico[];
+}
+/** O que vai para o disco/backup de cada viagem. A última posição do GPS do trecho fica só na memória. */
+function tripParaDisco(t: Trip) {
+  const { ultima_pos: _u, ...trechoSemPos } = (t.trechoAtual ?? {}) as any;
+  return { viagem: t.viagem, mensagens: t.mensagens, historico: t.historico ?? [], ...(t.trechoAtual ? { trechoAtual: trechoSemPos } : {}) };
 }
 // Fora do modo demo o app começa sem alunos de exemplo (Maria Clara, Enzo etc.): só entram famílias reais.
 if (!DEMO_MODE) serverState.paradas = [];
@@ -1106,12 +1116,14 @@ async function startServer() {
     if (saved.state) {
       if (Array.isArray(saved.state.paradas)) serverState.paradas = saved.state.paradas;
       // Formato novo: uma viagem + mensagens por motorista. Formato antigo (único) pertence ao motorista 1.
-      const trips: Record<string, { viagem?: any; mensagens?: any[] }> =
+      const trips: Record<string, { viagem?: any; mensagens?: any[]; historico?: any[]; trechoAtual?: any }> =
         saved.state.trips || (saved.state.viagem ? { '1': { viagem: saved.state.viagem, mensagens: saved.state.mensagens } } : {});
       for (const [id, t] of Object.entries(trips)) {
         const trip = getTrip(Number(id));
         if (t?.viagem) trip.viagem = t.viagem;
         if (Array.isArray(t?.mensagens)) trip.mensagens = t.mensagens;
+        if (Array.isArray(t?.historico)) trip.historico = t.historico;
+        if (t?.trechoAtual && typeof t.trechoAtual === 'object' && (t.trechoAtual.sentido === 'IDA' || t.trechoAtual.sentido === 'VOLTA')) trip.trechoAtual = t.trechoAtual;
       }
     }
     if (Array.isArray(saved.settings?.adminEmails)) {
@@ -1134,7 +1146,7 @@ async function startServer() {
     invitations: driverInvitationsDB,
     state: {
       paradas: serverState.paradas,
-      trips: Object.fromEntries([...tripsDB.entries()].map(([id, t]) => [id, { viagem: t.viagem, mensagens: t.mensagens }]))
+      trips: Object.fromEntries([...tripsDB.entries()].map(([id, t]) => [id, tripParaDisco(t)]))
     },
     settings: { adminEmails: ADMIN_EMAILS },
     mensalidades: mensalidadesDB,
@@ -1706,7 +1718,7 @@ async function startServer() {
       invitations: driverInvitationsDB,
       state: {
         paradas: serverState.paradas,
-        trips: Object.fromEntries([...tripsDB.entries()].map(([id, t]) => [id, { viagem: t.viagem, mensagens: t.mensagens }]))
+        trips: Object.fromEntries([...tripsDB.entries()].map(([id, t]) => [id, tripParaDisco(t)]))
       },
       settings: { adminEmails: ADMIN_EMAILS },
       mensalidades: mensalidadesDB,
@@ -3252,6 +3264,7 @@ async function startServer() {
     if (!['PENDENTE', 'EMBARCOU', 'ENTREGUE', 'AUSENTE'].includes(status)) return res.status(400).json({ error: 'Status inválido.' });
 
     parada.status_embarque = status;
+    try { const tr = getTrip(donoDaParada(parada) as number); if (tr.viagem.status === 'EM_ANDAMENTO' && tr.trechoAtual) HV.registrarStatus(tr.trechoAtual, parada.id, status, new Date()); } catch { /* o histórico nunca impede marcar o aluno */ }
     // Voltar para pendente limpa o aviso de ausência, para o aluno não ficar com um motivo que já não vale.
     if (status === 'PENDENTE') { delete (parada as any).motivo_ausencia; delete (parada as any).ausencia_trecho; }
     if (observacao !== undefined) (parada as any).observacao = observacao;
@@ -3333,6 +3346,8 @@ async function startServer() {
       // O motorista escolhe o sentido: IDA (casa → escola) ou VOLTA (escola → casa).
       const sentido = req.body?.sentido === 'VOLTA' ? 'VOLTA' : 'IDA';
       const mudou = (trip.viagem as any).sentido !== sentido;
+      // Histórico: um trecho novo começa quando a rota inicia (ou troca de sentido); se já estava rodando no mesmo sentido, segue o mesmo.
+      if (trip.viagem.status !== 'EM_ANDAMENTO' || mudou || !trip.trechoAtual) trip.trechoAtual = HV.novoTrecho(sentido, new Date());
       (trip.viagem as any).sentido = sentido;
       (trip.viagem as any).periodo = sentido === 'VOLTA' ? 'MANHA_VOLTA' : 'MANHA_IDA';
       trip.viagem.status = 'EM_ANDAMENTO';
@@ -3347,7 +3362,17 @@ async function startServer() {
         }
       }
     }
-    else if (acao === 'encerrar') { trip.viagem.status = 'CONCLUIDA'; delete (trip.viagem as any).sentido; }
+    else if (acao === 'encerrar') {
+      // Histórico: fecha o trecho com o estado atual dos alunos da van.
+      if (trip.viagem.status === 'EM_ANDAMENTO' && trip.trechoAtual) {
+        const agora = new Date();
+        const alunosDaVan = serverState.paradas.filter((p: any) => donoDaParada(p) === driverId && confirmada(p));
+        const temGps = trip.gpsAtual.accuracyMeters > 0;
+        trip.historico = HV.acrescentar(trip.historico ?? [], HV.fecharTrecho(trip.trechoAtual, alunosDaVan as any, agora, temGps), agora);
+      }
+      delete trip.trechoAtual;
+      trip.viagem.status = 'CONCLUIDA'; delete (trip.viagem as any).sentido;
+    }
     broadcast('ROTA_STATUS_ALTERADO', { status: trip.viagem.status, sentido: (trip.viagem as any).sentido }, driverId);
     res.json({ sucesso: true, status: trip.viagem.status });
   });
@@ -3374,6 +3399,7 @@ async function startServer() {
       etaNextStopMinutes: etaNextStopMinutes ?? trip.gpsAtual.etaNextStopMinutes
     };
     broadcast('GPS_ATUALIZADO', trip.gpsAtual, driverId);
+    try { if (trip.viagem.status === 'EM_ANDAMENTO' && trip.trechoAtual) HV.somarPosicao(trip.trechoAtual, { latitude, longitude }); } catch { /* idem */ }
     try { avisarVanChegando(driverId); } catch { /* o aviso nunca atrapalha o GPS */ }
     res.json({ sucesso: true });
   });
@@ -3828,12 +3854,31 @@ async function startServer() {
     res.json({ sucesso: true });
   });
 
+  // HISTÓRICO DE VIAGENS (EXCLUSIVO MOTORISTA, só da própria van): por trecho, sem endereço, telefone nem coordenadas.
+  app.get('/api/motorista/historico', authenticate, requireDriver, rateLimiter(60, 60000), (req: Request, res: Response) => {
+    const driverId = driverIdFor((req as any).user) as number;
+    const dias = Math.max(1, Math.min(HV.RETENCAO_DIAS, parseInt(String(req.query.dias ?? '30'), 10) || 30));
+    const corte = Date.now() - dias * 86400000;
+    const trechos = (getTrip(driverId).historico ?? []).filter((h) => new Date(h.encerrado_em).getTime() >= corte).map(HV.paraRelatorio);
+    res.json({ dias, retencaoDias: HV.RETENCAO_DIAS, trechos });
+  });
+  app.delete('/api/motorista/historico', authenticate, requireDriver, rateLimiter(5, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const trip = getTrip(driverId);
+    const n = trip.historico?.length ?? 0;
+    trip.historico = [];
+    auditLog('HISTORICO_APAGADO', user.email, `${n} trecho(s) do histórico apagado(s) pelo motorista ${driverId}`);
+    res.json({ sucesso: true, apagados: n });
+  });
+
   app.post('/api/limpar-dados', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     if (!DEMO_MODE) return res.status(403).json({ error: 'Modo demonstração desativado.' });
     const driverId = driverIdFor((req as any).user) as number;
     const trip = getTrip(driverId);
     serverState.paradas = serverState.paradas.filter((p: any) => donoDaParada(p) !== driverId);
     trip.mensagens.length = 0;
+    trip.historico = []; delete trip.trechoAtual;
     trip.viagem.status = 'AGENDADA';
     broadcast('DADOS_LIMPOS', {}, driverId);
     res.json({ sucesso: true });

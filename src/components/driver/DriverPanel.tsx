@@ -27,6 +27,7 @@ import {
 } from '../../types/database';
 import { InstalarApp } from '../shared/InstalarApp';
 import { LancarAbastecimento } from './Financeiro';
+import { HistoricoViagens } from './HistoricoViagens';
 import { ModulosAjustes } from './ModulosAjustes';
 import { useModulos } from '../../hooks/useModulos';
 import { Mensagens, useNaoLidasMotorista } from './Mensagens';
@@ -65,6 +66,7 @@ import {
   ArrowLeft,
   Wallet,
   Fuel,
+  History,
   Settings,
   HelpCircle
 } from 'lucide-react';
@@ -621,7 +623,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         )}
 
         {/* Sub-telas de "Mais": voltar para o menu */}
-        {['cadastro', 'abastecimento', 'ajustes'].includes(aba) && (
+        {['cadastro', 'abastecimento', 'ajustes', 'historico'].includes(aba) && (
           <button type="button" onClick={() => setAba('mais')} className="flex items-center gap-1.5 px-3 py-2 min-h-[44px] rounded-xl bg-slate-900 border border-slate-800 text-xs font-bold text-slate-300 cursor-pointer">
             <ArrowLeft className="w-4 h-4" /> Mais
           </button>
@@ -634,6 +636,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
               ['cadastro', 'Cadastrar alunos', 'Convidar famílias, novo aluno e importar lista', UserPlus],
               ['gestao', 'Gestão', 'Mensalidades, financeiro e controle do negócio', Wallet],
               ['abastecimento', 'Lançar abastecimento', 'Registrar rápido, direto no posto', Fuel],
+              ['historico', 'Histórico de viagens', 'Cada trecho de ida e volta: horários, alunos e km', History],
               ['ajustes', 'Rotas e ajustes', 'Horários das escolas, rotas de ida e volta, código', Settings]
             ] as const).filter(([k]) => (k !== 'gestao' || (!!onAbrirGestao && (modulos.ativo('mensalidades') || modulos.ativo('financeiro') || modulos.ativo('manutencao', false)))) && (k !== 'abastecimento' || modulos.ativo('financeiro'))).map(([k, titulo, desc, Icone]) => (
               <button key={k} type="button" onClick={() => (k === 'gestao' ? onAbrirGestao?.() : setAba(k))} className="w-full flex items-center gap-3 px-4 py-3 min-h-[60px] rounded-2xl bg-slate-900 border border-slate-800 text-left cursor-pointer active:scale-[0.99]">
@@ -1051,6 +1054,8 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
         {aba === 'abastecimento' && <LancarAbastecimento onConcluir={() => setAba('mais')} />}
 
+        {aba === 'historico' && <HistoricoViagens />}
+
         {aba === 'ajustes' && (
           <>
         <ModulosAjustes lista={modulos.lista} onAlterar={modulos.alterar} />
@@ -1174,7 +1179,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           ['mensagens', 'Mensagens', MessageCircle, naoLidasMsgs],
           ['mais', 'Mais', MenuIcon, 0]
         ] as const).map(([k, nome, Icone, n]) => {
-          const ativa = k === 'mais' ? ['mais', 'cadastro', 'abastecimento', 'ajustes'].includes(aba) : aba === k;
+          const ativa = k === 'mais' ? ['mais', 'cadastro', 'abastecimento', 'ajustes', 'historico'].includes(aba) : aba === k;
           return (
             <button key={k} type="button" role="tab" aria-selected={ativa} onClick={() => setAba(k)}
               className={`relative flex flex-col items-center justify-center gap-0.5 py-2 min-h-[56px] text-[11px] font-bold cursor-pointer ${ativa ? 'text-amber-300' : 'text-slate-400'}`}>
