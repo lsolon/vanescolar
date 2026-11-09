@@ -149,6 +149,18 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const alunosDoDia = (viagemZeroCache?.paradas || []).filter((p) => p.vinculo !== 'PENDENTE' && p.vinculo !== 'RECUSADO');
   const sentidoSugerido = sentidoPorHorario(alunosDoDia, agoraMin);
   useEffect(() => { if (sentidoAuto && !isRotaAtiva) setSentidoRota(sentidoSugerido); }, [sentidoAuto, isRotaAtiva, sentidoSugerido]);
+  // Ao encerrar a ida, avisa quando a volta deve começar (o motorista inicia a volta; o app só pré-seleciona o sentido).
+  const sentidoAnteriorRef = React.useRef<'IDA' | 'VOLTA' | null>(null);
+  useEffect(() => {
+    if (isRotaAtiva) { sentidoAnteriorRef.current = sentidoServidor; return; }
+    if (sentidoAnteriorRef.current === 'IDA') {
+      const saidas = alunosDoDia.map((p: any) => String(p.escola_saida || '')).filter((h) => /^\d{2}:\d{2}$/.test(h)).sort();
+      setMensagemSucesso(saidas.length ? `Ida concluída. A volta começa perto de ${saidas[0]}, na saída da escola. Toque em Iniciar rota quando for sair.` : 'Ida concluída. Quando for a hora da volta, toque em Iniciar rota.');
+      setTimeout(() => setMensagemSucesso(null), 15000);
+    }
+    sentidoAnteriorRef.current = null;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRotaAtiva]);
   // Ajuste manual dos horários previstos de uma parada
   const [paradaHorarios, setParadaHorarios] = useState<{ id: number | string; nome: string } | null>(null);
   const [horaIdaEdit, setHoraIdaEdit] = useState('');
