@@ -2684,3 +2684,43 @@ test('Iniciar rota por viagem: família de outra viagem não vê a rota em andam
     for (const proibido of [m1.id, m2.id, 'viagem_foco', 'viagem_nomeada_id', 'Manhã 1', 'Manhã 2', 'Secreta']) assert.ok(!texto.includes(proibido), `vazou para a família: ${proibido}`);
   }
 });
+
+test('Pré-cadastro com vários alunos: irmãos no mesmo envio, tudo ou nada, repetidos ignorados, envio conta uma vez', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'PreCadVarios');
+  const token = (await jsonReq('POST', '/api/motorista/pre-cadastro/link', mot)).data.link.url.split('?pre=')[1];
+  const url = `/api/pre-cadastro/${token}`;
+  const resp = { nomeResponsavel: 'Marta Irmãos', telefoneResponsavel: '(21) 99777-1122', aceiteLgpd: true };
+  const al = (nomeAluno: string, extra: any = {}) => ({ nomeAluno, escola: 'Escola Irmãos', turno: 'manhã', endereco: 'Rua dos Irmãos, 7', pontoReferencia: 'Portão verde', ...extra });
+  const nomes = async () => ((await jsonReq('GET', '/api/estado', mot)).data.paradas as any[]).map((p) => p.nome_completo_para_chamada ?? p.nome_aluno);
+
+  // tudo ou nada: um aluno inválido derruba o pedido inteiro e diz qual é
+  const ruim = await jsonReq('POST', url, undefined, { ...resp, alunos: [al('Caio Irmão'), al('Duda Irmã', { turno: 'madrugada' })] });
+  assert.equal(ruim.status, 400); assert.match(ruim.data.error, /Aluno 2/);
+  assert.ok(!(await nomes()).includes('Caio Irmão'), 'nada foi criado');
+  assert.equal((await jsonReq('POST', url, undefined, { ...resp, alunos: [] })).status, 400);
+  assert.equal((await jsonReq('POST', url, undefined, { ...resp, alunos: Array.from({ length: 7 }, (_, i) => al(`Aluno ${i}x`)) })).status, 400, 'limite de 6 por pedido');
+  assert.equal((await jsonReq('POST', url, undefined, { ...resp, aceiteLgpd: false, alunos: [al('Caio Irmão')] })).status, 400);
+
+  // envio com dois irmãos: os dois caem como pendentes, com o mesmo responsável; o link conta 1 envio
+  const ok = await jsonReq('POST', url, undefined, { ...resp, alunos: [al('Caio Irmão'), al('Duda Irmã', { turno: 'tarde' })] });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data)); assert.deepEqual(ok.data, { sucesso: true });
+  const lista: any[] = (await jsonReq('GET', '/api/estado', mot)).data.paradas;
+  const caio = lista.find((p) => (p.nome_completo_para_chamada ?? p.nome_aluno) === 'Caio Irmão'), duda = lista.find((p) => (p.nome_completo_para_chamada ?? p.nome_aluno) === 'Duda Irmã');
+  assert.ok(caio && duda);
+  assert.equal(caio.vinculo, 'PENDENTE'); assert.equal(duda.vinculo, 'PENDENTE');
+  assert.equal(caio.turno, 'MANHA'); assert.equal(duda.turno, 'TARDE');
+  assert.notEqual(caio.id, duda.id);
+  assert.equal((await jsonReq('GET', '/api/motorista/pre-cadastro', mot)).data.link.envios, 1, 'o limite do link conta envios, não alunos');
+
+  // repetidos (já na van ou duplicados no pedido) são ignorados; o novo entra
+  const rep = await jsonReq('POST', url, undefined, { ...resp, alunos: [al('Caio Irmão'), al('Eva Irmã'), al('Eva Irmã')] });
+  assert.equal(rep.status, 200);
+  const depois = await nomes();
+  assert.equal(depois.filter((n) => n === 'Caio Irmão').length, 1);
+  assert.equal(depois.filter((n) => n === 'Eva Irmã').length, 1);
+
+  // formato antigo (um aluno nos campos soltos) continua funcionando
+  assert.equal((await jsonReq('POST', url, undefined, { ...resp, ...al('Fabi Antiga') })).status, 200);
+  assert.ok((await nomes()).includes('Fabi Antiga'));
+});

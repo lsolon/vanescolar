@@ -2,24 +2,31 @@ import React, { useEffect, useState } from 'react';
 import { TransportRepository } from '../../services/api';
 import type { Turno } from '../../services/api';
 
+interface AlunoForm { chave: number; nome: string; escola: string; turno: Turno | ''; endereco: string; ref: string }
+let proximaChave = 1;
+const alunoVazio = (base?: Partial<AlunoForm>): AlunoForm => ({ chave: proximaChave++, nome: '', escola: '', turno: '', endereco: '', ref: '', ...base });
+const MAX_ALUNOS = 6;
+
 const campo = 'w-full px-4 py-3 bg-slate-950 border border-slate-700 rounded-xl text-base text-slate-100 focus:outline-none focus:border-amber-400 min-h-[52px]';
 
 /** Página pública da família: preenche os dados do aluno e do responsável e dá o aceite. Sem login, sem mapa, sem GPS. */
 export const PreCadastroFamilia: React.FC<{ token: string }> = ({ token }) => {
   const [estado, setEstado] = useState<'carregando' | 'invalido' | 'form' | 'enviado'>('carregando');
   const [info, setInfo] = useState<{ motorista: string; regras: string | null } | null>(null);
-  const [nome, setNome] = useState('');
-  const [escola, setEscola] = useState('');
-  const [turno, setTurno] = useState<Turno | ''>('');
+  // Um pedido pode ter vários alunos (irmãos): os dados do responsável são preenchidos uma vez só.
+  const [alunos, setAlunos] = useState<AlunoForm[]>([alunoVazio()]);
   const [nomeResp, setNomeResp] = useState('');
   const [tel, setTel] = useState('');
-  const [endereco, setEndereco] = useState('');
-  const [ref, setRef] = useState('');
   const [website, setWebsite] = useState(''); // isca anti-robô: fica escondida
   const [aceiteLgpd, setAceiteLgpd] = useState(false);
   const [aceiteRegras, setAceiteRegras] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
+  const [qtdEnviada, setQtdEnviada] = useState(1);
+  const mudar = (chave: number, campoNome: keyof AlunoForm, valor: string) => setAlunos((l) => l.map((a) => (a.chave === chave ? { ...a, [campoNome]: valor } : a)));
+  // O próximo aluno já vem com escola, endereço e referência do anterior (irmãos costumam ser iguais); nome e turno ficam em branco.
+  const adicionar = () => setAlunos((l) => l.length >= MAX_ALUNOS ? l : [...l, alunoVazio({ escola: l[l.length - 1].escola, endereco: l[l.length - 1].endereco, ref: l[l.length - 1].ref })]);
+  const remover = (chave: number) => setAlunos((l) => l.filter((a) => a.chave !== chave));
 
   useEffect(() => {
     TransportRepository.abrirPreCadastro(token).then((d) => { setInfo(d); setEstado('form'); }).catch(() => setEstado('invalido'));
@@ -28,15 +35,18 @@ export const PreCadastroFamilia: React.FC<{ token: string }> = ({ token }) => {
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
     setErro(null);
-    if (!turno) { setErro('Escolha o turno: manhã, tarde ou noite.'); return; }
+    const semTurno = alunos.findIndex((a) => !a.turno);
+    if (semTurno >= 0) { setErro(`${alunos.length > 1 ? `Aluno ${semTurno + 1}: e` : 'E'}scolha o turno: manhã, tarde ou noite.`); return; }
     if (!aceiteLgpd) { setErro('Para continuar, marque a autorização do uso dos dados.'); return; }
     if (info?.regras && !aceiteRegras) { setErro('Para continuar, marque que aceita as regras do transporte.'); return; }
     setEnviando(true);
     try {
       await TransportRepository.enviarPreCadastro(token, {
-        nomeAluno: nome, escola, turno, nomeResponsavel: nomeResp, telefoneResponsavel: tel, endereco, pontoReferencia: ref,
+        alunos: alunos.map((a) => ({ nomeAluno: a.nome, escola: a.escola, turno: a.turno, endereco: a.endereco, pontoReferencia: a.ref })),
+        nomeResponsavel: nomeResp, telefoneResponsavel: tel,
         aceiteLgpd: true, ...(info?.regras ? { aceiteRegras: true } : {}), website
       });
+      setQtdEnviada(alunos.length);
       setEstado('enviado');
     } catch (err) {
       setErro(err instanceof Error ? err.message : 'Não foi possível enviar.');
@@ -59,7 +69,7 @@ export const PreCadastroFamilia: React.FC<{ token: string }> = ({ token }) => {
   if (estado === 'enviado') return moldura(
     <div className="bg-emerald-500/10 border border-emerald-400/40 rounded-2xl p-6 text-center space-y-3 mt-10">
       <h1 className="text-xl font-black text-emerald-300">Pedido enviado!</h1>
-      <p className="text-sm text-slate-200">O motorista vai conferir os dados e avisar você pelo WhatsApp para acompanhar a van pelo aplicativo.</p>
+      <p className="text-sm text-slate-200">{qtdEnviada > 1 ? `Recebemos os ${qtdEnviada} alunos. ` : ''}O motorista vai conferir os dados e avisar você pelo WhatsApp para acompanhar a van pelo aplicativo.</p>
       <p className="text-xs text-slate-400">Você já pode fechar esta página.</p>
     </div>
   );
@@ -68,30 +78,41 @@ export const PreCadastroFamilia: React.FC<{ token: string }> = ({ token }) => {
     <form onSubmit={enviar} className="space-y-4" aria-label="Cadastro da família">
       <header className="space-y-1">
         <h1 className="text-2xl font-black text-amber-300">VanEscolar</h1>
-        <p className="text-sm text-slate-300">Cadastro do transporte escolar{info?.motorista ? ` com ${info.motorista}` : ''}. Leva cerca de 2 minutos.</p>
+        <p className="text-sm text-slate-300">Cadastro do transporte escolar{info?.motorista ? ` com ${info.motorista}` : ''}. Leva cerca de 2 minutos. Tem mais de um filho? Cadastre todos neste mesmo formulário.</p>
       </header>
 
-      <label className="block text-sm text-slate-300">Nome do aluno(a)
-        <input required value={nome} onChange={(e) => setNome(e.target.value)} maxLength={80} autoComplete="off" className={`${campo} mt-1`} />
-      </label>
-      <label className="block text-sm text-slate-300">Escola
-        <input required value={escola} onChange={(e) => setEscola(e.target.value)} maxLength={120} autoComplete="off" className={`${campo} mt-1`} />
-      </label>
-      <div className="space-y-1" role="group" aria-label="Turno">
-        <span className="text-sm text-slate-300">Turno do aluno na van</span>
-        <div className="grid grid-cols-3 gap-3">
-          {([['MANHA', 'Manhã'], ['TARDE', 'Tarde'], ['NOITE', 'Noite']] as const).map(([v, n]) => (
-            <button key={v} type="button" aria-pressed={turno === v} onClick={() => setTurno(v)}
-              className={`py-4 rounded-xl text-base font-bold border min-h-[56px] cursor-pointer ${turno === v ? 'bg-amber-400/20 border-amber-400 text-amber-200' : 'bg-slate-900 border-slate-700 text-slate-300'}`}>{n}</button>
-          ))}
-        </div>
-      </div>
-      <label className="block text-sm text-slate-300">Endereço de embarque
-        <input required value={endereco} onChange={(e) => setEndereco(e.target.value)} maxLength={200} placeholder="Rua, número, bairro" autoComplete="off" className={`${campo} mt-1`} />
-      </label>
-      <label className="block text-sm text-slate-300">Ponto de referência (opcional)
-        <input value={ref} onChange={(e) => setRef(e.target.value)} maxLength={120} autoComplete="off" className={`${campo} mt-1`} />
-      </label>
+      {alunos.map((al, i) => (
+        <fieldset key={al.chave} className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+          <legend className="px-2 text-sm font-bold text-amber-300">{alunos.length > 1 ? `Aluno ${i + 1}` : 'Aluno(a)'}</legend>
+          <label className="block text-sm text-slate-300">Nome do aluno(a)
+            <input required value={al.nome} onChange={(e) => mudar(al.chave, 'nome', e.target.value)} maxLength={80} autoComplete="off" className={`${campo} mt-1`} />
+          </label>
+          <label className="block text-sm text-slate-300">Escola
+            <input required value={al.escola} onChange={(e) => mudar(al.chave, 'escola', e.target.value)} maxLength={120} autoComplete="off" className={`${campo} mt-1`} />
+          </label>
+          <div className="space-y-1" role="group" aria-label={`Turno${alunos.length > 1 ? ` do aluno ${i + 1}` : ''}`}>
+            <span className="text-sm text-slate-300">Turno do aluno na van</span>
+            <div className="grid grid-cols-3 gap-3">
+              {([['MANHA', 'Manhã'], ['TARDE', 'Tarde'], ['NOITE', 'Noite']] as const).map(([v, n]) => (
+                <button key={v} type="button" aria-pressed={al.turno === v} onClick={() => mudar(al.chave, 'turno', v)}
+                  className={`py-4 rounded-xl text-base font-bold border min-h-[56px] cursor-pointer ${al.turno === v ? 'bg-amber-400/20 border-amber-400 text-amber-200' : 'bg-slate-900 border-slate-700 text-slate-300'}`}>{n}</button>
+              ))}
+            </div>
+          </div>
+          <label className="block text-sm text-slate-300">Endereço de embarque
+            <input required value={al.endereco} onChange={(e) => mudar(al.chave, 'endereco', e.target.value)} maxLength={200} placeholder="Rua, número, bairro" autoComplete="off" className={`${campo} mt-1`} />
+          </label>
+          <label className="block text-sm text-slate-300">Ponto de referência (opcional)
+            <input value={al.ref} onChange={(e) => mudar(al.chave, 'ref', e.target.value)} maxLength={120} autoComplete="off" className={`${campo} mt-1`} />
+          </label>
+          {i > 0 && (
+            <button type="button" onClick={() => remover(al.chave)} className="w-full py-3 rounded-xl bg-slate-800 text-slate-300 text-sm font-bold min-h-[48px] cursor-pointer">Remover o aluno {i + 1}</button>
+          )}
+        </fieldset>
+      ))}
+      {alunos.length < MAX_ALUNOS && (
+        <button type="button" onClick={adicionar} className="w-full py-4 rounded-xl bg-amber-400/10 border border-amber-400/50 text-amber-200 text-base font-bold min-h-[56px] cursor-pointer">+ Adicionar outro aluno (irmão)</button>
+      )}
       <label className="block text-sm text-slate-300">Seu nome (responsável)
         <input required value={nomeResp} onChange={(e) => setNomeResp(e.target.value)} maxLength={80} autoComplete="name" className={`${campo} mt-1`} />
       </label>
@@ -123,7 +144,7 @@ export const PreCadastroFamilia: React.FC<{ token: string }> = ({ token }) => {
       </label>
 
       {erro && <p role="alert" className="text-sm text-rose-300">{erro}</p>}
-      <button type="submit" disabled={enviando} className="w-full py-4 rounded-xl bg-amber-400 text-slate-950 text-lg font-black min-h-[56px] cursor-pointer disabled:opacity-50">{enviando ? 'Enviando…' : 'Enviar cadastro'}</button>
+      <button type="submit" disabled={enviando} className="w-full py-4 rounded-xl bg-amber-400 text-slate-950 text-lg font-black min-h-[56px] cursor-pointer disabled:opacity-50">{enviando ? 'Enviando…' : alunos.length > 1 ? `Enviar cadastro dos ${alunos.length} alunos` : 'Enviar cadastro'}</button>
       <p className="text-[11px] text-slate-500 text-center">Seus dados ficam só com o motorista e o aplicativo. Nada é mostrado a outras famílias.</p>
     </form>
   );

@@ -3813,6 +3813,7 @@ async function startServer() {
   // ---- Pré-cadastro: a família preenche um formulário sem login e dá o aceite; o motorista confere e aprova ----
   const PRE_VALIDADE_MS = 7 * 24 * 60 * 60 * 1000;
   const PRE_MAX_ENVIOS = 30;      // por link
+  const PRE_MAX_ALUNOS_POR_ENVIO = 6; // irmãos no mesmo pedido
   const PRE_MAX_PENDENTES = 60;   // aguardando aprovação, por motorista
   const tokenValido = (t: unknown) => typeof t === 'string' && /^[A-Za-z0-9_-]{20,40}$/.test(t);
   const motoristaDoLink = (token: unknown) => {
@@ -3925,57 +3926,71 @@ async function startServer() {
     // isca anti-robô: campo invisível que pessoas não preenchem
     if (String(b.website ?? '').trim()) return res.json({ sucesso: true });
     const texto = (v: unknown, max: number) => String(v ?? '').trim().replace(/\s+/g, ' ').slice(0, max);
-    const nomeAluno = texto(b.nomeAluno, 80), escola = texto(b.escola, 120), endereco = texto(b.endereco, 200), nomeResp = texto(b.nomeResponsavel, 80);
-    const turno = lerTurno(b.turno), tel = telefoneBR(b.telefoneResponsavel);
-    if (nomeAluno.length < 2) return res.status(400).json({ error: 'Informe o nome do aluno.' });
-    if (escola.length < 2) return res.status(400).json({ error: 'Informe a escola.' });
-    if (!turno) return res.status(400).json({ error: 'Escolha o turno: manhã, tarde ou noite.' });
+    // Um envio pode trazer vários alunos (irmãos): lista em `alunos`. Formato antigo (um aluno nos campos soltos) continua valendo.
+    const lista: any[] = Array.isArray(b.alunos) ? b.alunos : [b];
+    if (lista.length < 1 || lista.length > PRE_MAX_ALUNOS_POR_ENVIO) return res.status(400).json({ error: `Envie de 1 a ${PRE_MAX_ALUNOS_POR_ENVIO} alunos por vez.` });
+    const nomeResp = texto(b.nomeResponsavel, 80), tel = telefoneBR(b.telefoneResponsavel);
+    // Valida tudo antes de criar qualquer um: ou entram todos, ou nenhum.
+    const alunos: { nomeAluno: string; escola: string; turno: Turno; endereco: string; ref: string }[] = [];
+    for (let i = 0; i < lista.length; i++) {
+      const x = lista[i] || {};
+      const quem = lista.length > 1 ? `Aluno ${i + 1}: ` : '';
+      const nomeAluno = texto(x.nomeAluno, 80), escola = texto(x.escola, 120), endereco = texto(x.endereco, 200), turno = lerTurno(x.turno);
+      if (nomeAluno.length < 2) return res.status(400).json({ error: `${quem}Informe o nome do aluno.` });
+      if (escola.length < 2) return res.status(400).json({ error: `${quem}Informe a escola.` });
+      if (!turno) return res.status(400).json({ error: `${quem}Escolha o turno: manhã, tarde ou noite.` });
+      if (endereco.length < 3) return res.status(400).json({ error: `${quem}Informe o endereço de embarque.` });
+      alunos.push({ nomeAluno, escola, turno, endereco, ref: texto(x.pontoReferencia, 120) });
+    }
     if (nomeResp.length < 2) return res.status(400).json({ error: 'Informe o seu nome.' });
     if (!tel) return res.status(400).json({ error: 'Informe o seu WhatsApp com DDD.' });
-    if (endereco.length < 3) return res.status(400).json({ error: 'Informe o endereço de embarque.' });
     if (b.aceiteLgpd !== true) return res.status(400).json({ error: 'Para continuar, aceite o uso dos dados para o transporte escolar.' });
     if (rec.regrasServico && b.aceiteRegras !== true) return res.status(400).json({ error: 'Para continuar, aceite as regras do transporte.' });
 
     const driverId = rec.id;
     const paradas = serverState.paradas as any[];
-    const duplicado = paradas.some((p) => donoDaParada(p) === driverId && p.vinculo !== 'RECUSADO'
-      && String(p.nome_aluno).trim().toLowerCase() === nomeAluno.toLowerCase() && chaveEscola(p.escola_destino) === chaveEscola(escola) && p.turno === turno);
-    if (duplicado) return res.json({ sucesso: true }); // não revela quem já está cadastrado
-    if (paradas.filter((p) => donoDaParada(p) === driverId && p.vinculo === 'PENDENTE').length >= PRE_MAX_PENDENTES) {
+    // Não revela quem já está cadastrado: repetidos (no pedido ou já na van) são ignorados em silêncio.
+    const chaveAluno = (nome: string, esc: string, t: string) => `${nome.toLowerCase()}|${chaveEscola(esc)}|${t}`;
+    const jaNaVan = new Set(paradas.filter((p) => donoDaParada(p) === driverId && p.vinculo !== 'RECUSADO').map((p) => chaveAluno(String(p.nome_aluno).trim(), p.escola_destino, p.turno)));
+    const novos = alunos.filter((a) => { const k = chaveAluno(a.nomeAluno, a.escola, a.turno); if (jaNaVan.has(k)) return false; jaNaVan.add(k); return true; });
+    if (novos.length === 0) return res.json({ sucesso: true });
+    if (paradas.filter((p) => donoDaParada(p) === driverId && p.vinculo === 'PENDENTE').length + novos.length > PRE_MAX_PENDENTES) {
       return res.status(429).json({ error: 'O motorista tem muitos pedidos para conferir. Tente de novo mais tarde.' });
     }
     const agora = new Date().toISOString();
-    const novoId = paradas.reduce((m: number, p: any) => Math.max(m, p.id % 1000, (p.id_aluno ?? 0) - 210), 0) + 1;
-    const nova: any = {
-      id: 1000 + novoId,
-      id_viagem: 1000 + driverId,
-      id_motorista: driverId,
-      id_aluno: 210 + novoId,
-      ordem_sequencia: 0,
-      vinculo: 'PENDENTE',
-      origem: 'PRE_CADASTRO',
-      status_embarque: 'PENDENTE',
-      turno,
-      latitude: null,
-      longitude: null,
-      nome_aluno: nomeAluno,
-      nome_sanitizado: `${nomeAluno.split(' ')[0]} ${nomeAluno.split(' ')[1]?.[0] || ''}.`,
-      endereco_real: endereco,
-      endereco_mascarado: mascararEnderecoSeguro(endereco),
-      ponto_referencia: texto(b.pontoReferencia, 120),
-      responsavel_nome: nomeResp,
-      responsavel_telefone: tel,
-      escola_destino: escola,
-      codigo_vinculo: `VAN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
-      vinculado_usuario_id: null,
-      aceite_lgpd_em: agora,
-      ...(rec.regrasServico ? { aceite_regras_em: agora, aceite_regras_texto: rec.regrasServico } : {})
-    };
-    herdarHorarioDaEscola(nova);
-    paradas.push(nova);
-    rec.linkPreCadastro!.envios++;
-    auditLog('PRE_CADASTRO_RECEBIDO', rec.email, `Pré-cadastro ${nova.id_aluno} recebido pelo link do motorista ${driverId}`);
-    broadcast('NOVA_PARADA_CADASTRADA', { paradaId: nova.id }, driverId);
+    for (const al of novos) {
+      const novoId = paradas.reduce((m: number, p: any) => Math.max(m, p.id % 1000, (p.id_aluno ?? 0) - 210), 0) + 1;
+      const nova: any = {
+        id: 1000 + novoId,
+        id_viagem: 1000 + driverId,
+        id_motorista: driverId,
+        id_aluno: 210 + novoId,
+        ordem_sequencia: 0,
+        vinculo: 'PENDENTE',
+        origem: 'PRE_CADASTRO',
+        status_embarque: 'PENDENTE',
+        turno: al.turno,
+        latitude: null,
+        longitude: null,
+        nome_aluno: al.nomeAluno,
+        nome_sanitizado: `${al.nomeAluno.split(' ')[0]} ${al.nomeAluno.split(' ')[1]?.[0] || ''}.`,
+        endereco_real: al.endereco,
+        endereco_mascarado: mascararEnderecoSeguro(al.endereco),
+        ponto_referencia: al.ref,
+        responsavel_nome: nomeResp,
+        responsavel_telefone: tel,
+        escola_destino: al.escola,
+        codigo_vinculo: `VAN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
+        vinculado_usuario_id: null,
+        aceite_lgpd_em: agora,
+        ...(rec.regrasServico ? { aceite_regras_em: agora, aceite_regras_texto: rec.regrasServico } : {})
+      };
+      herdarHorarioDaEscola(nova);
+      paradas.push(nova);
+      auditLog('PRE_CADASTRO_RECEBIDO', rec.email, `Pré-cadastro ${nova.id_aluno} recebido pelo link do motorista ${driverId}`);
+      broadcast('NOVA_PARADA_CADASTRADA', { paradaId: nova.id }, driverId);
+    }
+    rec.linkPreCadastro!.envios++; // o limite do link conta envios (famílias), não alunos
     res.json({ sucesso: true });
   });
 
