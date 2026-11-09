@@ -4,7 +4,7 @@
  */
 
 export type PapelGuia = 'motorista' | 'responsavel';
-export type AbaMotorista = 'diario' | 'mapa' | 'mensagens' | 'mais' | 'cadastro' | 'abastecimento' | 'ajustes';
+export type AbaMotorista = 'diario' | 'mapa' | 'mensagens' | 'mais' | 'cadastro' | 'abastecimento' | 'ajustes' | 'historico';
 
 export interface PassoGuia {
   id: string;
