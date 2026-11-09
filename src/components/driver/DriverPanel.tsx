@@ -736,10 +736,14 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             const isBusy = processandoAcaoId === item.aluno_id;
             const aberto = abertoId === item.parada_id;
             const ehProxima = proximaPendente?.parada_id === item.parada_id;
+            // Cor do cartão pelo sentido da rota: Ida em azul vivo, Volta em âmbar (combina com o selo do sentido e com as rotas de Ida e Volta).
+            const tom = sentidoRota === 'VOLTA'
+              ? { fundo: 'bg-amber-950/70', borda: 'border-amber-500/50', bordaHover: 'hover:border-amber-400/70', destaque: 'border-amber-400', faixa: 'border-l-amber-400', numero: 'bg-amber-400 text-amber-950' }
+              : { fundo: 'bg-blue-950/80', borda: 'border-blue-500/50', bordaHover: 'hover:border-blue-400/70', destaque: 'border-cyan-400', faixa: 'border-l-sky-400', numero: 'bg-sky-400 text-sky-950' };
             const cartaoCompleto = (
               <div
-                className={`bg-slate-900 rounded-2xl border p-4 transition-all shadow-md ${
-                  isMariaClara ? 'border-amber-500/50 ring-1 ring-amber-500/30' : 'border-slate-800 hover:border-slate-700'
+                className={`${tom.fundo} rounded-2xl border p-4 transition-all shadow-md ${
+                  isMariaClara ? 'border-amber-500/50 ring-1 ring-amber-500/30' : `${tom.borda} ${tom.bordaHover}`
                 }`}
               >
                 {/* Linha 1: Foto, Nome Sanitizado e Ponto de Referência Genérico */}
@@ -961,7 +965,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             return (
               <div key={item.parada_id} className="space-y-2">
                 {ehProxima ? (
-                  <div className="rounded-2xl border-2 border-cyan-400/60 bg-slate-900 p-4" aria-label={`Próxima parada: ${item.nome_aluno_sanitizado}`}>
+                  <div className={`rounded-2xl border-2 ${tom.destaque}/70 ${tom.fundo} p-4`} aria-label={`Próxima parada: ${item.nome_aluno_sanitizado}`}>
                     <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
                       <span>Próxima parada · #{ordemDoSentido(item)} · {item.hora_prevista}</span>
                       {sentidoRota === 'IDA' && aguardarAte(item.hora_ida) && <span className="text-amber-300 font-bold">Aguardar até {item.hora_ida}</span>}
@@ -991,10 +995,10 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-2 rounded-xl bg-slate-900 border border-slate-800 pr-2">
+                  <div className={`flex items-center gap-2 rounded-xl ${tom.fundo} border ${tom.borda} border-l-4 ${tom.faixa} pr-2`}>
                     <button type="button" onClick={() => setAbertoId(aberto ? null : item.parada_id)} aria-expanded={aberto}
                       className="flex-1 min-w-0 flex items-center gap-3 px-3 min-h-[52px] text-left cursor-pointer">
-                      <span className="w-6 h-6 rounded-full bg-slate-800 text-[11px] font-bold text-slate-300 flex items-center justify-center shrink-0">{ordemDoSentido(item)}</span>
+                      <span className={`w-6 h-6 rounded-full ${tom.numero} text-[11px] font-black flex items-center justify-center shrink-0`}>{ordemDoSentido(item)}</span>
                       <span className="flex-1 min-w-0 truncate text-sm font-bold text-slate-100 flex items-center gap-1.5">{item.status_embarque === 'EMBARCOU' && isRotaAtiva && <UserCheck className="w-4 h-4 text-emerald-400 shrink-0" aria-label="A bordo" />}<span className="truncate">{item.nome_aluno_sanitizado}</span></span>
                       <span className="text-xs font-mono text-slate-400 shrink-0">{item.hora_prevista}</span>
                     </button>
