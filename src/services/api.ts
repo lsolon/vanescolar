@@ -1854,6 +1854,12 @@ export const TransportRepository = {
     if (!res.ok) throw new Error(d.error || 'Não foi possível apagar a viagem.');
     return { viagens: d.viagens || [], semViagem: d.semViagem || 0 };
   },
+  /** Escolhe qual viagem aparece em Hoje e será iniciada ('SEM' = alunos sem viagem; null = todas). Não vale com a rota em andamento. */
+  async definirViagemEmFoco(viagemId: string | null): Promise<void> {
+    const res = await fetch(`${getBaseUrl()}/api/rotas/viagem`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ viagemId }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível escolher a viagem.');
+  },
   async definirViagemDoAluno(paradaId: number | string, viagemId: string | null): Promise<{ outraEscola: boolean }> {
     const res = await fetch(`${getBaseUrl()}/api/paradas/${paradaId}/viagem`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ viagemId }) });
     const d = await res.json().catch(() => ({}));

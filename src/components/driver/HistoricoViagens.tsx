@@ -4,7 +4,7 @@ import { TransportRepository } from '../../services/api';
 type Aluno = { nome: string; resultado: 'ENTREGUE' | 'AUSENTE' | 'NAO_ATENDIDO'; embarcou_em: string | null; entregue_em: string | null };
 type Trecho = {
   id: string; data: string; sentido: 'IDA' | 'VOLTA'; iniciado_em: string; encerrado_em: string; duracao_min: number;
-  km: number | null; escola: string | null; alunos: Aluno[];
+  km: number | null; escola: string | null; viagem?: string | null; alunos: Aluno[];
   totais: { previstos: number; entregues: number; ausentes: number; nao_atendidos: number };
 };
 
@@ -23,10 +23,10 @@ const campo = (v: string | number | null) => {
 };
 
 export function planilhaDoHistorico(trechos: Trecho[]): string {
-  const cab = ['Data', 'Sentido', 'Início', 'Fim', 'Duração (min)', 'Km', 'Escola', 'Aluno', 'Resultado', 'Embarque', 'Entrega'];
+  const cab = ['Data', 'Sentido', 'Início', 'Fim', 'Duração (min)', 'Km', 'Escola', 'Viagem', 'Aluno', 'Resultado', 'Embarque', 'Entrega'];
   const linhas: string[] = [cab.map(campo).join(';')];
   for (const t of trechos) {
-    const base = [dataBR(t.data), t.sentido === 'IDA' ? 'Ida' : 'Volta', hora(t.iniciado_em), hora(t.encerrado_em), t.duracao_min, t.km === null ? '' : t.km.toString().replace('.', ','), t.escola ?? ''];
+    const base = [dataBR(t.data), t.sentido === 'IDA' ? 'Ida' : 'Volta', hora(t.iniciado_em), hora(t.encerrado_em), t.duracao_min, t.km === null ? '' : t.km.toString().replace('.', ','), t.escola ?? '', t.viagem ?? ''];
     if (!t.alunos.length) linhas.push([...base, '', '', '', ''].map(campo).join(';'));
     for (const a of t.alunos) linhas.push([...base, a.nome, RESULTADO[a.resultado], a.embarcou_em ?? '', a.entregue_em ?? ''].map(campo).join(';'));
   }
@@ -112,7 +112,7 @@ export const HistoricoViagens: React.FC = () => {
                       <span className="mt-1 block text-[11px] text-slate-300">
                         {t.totais.entregues} de {t.totais.previstos} entregues{t.totais.ausentes ? ` · ${t.totais.ausentes} ausente(s)` : ''}{t.totais.nao_atendidos ? ` · ${t.totais.nao_atendidos} não atendido(s)` : ''} · {dur(t.duracao_min)} · {km(t.km)}
                       </span>
-                      {t.escola && <span className="block text-[11px] text-slate-400 truncate">{t.escola}</span>}
+                      {(t.viagem || t.escola) && <span className="block text-[11px] text-slate-400 truncate">{[t.viagem, t.escola].filter(Boolean).join(' · ')}</span>}
                     </button>
                     {abre && (
                       <ul className="px-3 pb-3 space-y-1">

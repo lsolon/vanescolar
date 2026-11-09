@@ -15,6 +15,8 @@ export type ResultadoAluno = 'ENTREGUE' | 'AUSENTE' | 'NAO_ATENDIDO';
 
 export interface TrechoAtual {
   sentido: Sentido;
+  /** nome da viagem ("Manhã 1") em que o trecho foi feito; vazio se o motorista não usa viagens */
+  viagem?: string;
   iniciado_em: string;
   km: number;
   ultima_pos?: { latitude: number; longitude: number };
@@ -38,6 +40,7 @@ export interface TrechoHistorico {
   duracao_min: number;
   km: number | null;
   escola: string | null;
+  viagem?: string | null;
   alunos: AlunoDoTrecho[];
   totais: { previstos: number; entregues: number; ausentes: number; nao_atendidos: number };
 }
@@ -91,6 +94,7 @@ export function fecharTrecho(
   agora: Date,
   temGps: boolean
 ): TrechoHistorico {
+  const viagem = t.viagem ? String(t.viagem).slice(0, 40) : null;
   const ini = new Date(t.iniciado_em);
   const alunos: AlunoDoTrecho[] = paradas.map((p) => {
     const ev = t.eventos[String(p.id)] ?? {};
@@ -107,6 +111,7 @@ export function fecharTrecho(
     duracao_min: Math.max(0, Math.round((agora.getTime() - ini.getTime()) / 60000)),
     km: temGps && t.km > 0 ? Math.round(t.km * 10) / 10 : null,
     escola: escolas.length === 1 ? escolas[0].slice(0, 80) : escolas.length > 1 ? 'Várias escolas' : null,
+    viagem,
     alunos,
     totais: {
       previstos: alunos.length,
@@ -127,7 +132,7 @@ export function acrescentar(lista: TrechoHistorico[], novo: TrechoHistorico, ago
 export function paraRelatorio(h: TrechoHistorico): TrechoHistorico {
   return {
     id: h.id, data: h.data, sentido: h.sentido, iniciado_em: h.iniciado_em, encerrado_em: h.encerrado_em,
-    duracao_min: h.duracao_min, km: h.km, escola: h.escola, totais: { ...h.totais },
+    duracao_min: h.duracao_min, km: h.km, escola: h.escola, viagem: h.viagem ?? null, totais: { ...h.totais },
     alunos: h.alunos.map((a) => ({ nome: a.nome, resultado: a.resultado, embarcou_em: a.embarcou_em, entregue_em: a.entregue_em })),
   };
 }

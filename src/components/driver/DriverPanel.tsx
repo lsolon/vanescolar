@@ -142,6 +142,12 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const faixaTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sentidoRota, setSentidoRota] = useState<'IDA' | 'VOLTA'>('IDA');
   // Com a rota em andamento vale o sentido do servidor (sobrevive a recarregar a página); antes de iniciar, o escolhido no seletor.
+  // Viagem em foco (lista nomeada). null = nenhuma escolhida; '' = alunos sem viagem.
+  const focoViagem: string | null = (viagemZeroCache?.viagem as any)?.viagem_foco ?? null;
+  const iniciarOuEncerrar = () => {
+    if (!isRotaAtiva && viagens.length > 0 && focoViagem === null) { setPedirViagem(true); return; }
+    onToggleRota(sentidoRota);
+  };
   const sentidoServidor: 'IDA' | 'VOLTA' | null = isRotaAtiva ? (String((viagemZeroCache?.viagem as any)?.sentido) === 'VOLTA' ? 'VOLTA' : 'IDA') : null;
   useEffect(() => { if (sentidoServidor) setSentidoRota(sentidoServidor); }, [sentidoServidor]);
   // Antes de iniciar, o sentido é sugerido pelo horário da escola (entrada = ida, saída = volta). Escolher à mão desliga o automático até tocar em "Auto".
@@ -176,6 +182,8 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const [erroLocal, setErroLocal] = useState<string | null>(null);
   const [copiado, setCopiado] = useState<boolean>(false);
   const [viagens, setViagens] = useState<Viagem[]>([]);
+  const [semViagem, setSemViagem] = useState(0);
+  const [pedirViagem, setPedirViagem] = useState(false);
   const [avisoViagem, setAvisoViagem] = useState<string | null>(null);
 
   // Carrega dados sanitizados via Repository Pattern (Zero-Cache)
@@ -186,7 +194,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         apenasProximaParada
       });
       setViagemZeroCache(dados);
-      TransportRepository.obterViagens().then((r) => setViagens(r.viagens)).catch(() => {});
+      TransportRepository.obterViagens().then((r) => { setViagens(r.viagens); setSemViagem(r.semViagem); }).catch(() => {});
       if (dados?.motorista) {
         setAceitaDinamicos(dados.motorista.aceita_enderecos_dinamicos ?? false);
       }
@@ -548,6 +556,26 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           )}
         </div>
 
+        {viagens.length > 0 && (
+          <div role="group" aria-label="Viagem de hoje" className="space-y-1">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[11px] font-bold text-slate-400 mr-1">Viagem</span>
+              {[...viagens.map((v) => ({ id: v.id, nome: v.nome, n: v.alunos })), ...(semViagem > 0 ? [{ id: 'SEM', nome: 'Sem viagem', n: semViagem }] : [])].map((o) => {
+                const ativo = o.id === 'SEM' ? focoViagem === '' : focoViagem === o.id;
+                return (
+                  <button key={o.id} type="button" aria-pressed={ativo} disabled={isRotaAtiva && !ativo}
+                    onClick={async () => { try { setPedirViagem(false); await TransportRepository.definirViagemEmFoco(o.id); await carregarDadosZeroCache(); } catch (e) { console.error(e); } }}
+                    className={`px-3 py-2 min-h-[40px] rounded-xl border text-[11px] font-bold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${ativo ? 'bg-amber-400/20 border-amber-400 text-amber-200' : 'bg-slate-900 border-slate-700 text-slate-300'}`}>
+                    {o.nome} <span className="font-normal text-slate-400">({o.n})</span>
+                  </button>
+                );
+              })}
+            </div>
+            {pedirViagem && <p role="alert" className="text-[11px] text-amber-300">Escolha a viagem antes de iniciar a rota.</p>}
+            {isRotaAtiva && <p className="text-[10px] text-slate-500">Para trocar de viagem, encerre a rota em andamento.</p>}
+          </div>
+        )}
+
         <div className="flex items-center gap-2">
           {!isRotaAtiva && (
             <div role="group" aria-label="Sentido da viagem" className="flex rounded-xl overflow-hidden border border-slate-700 text-[11px] font-bold shrink-0">
@@ -574,7 +602,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             </div>
           )}
           <button
-            onClick={() => onToggleRota(sentidoRota)}
+            onClick={iniciarOuEncerrar}
             className={`flex-1 flex items-center justify-center gap-2 px-4 min-h-[48px] rounded-xl font-bold text-sm uppercase tracking-wider transition-all shadow-lg active:scale-95 cursor-pointer ${
               isRotaAtiva
                 ? 'bg-rose-600 hover:bg-rose-500 text-white ring-2 ring-rose-400/50 shadow-rose-950/50'
@@ -602,7 +630,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             </span>
             <button
               type="button"
-              onClick={() => onToggleRota(sentidoRota)}
+              onClick={iniciarOuEncerrar}
               className="shrink-0 px-3 py-2 min-h-[40px] rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold uppercase tracking-wider cursor-pointer"
             >
               Encerrar rota

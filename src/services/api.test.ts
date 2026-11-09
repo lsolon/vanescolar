@@ -2569,3 +2569,118 @@ test('Viagens: turno noite, criar/alterar/apagar viagem, aluno fixo em uma viage
   assert.ok(apagou.data.semViagem >= 2, 'alunos da viagem apagada ficam sem viagem');
   assert.equal((await jsonReq('PUT', `/api/paradas/${a1.paradaId}/viagem`, mot, { viagemId: null })).status, 200);
 });
+
+test('Iniciar rota por viagem: só a viagem em foco aparece e roda, ordem e horários próprios, histórico com o nome da viagem', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'RotaViagemA');
+  const outro = await novoMotorista(adm, 'RotaViagemB');
+  const aluno = async (nome: string, viagemId?: string) => (await jsonReq('POST', '/api/motorista/alunos', mot, { nomeAluno: nome, escola: 'Escola RV', turno: 'MANHA', nomeResponsavel: 'Resp', telefoneResponsavel: '21955550001', endereco: 'Rua RV, 1', latitude: -22.90, longitude: -43.20, autorizacaoResponsavel: true, ...(viagemId ? { viagemId } : {}) })).data;
+  const estado = async () => (await jsonReq('GET', '/api/estado', mot)).data;
+  const nomes = (e: any) => e.paradas.map((p: any) => p.nome_aluno);
+
+  // sem viagens: tudo como antes (todos aparecem e a rota inicia sem escolher)
+  await aluno('Antiga Um');
+  assert.equal((await jsonReq('PUT', '/api/motorista/escolas/horarios', mot, { nome: 'Escola RV', turno: 'MANHA', entrada: '07:30', saida: '12:00' })).status, 200);
+  assert.equal((await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' })).status, 200, 'sem viagens inicia direto');
+  await jsonReq('POST', '/api/rotas/encerrar', mot, {});
+
+  const m1 = (await jsonReq('POST', '/api/motorista/viagens', mot, { nome: 'Manhã 1', turno: 'MANHA', escola: 'Escola RV' })).data.viagem;
+  const m2 = (await jsonReq('POST', '/api/motorista/viagens', mot, { nome: 'Manhã 2', turno: 'MANHA', escola: 'Escola RV' })).data.viagem;
+  const a1 = await aluno('Ana Um', m1.id), a2 = await aluno('Bia Um', m1.id), a3 = await aluno('Caio Dois', m2.id), a4 = await aluno('Duda Dois', m2.id);
+
+  // com viagens e sem escolher: lista tudo, mas iniciar exige escolher a viagem
+  assert.equal((await estado()).paradas.length, 5);
+  const semEscolher = await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
+  assert.equal(semEscolher.status, 409); assert.match(semEscolher.data.error, /viagem/i);
+  assert.equal((await jsonReq('PUT', '/api/rotas/viagem', mot, { viagemId: 'V-nao-existe' })).status, 404);
+  assert.equal((await jsonReq('PUT', '/api/rotas/viagem', undefined, { viagemId: m1.id })).status, 401);
+
+  // foco na Manhã 1: só os dois alunos, numerados 1 e 2
+  assert.equal((await jsonReq('PUT', '/api/rotas/viagem', mot, { viagemId: m1.id })).status, 200);
+  let e = await estado();
+  assert.deepEqual(nomes(e), ['Ana Um', 'Bia Um']);
+  assert.deepEqual(e.paradas.map((p: any) => p.ordem_sequencia), [1, 2]);
+  assert.equal(e.viagem.viagem_foco, m1.id);
+  // horários só consideram a própria viagem: o último da fila chega a escola no mesmo horário nas duas viagens
+  const h1 = e.paradas.map((p: any) => p.hora_ida);
+  assert.equal(h1.length, 2); assert.ok(h1[0] < h1[1]);
+  assert.equal((await jsonReq('PUT', '/api/rotas/viagem', mot, { viagemId: m2.id })).status, 200);
+  const h2 = (await estado()).paradas.map((p: any) => p.hora_ida);
+  assert.deepEqual(h2, h1, 'as duas viagens têm a mesma janela de horários');
+  await jsonReq('PUT', '/api/rotas/viagem', mot, { viagemId: m1.id });
+
+  // reordenar só a Manhã 1: a Manhã 2 não muda
+  const ordem2antes = (await (async () => { await jsonReq('PUT', '/api/rotas/viagem', mot, { viagemId: m2.id }); const x = nomes(await estado()); await jsonReq('PUT', '/api/rotas/viagem', mot, { viagemId: m1.id }); return x; })());
+  assert.equal((await jsonReq('POST', '/api/rotas/ordem', mot, { ids: [a1.paradaId, a2.paradaId, a3.paradaId], sentido: 'IDA' })).status, 400, 'ids de outra viagem são recusados');
+  assert.equal((await jsonReq('POST', '/api/rotas/ordem', mot, { ids: [a2.paradaId, a1.paradaId], sentido: 'IDA' })).status, 200);
+  assert.deepEqual(nomes(await estado()), ['Bia Um', 'Ana Um']);
+  await jsonReq('PUT', '/api/rotas/viagem', mot, { viagemId: m2.id });
+  assert.deepEqual(nomes(await estado()), ordem2antes, 'a outra viagem manteve a ordem');
+  await jsonReq('PUT', '/api/rotas/viagem', mot, { viagemId: m1.id });
+
+  // iniciar a Manhã 1: marca embarque; trocar de viagem com a rota rodando é recusado
+  assert.equal((await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' })).status, 200);
+  assert.equal((await jsonReq('PUT', '/api/rotas/viagem', mot, { viagemId: m2.id })).status, 409);
+  assert.equal((await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA', viagemId: m2.id })).status, 409);
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.90, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  await jsonReq('POST', `/api/paradas/${a1.paradaId}/status`, mot, { status: 'EMBARCOU' });
+  await jsonReq('POST', `/api/paradas/${a1.paradaId}/status`, mot, { status: 'ENTREGUE' });
+  await jsonReq('POST', `/api/paradas/${a2.paradaId}/status`, mot, { status: 'EMBARCOU' });
+  await jsonReq('POST', `/api/paradas/${a2.paradaId}/status`, mot, { status: 'ENTREGUE' });
+  assert.equal((await jsonReq('POST', '/api/rotas/encerrar', mot, {})).status, 200);
+  assert.equal((await estado()).viagem.viagem_foco, m1.id, 'a viagem escolhida continua em foco depois de encerrar');
+
+  // iniciar a Manhã 2 pelo próprio pedido: só os alunos dela voltam a pendente; os da Manhã 1 seguem entregues
+  assert.equal((await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA', viagemId: m2.id })).status, 200);
+  e = await estado();
+  assert.deepEqual(nomes(e), ['Caio Dois', 'Duda Dois']);
+  assert.ok(e.paradas.every((p: any) => p.status_embarque === 'PENDENTE'));
+  await jsonReq('POST', '/api/rotas/encerrar', mot, {});
+  await jsonReq('PUT', '/api/rotas/viagem', mot, { viagemId: m1.id });
+  assert.ok((await estado()).paradas.every((p: any) => p.status_embarque === 'ENTREGUE'), 'Manhã 1 não foi resetada ao iniciar a Manhã 2');
+
+  // histórico guarda o nome da viagem e só os alunos dela
+  const hist = (await jsonReq('GET', '/api/motorista/historico?dias=7', mot)).data.trechos;
+  const t1 = hist.find((t: any) => t.viagem === 'Manhã 1'), t2 = hist.find((t: any) => t.viagem === 'Manhã 2');
+  assert.ok(t1 && t2, 'trechos com o nome da viagem');
+  assert.equal(t1.totais.previstos, 2); assert.equal(t1.totais.entregues, 2); assert.equal(t2.totais.previstos, 2);
+  assert.ok(!JSON.stringify(hist).includes('Caio') || t2.alunos.some((x: any) => x.nome.startsWith('Caio')));
+
+  // sem viagem: as duas de antes e as outras ficam separadas ('SEM' mostra só quem não tem viagem)
+  await jsonReq('PUT', '/api/rotas/viagem', mot, { viagemId: 'SEM' });
+  assert.deepEqual(nomes(await estado()), ['Antiga Um']);
+  await jsonReq('PUT', '/api/rotas/viagem', mot, { viagemId: null });
+  assert.equal((await estado()).paradas.length, 5);
+
+  // apagar a viagem em foco volta a mostrar tudo (nada fica escondido)
+  await jsonReq('PUT', '/api/rotas/viagem', mot, { viagemId: m1.id });
+  await jsonReq('DELETE', `/api/motorista/viagens/${m1.id}`, mot);
+  assert.equal((await estado()).paradas.length, 5);
+
+  // isolamento
+  assert.equal((await jsonReq('PUT', '/api/rotas/viagem', outro, { viagemId: m2.id })).status, 404);
+  assert.equal((await jsonReq('GET', '/api/estado', outro)).data.viagem.viagem_foco, null);
+});
+
+test('Iniciar rota por viagem: família de outra viagem não vê a rota em andamento nem a lista de viagens', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'RotaViagemFam');
+  const m1 = (await jsonReq('POST', '/api/motorista/viagens', mot, { nome: 'Manhã 1', turno: 'MANHA', escola: 'Escola FV' })).data.viagem;
+  const m2 = (await jsonReq('POST', '/api/motorista/viagens', mot, { nome: 'Manhã 2', turno: 'MANHA', escola: 'Escola FV' })).data.viagem;
+  const novo = async (nome: string, viagemId: string) => (await jsonReq('POST', '/api/motorista/alunos', mot, { nomeAluno: nome, escola: 'Escola FV', turno: 'MANHA', nomeResponsavel: 'Resp', telefoneResponsavel: '21955550002', endereco: 'Rua Secreta FV, 9', latitude: -22.90, longitude: -43.20, viagemId, autorizacaoResponsavel: true })).data;
+  const c1 = await novo('Lia Um', m1.id), c2 = await novo('Leo Dois', m2.id);
+  const f1 = await novoResponsavel(c1.codigoVinculo), f2 = await novoResponsavel(c2.codigoVinculo);
+
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA', viagemId: m1.id });
+  await jsonReq('POST', '/api/gps', mot, { latitude: -22.90, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  const dados1 = (await jsonReq('GET', '/api/estado', f1)).data, dados2 = (await jsonReq('GET', '/api/estado', f2)).data;
+  assert.equal(dados1.viagem.status, 'EM_ANDAMENTO', 'a família da viagem que roda vê a rota em andamento');
+  assert.equal(dados1.proximidade.rotaAtiva, true);
+  assert.equal(dados2.viagem.status, 'AGENDADA', 'a família da outra viagem não vê rota em andamento');
+  assert.equal(dados2.proximidade.rotaAtiva, false);
+  assert.equal(dados2.proximidade.estado, 'aguardando');
+  for (const d of [dados1, dados2]) {
+    const texto = JSON.stringify(d);
+    for (const proibido of [m1.id, m2.id, 'viagem_foco', 'viagem_nomeada_id', 'Manhã 1', 'Manhã 2', 'Secreta']) assert.ok(!texto.includes(proibido), `vazou para a família: ${proibido}`);
+  }
+});
