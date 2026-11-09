@@ -110,7 +110,7 @@ export interface Aluno {
   escola_destino?: string;
   turma?: string;
   data_nascimento?: string;
-  turno: 'MANHA' | 'TARDE' | 'INTEGRAL';
+  turno: 'MANHA' | 'TARDE' | 'NOITE' | 'INTEGRAL';
   endereco_embarque: EnderecoDetalhado; // Lat/Long, rua e número padrão
   endereco_desembarque: EnderecoDetalhado; // Lat/Long, rua e número padrão
   enderecos_dinamicos?: EnderecosDinamicosSemana; // Mapeamento por dia (só processado se o motorista permitir)
@@ -157,7 +157,9 @@ export interface ParadaViagem {
   escola_entrada?: string;
   escola_saida?: string;
   /** Turno do aluno e se os horários vieram da escola/turno definidos pelo motorista */
-  turno?: 'MANHA' | 'TARDE';
+  turno?: 'MANHA' | 'TARDE' | 'NOITE';
+  /** Viagem (lista nomeada do motorista) em que o aluno está fixo. Só o motorista recebe. */
+  viagem_nomeada_id?: string;
   horario_da_escola?: boolean;
   ausencia_trecho?: 'IDA' | 'VOLTA' | 'AMBOS';
   /** PENDENTE = aguardando o motorista confirmar; RECUSADO = motorista não aceitou/removeu */
@@ -195,7 +197,9 @@ export interface ParadaMotoristaSanitizada {
   hora_volta?: string | null;
   escola_entrada?: string;
   escola_saida?: string;
-  turno?: 'MANHA' | 'TARDE';
+  turno?: 'MANHA' | 'TARDE' | 'NOITE';
+  /** Viagem (lista nomeada do motorista) em que o aluno está fixo. Só o motorista recebe. */
+  viagem_nomeada_id?: string;
   horario_da_escola?: boolean;
   vinculo?: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO';
   /** Escola do aluno (para a solicitação pendente) */

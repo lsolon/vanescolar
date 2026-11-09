@@ -423,8 +423,12 @@ export interface PropostaCronograma {
   paradas: { id: number; nome: string; horario: string; fixo: boolean }[];
   avisos: string[];
 }
-export type Turno = 'MANHA' | 'TARDE';
-export interface LinhaImportacao { n: number; aluno: string; escola: string; turno: string; responsavel: string; telefone: string; status: 'ok' | 'erro' | 'duplicado'; erro?: string }
+export type Turno = 'MANHA' | 'TARDE' | 'NOITE';
+export const NOME_TURNO: Record<Turno, string> = { MANHA: 'Manhã', TARDE: 'Tarde', NOITE: 'Noite' };
+/** Viagem: lista nomeada do motorista ("Manhã 1"), com turno e escola principal. O aluno fica fixo em uma. */
+export interface Viagem { id: string; nome: string; turno: Turno; escola: string; alunos: number }
+export interface ResumoViagens { viagens: Viagem[]; semViagem: number }
+export interface LinhaImportacao { n: number; aluno: string; escola: string; turno: string; viagem?: string; responsavel: string; telefone: string; status: 'ok' | 'erro' | 'duplicado'; erro?: string }
 export interface QuandoSair {
   sentido: 'IDA' | 'VOLTA'; destino: string; distanciaKm: number; minutosAteLa: number; margemMin: number; agora: string;
   horarioAlvo: string | null; sairAs: string | null; faltamMin?: number; situacao: 'ha_tempo' | 'saia_agora' | 'atrasado' | 'sem_horario';
@@ -1253,6 +1257,7 @@ export const TransportRepository = {
             escola_entrada: p.escola_entrada,
             escola_saida: p.escola_saida,
             turno: p.turno,
+            viagem_nomeada_id: p.viagem_nomeada_id,
             horario_da_escola: p.horario_da_escola,
             vinculo: p.vinculo ?? 'CONFIRMADO',
             escola_nome: p.escola_destino,
@@ -1767,7 +1772,7 @@ export const TransportRepository = {
   /** Motorista cadastra o aluno de uma vez; devolve o código e a mensagem pronta de WhatsApp para a família. */
   async cadastrarAlunoPeloMotorista(params: {
     nomeAluno: string; escola: string; turno: Turno; nomeResponsavel: string; telefoneResponsavel: string;
-    endereco: string; pontoReferencia?: string; latitude?: number; longitude?: number; autorizacaoResponsavel: boolean;
+    endereco: string; pontoReferencia?: string; latitude?: number; longitude?: number; autorizacaoResponsavel: boolean; viagemId?: string;
   }): Promise<{ paradaId: number; codigoVinculo: string; whatsapp: string; mensagem: string; horarioHerdado: boolean; semHorarioDaEscola: boolean; semPontoNoMapa: boolean }> {
     const res = await fetch(`${getBaseUrl()}/api/motorista/alunos`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(params) });
     const d = await res.json().catch(() => ({}));
@@ -1822,6 +1827,38 @@ export const TransportRepository = {
   async removerHorariosEscola(nome: string, turno: Turno): Promise<void> {
     const res = await fetch(`${getBaseUrl()}/api/motorista/escolas/horarios`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ nome, turno, remover: true }) });
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Não foi possível remover os horários.');
+  },
+
+  // ---- Viagens (Manhã 1, Manhã 2...) ----
+  async obterViagens(): Promise<ResumoViagens> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/viagens`, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error('Não foi possível carregar as viagens.');
+    const d = await res.json();
+    return { viagens: d.viagens || [], semViagem: d.semViagem || 0 };
+  },
+  async criarViagem(p: { nome: string; turno: Turno; escola: string }): Promise<ResumoViagens> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/viagens`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(p) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível criar a viagem.');
+    return { viagens: d.viagens || [], semViagem: d.semViagem || 0 };
+  },
+  async atualizarViagem(id: string, p: Partial<{ nome: string; turno: Turno; escola: string }>): Promise<ResumoViagens> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/viagens/${encodeURIComponent(id)}`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify(p) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível salvar a viagem.');
+    return { viagens: d.viagens || [], semViagem: d.semViagem || 0 };
+  },
+  async apagarViagem(id: string): Promise<ResumoViagens> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/viagens/${encodeURIComponent(id)}`, { method: 'DELETE', headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível apagar a viagem.');
+    return { viagens: d.viagens || [], semViagem: d.semViagem || 0 };
+  },
+  async definirViagemDoAluno(paradaId: number | string, viagemId: string | null): Promise<{ outraEscola: boolean }> {
+    const res = await fetch(`${getBaseUrl()}/api/paradas/${paradaId}/viagem`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ viagemId }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível definir a viagem.');
+    return { outraEscola: !!d.outraEscola };
   },
 
   async definirTurnoDoAluno(paradaId: number | string, turno: Turno): Promise<{ herdouHorario: boolean }> {

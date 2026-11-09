@@ -1494,7 +1494,7 @@ test('Horários por escola e turno: o motorista define uma vez, o aluno herda e 
   // validações
   const url = '/api/motorista/escolas/horarios';
   const ok = { nome: 'Escola Turno', turno: 'manhã', entrada: '07:40', saida: '12:00' };
-  assert.equal((await jsonReq('PUT', url, mot, { ...ok, turno: 'noite' })).status, 400, 'turno inválido');
+  assert.equal((await jsonReq('PUT', url, mot, { ...ok, turno: 'madrugada' })).status, 400, 'turno inválido');
   assert.equal((await jsonReq('PUT', url, mot, { ...ok, entrada: '25:00' })).status, 400, 'hora inválida');
   assert.equal((await jsonReq('PUT', url, mot, { ...ok, saida: '07:00' })).status, 400, 'saída antes da entrada');
   assert.equal((await jsonReq('PUT', url, mot, { ...ok, nome: '' })).status, 400, 'sem nome');
@@ -1578,7 +1578,7 @@ test('Cadastro pelo motorista: valida, herda horário, gera código e mensagem; 
 
   // validações
   assert.equal((await jsonReq('POST', url, undefined, ok)).status, 401, 'sem login');
-  for (const [campo, valor] of [['nomeAluno', 'A'], ['escola', ''], ['turno', 'noite'], ['nomeResponsavel', ''], ['telefoneResponsavel', '123'], ['endereco', ''], ['autorizacaoResponsavel', false], ['autorizacaoResponsavel', 'true'], ['escolaEntrada', '07:00']] as const) {
+  for (const [campo, valor] of [['nomeAluno', 'A'], ['escola', ''], ['turno', 'madrugada'], ['nomeResponsavel', ''], ['telefoneResponsavel', '123'], ['endereco', ''], ['autorizacaoResponsavel', false], ['autorizacaoResponsavel', 'true'], ['escolaEntrada', '07:00']] as const) {
     assert.equal((await jsonReq('POST', url, mot, { ...ok, [campo]: valor })).status, 400, `${campo}=${JSON.stringify(valor)}`);
   }
   assert.equal((await jsonReq('POST', url, mot, { ...ok, latitude: 999, longitude: 999 })).status, 400, 'local inválido');
@@ -1662,7 +1662,7 @@ test('Pré-cadastro: link do motorista, família preenche sem login com aceite, 
 
   // validações do formulário público
   const url = `/api/pre-cadastro/${token}`;
-  for (const [campo, valor] of [['nomeAluno', ''], ['escola', ''], ['turno', 'noite'], ['nomeResponsavel', ''], ['telefoneResponsavel', '12'], ['endereco', ''], ['aceiteLgpd', false]] as const) {
+  for (const [campo, valor] of [['nomeAluno', ''], ['escola', ''], ['turno', 'madrugada'], ['nomeResponsavel', ''], ['telefoneResponsavel', '12'], ['endereco', ''], ['aceiteLgpd', false]] as const) {
     assert.equal((await jsonReq('POST', url, undefined, { ...dados, aceiteRegras: true, [campo]: valor })).status, 400, `${campo}=${JSON.stringify(valor)}`);
   }
   assert.equal((await jsonReq('POST', url, undefined, dados)).status, 400, 'com regras, o aceite das regras é obrigatório');
@@ -1722,7 +1722,7 @@ test('Importação em lote: confere a lista, aponta erros e repetidos, exige a a
     'Aluno\tEscola\tTurno\tResponsável\tWhatsApp\tEndereço\tReferência', // cabeçalho é ignorado
     'Ana Lima\tColégio Lote\tManhã\tRita Lima\t(21) 98888-1111\tRua A, 10, Centro\tPortão verde',
     'Beto Dias;Colégio Lote;tarde;Paulo Dias;21977772222;Rua B, 20',
-    'Caio Reis\tColégio Lote\tnoite\tLia Reis\t21966663333\tRua C, 30', // turno inválido
+    'Caio Reis\tColégio Lote\tmadrugada\tLia Reis\t21966663333\tRua C, 30', // turno inválido
     'Duda Melo\tColégio Lote\tManhã\tNina Melo\t123\tRua D, 40', // telefone inválido
     'Ana Lima\tcolégio lote\tmanha\tRita Lima\t(21) 98888-1111\tRua A, 10', // repetido na lista
     'Eva Cruz sem separador',
@@ -2490,4 +2490,82 @@ test('Histórico de viagens: um registro por trecho, só nome abreviado, isolado
   // apagar
   assert.equal((await jsonReq('DELETE', '/api/motorista/historico', mot)).data.apagados, 2);
   assert.equal((await jsonReq('GET', '/api/motorista/historico', mot)).data.trechos.length, 0);
+});
+
+test('Viagens: turno noite, criar/alterar/apagar viagem, aluno fixo em uma viagem, importação por nome e isolamento', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'ViagensA');
+  const outro = await novoMotorista(adm, 'ViagensB');
+  const aluno = (nome: string, extra: any = {}) => jsonReq('POST', '/api/motorista/alunos', mot, { nomeAluno: nome, escola: 'Escola VG', turno: 'MANHA', nomeResponsavel: 'Resp', telefoneResponsavel: '21955550000', endereco: 'Rua Teste, 1', autorizacaoResponsavel: true, ...extra });
+
+  // validações e limites
+  assert.equal((await jsonReq('POST', '/api/motorista/viagens', mot, { nome: 'M1', turno: 'MANHA' })).status, 400, 'sem escola');
+  assert.equal((await jsonReq('POST', '/api/motorista/viagens', mot, { nome: 'M1', turno: 'DIA', escola: 'Escola VG' })).status, 400, 'turno inválido');
+  assert.equal((await jsonReq('POST', '/api/motorista/viagens', undefined, { nome: 'M1', turno: 'MANHA', escola: 'X' })).status, 401);
+
+  const m1 = (await jsonReq('POST', '/api/motorista/viagens', mot, { nome: 'Manhã 1', turno: 'MANHA', escola: 'Escola VG' })).data.viagem;
+  const m2 = (await jsonReq('POST', '/api/motorista/viagens', mot, { nome: 'Manhã 2', turno: 'MANHA', escola: 'Escola VG' })).data.viagem;
+  assert.ok(m1.id && m2.id && m1.id !== m2.id);
+  assert.equal((await jsonReq('POST', '/api/motorista/viagens', mot, { nome: 'manhã 1', turno: 'MANHA', escola: 'Escola VG' })).status, 409, 'nome repetido');
+
+  // turno noite com horários da escola herdados
+  assert.equal((await jsonReq('PUT', '/api/motorista/escolas/horarios', mot, { nome: 'Escola VG', turno: 'NOITE', entrada: '19:00', saida: '22:30' })).status, 200);
+  const n1 = (await jsonReq('POST', '/api/motorista/viagens', mot, { nome: 'Noite 1', turno: 'NOITE', escola: 'Escola VG' })).data.viagem;
+
+  // aluno criado já na viagem: turno vem da viagem; fica sem viagem se não escolher
+  const a1 = (await aluno('Ana Viagem', { viagemId: m1.id })).data;
+  const a2 = (await aluno('Bia Viagem')).data;
+  const a3 = (await aluno('Caio Noite', { viagemId: n1.id, turno: 'MANHA' })).data;
+  assert.ok(a1.paradaId && a2.paradaId && a3.paradaId);
+  assert.equal((await aluno('Dani X', { viagemId: 'V-nao-existe' })).status, 404);
+  let est = (await jsonReq('GET', '/api/motorista/viagens', mot)).data;
+  assert.equal(est.viagens.find((v: any) => v.id === m1.id).alunos, 1);
+  assert.equal(est.semViagem, 1, 'Bia ainda sem viagem');
+
+  // atribuir, trocar e tirar
+  const set = (id: number, viagemId: any) => jsonReq('PUT', `/api/paradas/${id}/viagem`, mot, { viagemId });
+  const r = await set(a2.paradaId, m2.id);
+  assert.equal(r.status, 200); assert.equal(r.data.turno, 'MANHA');
+  assert.equal((await set(a2.paradaId, 'V-nao-existe')).status, 404);
+  // o aluno da viagem Noite herdou o turno e o horário da escola
+  const paradas: any[] = (await jsonReq('GET', '/api/estado', mot)).data?.paradas ?? [];
+  const caio = paradas.find((p) => p.id === a3.paradaId);
+  assert.ok(caio, 'aluno no estado do motorista');
+  assert.equal(caio.turno, 'NOITE'); assert.equal(caio.escola_entrada, '19:00'); assert.equal(caio.viagem_nomeada_id, n1.id);
+
+  // mudar o turno da viagem leva os alunos junto
+  assert.equal((await jsonReq('PUT', `/api/motorista/viagens/${m2.id}`, mot, { turno: 'TARDE' })).status, 200);
+  const caminho = (await jsonReq('GET', '/api/motorista/viagens', mot)).data;
+  assert.equal(caminho.viagens.find((v: any) => v.id === m2.id).turno, 'TARDE');
+  assert.equal((await jsonReq('PUT', `/api/motorista/viagens/${m2.id}`, mot, { nome: 'Manhã 1' })).status, 409, 'nome repetido ao renomear');
+
+  // importação: coluna de viagem pelo nome; viagem inexistente e turno diferente viram erro; turno noite aceito
+  const lista = [
+    'Eva Lista;Escola VG;manhã;Resp;21955551111;Rua A, 1;;Manhã 1',
+    'Fabi Lista;Escola VG;manhã;Resp;21955552222;Rua B, 2;;Viagem Fantasma',
+    'Gil Lista;Escola VG;noite;Resp;21955553333;Rua C, 3;;Manhã 1',
+    'Hugo Lista;Escola VG;noite;Resp;21955554444;Rua D, 4;;Noite 1',
+    'Ivo Lista;Escola VG;n;Resp;21955555555;Rua E, 5'
+  ].join('\n');
+  const conf = (await jsonReq('POST', '/api/motorista/alunos/importar', mot, { texto: lista, confirmar: false })).data;
+  assert.deepEqual(conf.linhas.map((l: any) => l.status), ['ok', 'erro', 'erro', 'ok', 'ok']);
+  assert.match(conf.linhas[1].erro, /não existe/); assert.match(conf.linhas[2].erro, /turno/);
+  const imp = await jsonReq('POST', '/api/motorista/alunos/importar', mot, { texto: lista, confirmar: true, autorizacaoResponsaveis: true });
+  assert.equal(imp.status, 200); assert.equal(imp.data.criados.length, 3);
+  est = (await jsonReq('GET', '/api/motorista/viagens', mot)).data;
+  assert.equal(est.viagens.find((v: any) => v.id === m1.id).alunos, 2, 'Ana + Eva');
+  assert.equal(est.viagens.find((v: any) => v.id === n1.id).alunos, 2, 'Caio + Hugo');
+
+  // isolamento: outro motorista não vê nem mexe
+  assert.equal((await jsonReq('GET', '/api/motorista/viagens', outro)).data.viagens.length, 0);
+  assert.equal((await jsonReq('PUT', `/api/motorista/viagens/${m1.id}`, outro, { nome: 'Invasor' })).status, 404);
+  assert.equal((await jsonReq('DELETE', `/api/motorista/viagens/${m1.id}`, outro)).status, 404);
+  assert.equal((await jsonReq('PUT', `/api/paradas/${a1.paradaId}/viagem`, outro, { viagemId: null })).status === 200, false);
+
+  // apagar viagem não apaga alunos
+  const apagou = await jsonReq('DELETE', `/api/motorista/viagens/${m1.id}`, mot);
+  assert.equal(apagou.status, 200);
+  assert.equal(apagou.data.viagens.some((v: any) => v.id === m1.id), false);
+  assert.ok(apagou.data.semViagem >= 2, 'alunos da viagem apagada ficam sem viagem');
+  assert.equal((await jsonReq('PUT', `/api/paradas/${a1.paradaId}/viagem`, mot, { viagemId: null })).status, 200);
 });

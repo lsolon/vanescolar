@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { TransportRepository } from '../../services/api';
-import type { Turno, EstadoPreCadastro, ResultadoImportacao } from '../../services/api';
+import type { Turno, EstadoPreCadastro, ResultadoImportacao, Viagem } from '../../services/api';
+import { NOME_TURNO } from '../../services/api';
 import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 
 const campo = 'w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-100 focus:outline-none focus:border-amber-400 min-h-[44px]';
@@ -48,6 +49,8 @@ export const NovoAlunoMotorista: React.FC<{ onCriado: () => void }> = ({ onCriad
   const [nome, setNome] = useState('');
   const [escola, setEscola] = useState('');
   const [turno, setTurno] = useState<Turno | ''>('');
+  const [viagemId, setViagemId] = useState('');
+  const [viagens, setViagens] = useState<Viagem[]>([]);
   const [nomeResp, setNomeResp] = useState('');
   const [tel, setTel] = useState('');
   const [endereco, setEndereco] = useState('');
@@ -60,20 +63,31 @@ export const NovoAlunoMotorista: React.FC<{ onCriado: () => void }> = ({ onCriad
   const [salvando, setSalvando] = useState(false);
   const [resultado, setResultado] = useState<{ whatsapp: string; mensagem: string; avisos: string[] } | null>(null);
 
-  useEffect(() => { if (aberto) TransportRepository.obterEscolas().then((l) => setEscolas(l.map((e) => e.nome))).catch(() => {}); }, [aberto]);
+  useEffect(() => {
+    if (!aberto) return;
+    TransportRepository.obterEscolas().then((l) => setEscolas(l.map((e) => e.nome))).catch(() => {});
+    TransportRepository.obterViagens().then((r) => setViagens(r.viagens)).catch(() => {});
+  }, [aberto]);
+  // Escolher a viagem define o turno (e a escola, se ainda estiver vazia).
+  const escolherViagem = (id: string) => {
+    setViagemId(id);
+    const v = viagens.find((x) => x.id === id);
+    if (v) { setTurno(v.turno); if (!escola.trim()) setEscola(v.escola); }
+  };
 
-  const limpar = () => { setNome(''); setEscola(''); setTurno(''); setNomeResp(''); setTel(''); setEndereco(''); setRef(''); setMarcarMapa(false); setLocal(null); setAutorizou(false); setErro(null); };
+  const limpar = () => { setNome(''); setEscola(''); setTurno(''); setViagemId(''); setNomeResp(''); setTel(''); setEndereco(''); setRef(''); setMarcarMapa(false); setLocal(null); setAutorizou(false); setErro(null); };
 
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
     setErro(null);
-    if (!turno) { setErro('Escolha o turno: manhã ou tarde.'); return; }
+    if (!turno) { setErro('Escolha o turno: manhã, tarde ou noite.'); return; }
     if (!autorizou) { setErro('Confirme que o responsável autorizou o uso dos dados.'); return; }
     setSalvando(true);
     try {
       const r = await TransportRepository.cadastrarAlunoPeloMotorista({
         nomeAluno: nome.trim(), escola: escola.trim(), turno, nomeResponsavel: nomeResp.trim(), telefoneResponsavel: tel.trim(),
         endereco: endereco.trim(), pontoReferencia: ref.trim() || undefined, autorizacaoResponsavel: true,
+        ...(viagemId ? { viagemId } : {}),
         ...(marcarMapa && local ? { latitude: local.latitude, longitude: local.longitude } : {})
       });
       const avisos: string[] = [];
@@ -116,13 +130,21 @@ export const NovoAlunoMotorista: React.FC<{ onCriado: () => void }> = ({ onCriad
       </label>
       <div className="space-y-1" role="group" aria-label="Turno">
         <span className="text-[11px] text-slate-300">Turno</span>
-        <div className="grid grid-cols-2 gap-2">
-          {([['MANHA', 'Manhã'], ['TARDE', 'Tarde']] as const).map(([v, n]) => (
-            <button key={v} type="button" aria-pressed={turno === v} onClick={() => setTurno(v)}
-              className={`py-3 rounded-xl text-sm font-bold border min-h-[48px] cursor-pointer ${turno === v ? 'bg-amber-400/20 border-amber-400 text-amber-200' : 'bg-slate-950 border-slate-700 text-slate-300'}`}>{n}</button>
+        <div className="grid grid-cols-3 gap-2">
+          {([['MANHA', 'Manhã'], ['TARDE', 'Tarde'], ['NOITE', 'Noite']] as const).map(([v, n]) => (
+            <button key={v} type="button" aria-pressed={turno === v} disabled={!!viagemId && turno !== v} onClick={() => setTurno(v)}
+              className={`py-3 rounded-xl text-sm font-bold border min-h-[48px] cursor-pointer disabled:opacity-40 ${turno === v ? 'bg-amber-400/20 border-amber-400 text-amber-200' : 'bg-slate-950 border-slate-700 text-slate-300'}`}>{n}</button>
           ))}
         </div>
       </div>
+      {viagens.length > 0 && (
+        <label className="text-[11px] text-slate-300 block">Viagem (opcional)
+          <select value={viagemId} onChange={(e) => escolherViagem(e.target.value)} className={`${campo} mt-1`}>
+            <option value="">Sem viagem (escolher depois)</option>
+            {viagens.map((v) => <option key={v.id} value={v.id}>{v.nome} · {NOME_TURNO[v.turno]} · {v.escola}</option>)}
+          </select>
+        </label>
+      )}
       <label className="text-[11px] text-slate-300 block">Nome do responsável
         <input required value={nomeResp} onChange={(e) => setNomeResp(e.target.value)} maxLength={80} autoComplete="off" className={`${campo} mt-1`} />
       </label>
@@ -217,7 +239,7 @@ export const ConvidarFamilias: React.FC<{ nomeMotorista?: string }> = ({ nomeMot
   );
 };
 
-const MODELO_LISTA = 'Aluno\tEscola\tTurno\tResponsável\tWhatsApp\tEndereço\tPonto de referência (opcional)\nMaria Souza\tColégio Exemplo\tManhã\tAna Souza\t(21) 98765-4321\tRua das Flores, 10, Centro\tPortão azul';
+const MODELO_LISTA = 'Aluno\tEscola\tTurno\tResponsável\tWhatsApp\tEndereço\tPonto de referência (opcional)\tViagem (opcional)\nMaria Souza\tColégio Exemplo\tManhã\tAna Souza\t(21) 98765-4321\tRua das Flores, 10, Centro\tPortão azul\tManhã 1';
 
 /** Importação em lote: o motorista cola a lista (copiada da planilha), confere e importa; depois envia o convite de cada família. */
 export const ImportarAlunos: React.FC<{ onCriados: () => void }> = ({ onCriados }) => {
@@ -272,7 +294,7 @@ export const ImportarAlunos: React.FC<{ onCriados: () => void }> = ({ onCriados 
         <h3 className="text-sm font-bold text-amber-200">Importar vários alunos</h3>
         <button type="button" onClick={fechar} className="text-[11px] text-slate-400 underline cursor-pointer min-h-[36px]">Fechar</button>
       </div>
-      <p className="text-[11px] text-slate-400">Cole uma linha por aluno, na ordem: <strong>aluno, escola, turno, responsável, WhatsApp, endereço</strong> e, se quiser, ponto de referência. Se copiar de uma planilha, as colunas já vêm separadas por tab; senão, separe com ponto e vírgula. Até 60 alunos por vez.</p>
+      <p className="text-[11px] text-slate-400">Cole uma linha por aluno, na ordem: <strong>aluno, escola, turno, responsável, WhatsApp, endereço</strong> e, se quiser, ponto de referência e nome da viagem (como criada em Rotas e ajustes). Turno aceita manhã, tarde ou noite. Se copiar de uma planilha, as colunas já vêm separadas por tab; senão, separe com ponto e vírgula. Até 60 alunos por vez.</p>
       <button type="button" onClick={copiarModelo} className="text-[11px] text-amber-300 underline cursor-pointer min-h-[36px]">{copiado ? 'Modelo copiado! Cole numa planilha.' : 'Copiar modelo para a planilha'}</button>
       <textarea value={texto} onChange={(e) => { setTexto(e.target.value); setPrev(null); }} rows={7} aria-label="Lista de alunos" maxLength={30000}
         placeholder="Maria Souza; Colégio Exemplo; Manhã; Ana Souza; (21) 98765-4321; Rua das Flores, 10, Centro" className={`${campo} font-mono text-[11px] min-h-[140px]`} />
@@ -284,7 +306,7 @@ export const ImportarAlunos: React.FC<{ onCriados: () => void }> = ({ onCriados 
           <ul className="space-y-1 max-h-72 overflow-y-auto">
             {prev.linhas.map((l) => (
               <li key={l.n} className="bg-slate-950 border border-slate-800 rounded-lg p-2 text-[11px] text-slate-300">
-                <span className={`font-bold ${cor[l.status]}`}>{nome[l.status]}</span> · linha {l.n} · {l.aluno || '—'}{l.escola ? ` · ${l.escola}` : ''}{l.turno ? ` · ${l.turno === 'MANHA' ? 'manhã' : l.turno === 'TARDE' ? 'tarde' : l.turno}` : ''}
+                <span className={`font-bold ${cor[l.status]}`}>{nome[l.status]}</span> · linha {l.n} · {l.aluno || '—'}{l.escola ? ` · ${l.escola}` : ''}{l.turno ? ` · ${l.turno === 'MANHA' ? 'manhã' : l.turno === 'TARDE' ? 'tarde' : l.turno === 'NOITE' ? 'noite' : l.turno}` : ''}{l.viagem ? ` · ${l.viagem}` : ''}
                 {l.erro && <div className="text-slate-400">{l.erro}</div>}
               </li>
             ))}

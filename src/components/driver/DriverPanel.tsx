@@ -31,7 +31,8 @@ import { HistoricoViagens } from './HistoricoViagens';
 import { ModulosAjustes } from './ModulosAjustes';
 import { useModulos } from '../../hooks/useModulos';
 import { Mensagens, useNaoLidasMotorista } from './Mensagens';
-import { TransportRepository, subscribeToDatabaseChanges } from '../../services/api';
+import { TransportRepository, subscribeToDatabaseChanges, NOME_TURNO } from '../../services/api';
+import type { Viagem } from '../../services/api';
 import { minutosAgoraBrasil, sentidoPorHorario } from '../../services/sentidoAuto';
 import {
   Play,
@@ -78,7 +79,7 @@ import { CodigoMotorista, BairroDoMotorista, SolicitacoesPendentes } from './Cod
 import { salvarVan, rotuloDaVan } from '../../services/vanPersonalizada';
 import { QuandoSair } from './QuandoSair';
 import { NovoAlunoMotorista, ConviteFamilia, ConvidarFamilias, ImportarAlunos } from './NovoAluno';
-import { EscolasDoMotorista, HorariosPorEscola, RotasIdaVolta } from './RotaEEscolas';
+import { EscolasDoMotorista, HorariosPorEscola, RotasIdaVolta, ViagensDoMotorista } from './RotaEEscolas';
 import { GuiaPrimeiroAcesso, useGuiaPrimeiroAcesso } from '../shared/GuiaPrimeiroAcesso';
 import type { AbaMotorista } from '../shared/guiaPassos';
 
@@ -174,6 +175,8 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const [salvandoLocal, setSalvandoLocal] = useState(false);
   const [erroLocal, setErroLocal] = useState<string | null>(null);
   const [copiado, setCopiado] = useState<boolean>(false);
+  const [viagens, setViagens] = useState<Viagem[]>([]);
+  const [avisoViagem, setAvisoViagem] = useState<string | null>(null);
 
   // Carrega dados sanitizados via Repository Pattern (Zero-Cache)
   const carregarDadosZeroCache = async () => {
@@ -183,6 +186,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         apenasProximaParada
       });
       setViagemZeroCache(dados);
+      TransportRepository.obterViagens().then((r) => setViagens(r.viagens)).catch(() => {});
       if (dados?.motorista) {
         setAceitaDinamicos(dados.motorista.aceita_enderecos_dinamicos ?? false);
       }
@@ -859,14 +863,33 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                         : item.turno ? 'Defina os horários dessa escola e turno em Ajustes' : 'Escolha o turno do aluno'}
                     </div>
                     <div className="flex items-center gap-1 mt-1" role="group" aria-label={`Turno de ${item.nome_aluno_sanitizado}`}>
-                      {(['MANHA', 'TARDE'] as const).map((t) => (
+                      {(['MANHA', 'TARDE', 'NOITE'] as const).map((t) => (
                         <button key={t} type="button" aria-pressed={item.turno === t}
                           onClick={async () => { try { await TransportRepository.definirTurnoDoAluno(item.parada_id, t); await carregarDadosZeroCache(); } catch (e) { console.error(e); } }}
                           className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold min-h-[36px] cursor-pointer border ${item.turno === t ? 'bg-amber-400/20 border-amber-400 text-amber-200' : 'bg-slate-900 border-slate-700 text-slate-300'}`}>
-                          {t === 'MANHA' ? 'Manhã' : 'Tarde'}
+                          {NOME_TURNO[t]}
                         </button>
                       ))}
                     </div>
+                    {viagens.length > 0 && (
+                      <div className="mt-1">
+                        <label className="text-[11px] text-slate-400 flex items-center gap-2">Viagem
+                          <select value={item.viagem_nomeada_id ?? ''} aria-label={`Viagem de ${item.nome_aluno_sanitizado}`}
+                            onChange={async (e) => {
+                              try {
+                                const r = await TransportRepository.definirViagemDoAluno(item.parada_id, e.target.value || null);
+                                setAvisoViagem(r.outraEscola ? `${item.nome_aluno_sanitizado}: a escola do aluno é diferente da escola principal da viagem.` : null);
+                                await carregarDadosZeroCache();
+                              } catch (err) { console.error(err); }
+                            }}
+                            className="flex-1 min-w-0 px-2 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-[11px] text-slate-100 min-h-[36px]">
+                            <option value="">Sem viagem</option>
+                            {viagens.map((v) => <option key={v.id} value={v.id}>{v.nome} · {NOME_TURNO[v.turno]}</option>)}
+                          </select>
+                        </label>
+                        {avisoViagem && avisoViagem.startsWith(item.nome_aluno_sanitizado) && <div className="text-[10px] text-amber-300 mt-1">{avisoViagem}</div>}
+                      </div>
+                    )}
                     <div className="mt-1"><ConviteFamilia paradaId={item.parada_id} /></div>
                   </div>
                   <button
@@ -1172,6 +1195,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         <InstalarApp />
         <CodigoMotorista nome={motorista?.nome} />
         <BairroDoMotorista inicial={motorista?.bairro} nome={motorista?.nome} onSalvo={carregarDadosZeroCache} />
+        <ViagensDoMotorista versao={paradas.length} onMudou={carregarDadosZeroCache} />
         <HorariosPorEscola versao={paradas.length} onMudou={carregarDadosZeroCache} />
         <EscolasDoMotorista versao={paradas.length} />
         <RotasIdaVolta sentidoAtivo={sentidoRota} versao={paradas.length} onAplicado={carregarDadosZeroCache} />

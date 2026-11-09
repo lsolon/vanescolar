@@ -74,7 +74,7 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
   const [escola, setEscola] = useState('');
   const [endereco, setEndereco] = useState('');
   const [ref, setRef] = useState('');
-  const [turno, setTurno] = useState<'MANHA' | 'TARDE' | ''>('');
+  const [turno, setTurno] = useState<'MANHA' | 'TARDE' | 'NOITE' | ''>('');
   const [tel, setTel] = useState('');
   const [codigo, setCodigo] = useState(() => lerVanSalva()?.codigo ?? ''); // veio do link ?m= do motorista
   const [motoristaId, setMotoristaId] = useState<number | ''>(motoristas[0]?.id ?? '');
@@ -84,7 +84,7 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
   const enviar = async (e: React.FormEvent) => {
     e.preventDefault();
     setErro(null);
-    if (!turno) { setErro('Escolha o turno: manhã ou tarde.'); return; }
+    if (!turno) { setErro('Escolha o turno: manhã, tarde ou noite.'); return; }
     setSalvando(true);
     try {
       await TransportRepository.cadastrarFilho({
@@ -115,8 +115,8 @@ export const AdicionarFilho: React.FC<{ motoristas: Motorista[]; onSalvo: () => 
       </label>
       <div className="space-y-1" role="group" aria-label="Turno">
         <span className="text-[11px] text-slate-300">Turno do seu filho(a) na van</span>
-        <div className="grid grid-cols-2 gap-2">
-          {([['MANHA', 'Manhã'], ['TARDE', 'Tarde']] as const).map(([v, nome]) => (
+        <div className="grid grid-cols-3 gap-2">
+          {([['MANHA', 'Manhã'], ['TARDE', 'Tarde'], ['NOITE', 'Noite']] as const).map(([v, nome]) => (
             <button key={v} type="button" aria-pressed={turno === v} onClick={() => setTurno(v)}
               className={`py-3 rounded-xl text-sm font-bold border min-h-[48px] cursor-pointer ${turno === v ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200' : 'bg-slate-900 border-slate-700 text-slate-300'}`}>{nome}</button>
           ))}
