@@ -2432,3 +2432,27 @@ test('Van personalizada: bairro do motorista, link ?m= público só com primeiro
   assert.match(c.mensagem, new RegExp(`/\\?m=${cod}`), 'o convite abre o app personalizado');
   assert.ok(!/Secreta/.test(c.mensagem), 'o convite continua sem endereço');
 });
+
+test('Quando sair: funciona antes de iniciar a rota mesmo com os alunos ENTREGUE do trecho anterior', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'QuandoSairDepois');
+  const url = '/api/motorista/quando-sair';
+  const c = (await jsonReq('POST', '/api/motorista/alunos', mot, { nomeAluno: 'Bia Ida', escola: 'Escola QD', turno: 'MANHA', nomeResponsavel: 'Ana', telefoneResponsavel: '21966664444', endereco: 'Rua Y, 2', latitude: -22.90, longitude: -43.20, autorizacaoResponsavel: true })).data;
+  await jsonReq('PUT', '/api/motorista/escolas', mot, { nome: 'Escola QD', latitude: -22.91, longitude: -43.21 });
+  const pos = { latitude: -22.905, longitude: -43.205 };
+  // ida inteira: embarca, entrega e encerra
+  await jsonReq('POST', '/api/rotas/iniciar', mot, { sentido: 'IDA' });
+  await jsonReq('POST', `/api/paradas/${c.paradaId}/status`, mot, { status: 'EMBARCOU' });
+  await jsonReq('POST', `/api/paradas/${c.paradaId}/status`, mot, { status: 'ENTREGUE' });
+  await jsonReq('POST', '/api/rotas/encerrar', mot, {});
+  // antes de iniciar a volta, o aluno está ENTREGUE: o cálculo precisa funcionar
+  const v = await jsonReq('POST', url, mot, { ...pos, sentido: 'VOLTA' });
+  assert.equal(v.status, 200, 'volta antes de iniciar');
+  assert.equal(v.data.destino, 'Escola QD');
+  const i = await jsonReq('POST', url, mot, { ...pos, sentido: 'IDA' });
+  assert.equal(i.status, 200, 'ida do dia seguinte');
+  // quem avisou ausência neste sentido não entra na fila
+  await jsonReq('POST', `/api/alunos/${c.alunoId}/ausencia`, mot, { motivo: 'Doente', trecho: 'VOLTA' });
+  assert.equal((await jsonReq('POST', url, mot, { ...pos, sentido: 'VOLTA' })).status, 409, 'ausente na volta');
+  assert.equal((await jsonReq('POST', url, mot, { ...pos, sentido: 'IDA' })).status, 200, 'ausência só da volta não afeta a ida');
+});

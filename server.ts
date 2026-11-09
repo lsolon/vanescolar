@@ -3615,8 +3615,15 @@ async function startServer() {
       return res.status(400).json({ error: 'Posição inválida. Permita o GPS e tente de novo.' });
     }
     const sentido: 'IDA' | 'VOLTA' = req.body?.sentido === 'VOLTA' ? 'VOLTA' : 'IDA';
+    // Com a rota em andamento, só quem ainda falta (PENDENTE). Fora dela (antes de iniciar), todos os confirmados que não avisaram
+    // ausência neste sentido: os status do trecho anterior (ENTREGUE) só voltam a PENDENTE quando a rota é iniciada.
+    const emAndamento = getTrip(driverId).viagem.status === 'EM_ANDAMENTO';
+    const vaiNoTrecho = (p: any) => {
+      const trechoAus = p.ausencia_trecho ?? (p.status_embarque === 'AUSENTE' ? 'AMBOS' : null);
+      return !(trechoAus === sentido || trechoAus === 'AMBOS');
+    };
     const fila = serverState.paradas
-      .filter((p: any) => donoDaParada(p) === driverId && confirmada(p) && p.status_embarque === 'PENDENTE')
+      .filter((p: any) => donoDaParada(p) === driverId && confirmada(p) && (emAndamento ? p.status_embarque === 'PENDENTE' : vaiNoTrecho(p)))
       .sort((a: any, b: any) => ordemNo(a, sentido) - ordemNo(b, sentido));
     if (fila.length === 0) return res.status(409).json({ error: 'Não há alunos confirmados e pendentes para esta rota.' });
     const primeira: any = fila[0];
