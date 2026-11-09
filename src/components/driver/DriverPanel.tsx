@@ -456,6 +456,8 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   /** Rota em andamento e ninguém mais pendente nem a bordo: sugere encerrar (o motorista confirma). */
   const rotaTodaConcluida = totalAlunos > 0 && paradas.every((p) => p.status_embarque === 'ENTREGUE' || p.status_embarque === 'AUSENTE');
 
+  /** Horário previsto da parada no sentido em tela: na Volta é a entrega em casa, na Ida é o embarque. */
+  const horaDoSentido = (p: any): string => (sentidoRota === 'VOLTA' ? (p.hora_volta || 'A definir') : (p.hora_ida || p.hora_prevista || 'A definir'));
   const ordemDoSentido = (p: any): number => (sentidoRota === 'VOLTA' ? (p.ordem_volta ?? p.ordem_sequencia) : (p.ordem_ida ?? p.ordem_sequencia)) ?? 0;
   const paradasNaOrdem = [...paradas].sort((a, b) => ordemDoSentido(a) - ordemDoSentido(b));
   /** Troca o aluno de lugar com o próximo pendente na direção pedida e salva: vale nas próximas viagens deste sentido até nova mudança. */
@@ -942,7 +944,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                 {/* Previsão e Contato Seguro */}
                 <div className="flex items-center justify-between mt-2.5 pt-2 text-xs text-slate-400">
                   <span className="text-[11px] text-slate-400">
-                    Previsão de embarque: <strong className="text-slate-300 font-mono">{item.hora_prevista}</strong>
+                    {sentidoRota === 'VOLTA' ? 'Previsão de entrega' : 'Previsão de embarque'}: <strong className="text-slate-300 font-mono">{horaDoSentido(item)}</strong>
                     {isRotaAtiva && sentidoRota === 'IDA' && item.status_embarque === 'PENDENTE' && aguardarAte(item.hora_ida) && (
                       <span className="ml-2 text-amber-300 font-bold">Aguardar até {item.hora_ida}</span>
                     )}
@@ -980,7 +982,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                 {ehProxima ? (
                   <div className={`rounded-2xl border-2 ${tom.destaque}/70 ${tom.fundo} p-4`} aria-label={`Próxima parada: ${item.nome_aluno_sanitizado}`}>
                     <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
-                      <span>Próxima parada · #{ordemDoSentido(item)} · {item.hora_prevista}</span>
+                      <span>Próxima parada · #{ordemDoSentido(item)} · {horaDoSentido(item)}</span>
                       {sentidoRota === 'IDA' && aguardarAte(item.hora_ida) && <span className="text-amber-300 font-bold">Aguardar até {item.hora_ida}</span>}
                     </div>
                     <h3 className="text-xl font-extrabold text-slate-50 mt-1">{item.nome_aluno_sanitizado}</h3>
@@ -1013,7 +1015,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
                       className="flex-1 min-w-0 flex items-center gap-3 px-3 min-h-[52px] text-left cursor-pointer">
                       <span className={`w-6 h-6 rounded-full ${tom.numero} text-[11px] font-black flex items-center justify-center shrink-0`}>{ordemDoSentido(item)}</span>
                       <span className="flex-1 min-w-0 truncate text-sm font-bold text-slate-100 flex items-center gap-1.5">{item.status_embarque === 'EMBARCOU' && isRotaAtiva && <UserCheck className="w-4 h-4 text-emerald-400 shrink-0" aria-label="A bordo" />}<span className="truncate">{item.nome_aluno_sanitizado}</span></span>
-                      <span className="text-xs font-mono text-slate-400 shrink-0">{item.hora_prevista}</span>
+                      <span className="text-xs font-mono text-slate-400 shrink-0">{horaDoSentido(item)}</span>
                     </button>
                     {!(item.status_embarque === 'EMBARCOU' && isRotaAtiva) && <span className={`shrink-0 px-2 py-1 rounded-full border text-[11px] font-bold ${statusChip.c}`}>{statusChip.t}</span>}
                     {item.status_embarque === 'EMBARCOU' && isRotaAtiva && (
