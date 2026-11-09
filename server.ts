@@ -522,6 +522,23 @@ function donoDaParada(p: any): number {
 /** Aluno ainda não confirmado pelo motorista (ou recusado) não entra na rota. */
 const confirmada = (p: any) => p?.vinculo === undefined || p.vinculo === 'CONFIRMADO';
 
+/** Viagem (lista nomeada: "Manhã 1") em que o aluno está fixo. '' = sem viagem. */
+const grupoDe = (p: any): string => (typeof p?.viagem_nomeada_id === 'string' ? p.viagem_nomeada_id : '');
+/**
+ * Viagem em foco do motorista: a que ele escolheu para iniciar (ou está em andamento). Fica guardada depois de encerrar.
+ * undefined = todos os alunos (motorista sem viagens, ou ainda sem escolher); '' = alunos sem viagem.
+ */
+function focoDe(driverId: number): string | undefined {
+  const f = (getTrip(driverId).viagem as any).viagem_foco;
+  if (typeof f !== 'string') return undefined;
+  if (f === '') return '';
+  return usersDB.find((u) => u.id === driverId)?.viagens?.some((v) => v.id === f) ? f : undefined;
+}
+/** O aluno faz parte da rota em foco? (sem foco, todos fazem) */
+const noFoco = (driverId: number) => { const f = focoDe(driverId); return (p: any) => f === undefined || grupoDe(p) === f; };
+/** A rota em andamento do motorista é a viagem deste aluno? */
+const viagemDoAlunoEmFoco = (driverId: number, p: any) => { const f = focoDe(driverId); return f === undefined || grupoDe(p) === f; };
+
 /** Filhos (paradas) de um responsável. `legacy` = studentId antigo do token. */
 function filhosDe(userId?: number, legacy?: number): any[] {
   return serverState.paradas.filter((p: any) => (userId !== undefined && p.vinculado_usuario_id === userId) || (legacy !== undefined && p.id_aluno === legacy));
@@ -781,13 +798,14 @@ function computeProximityBase(driverId: number, studentId: number | undefined, a
   if (!studentId) return null;
   const trip = getTrip(driverId);
   const sentido = sentidoDaViagem(trip);
-  const minhas = serverState.paradas
-    .filter((p: any) => donoDaParada(p) === driverId && confirmada(p))
-    .sort((a: any, b: any) => ordemNo(a, sentido) - ordemNo(b, sentido));
   const mine: any = serverState.paradas.find((p: any) => donoDaParada(p) === driverId && p.id_aluno === studentId);
   if (!mine) return null;
+  // Só os alunos da mesma viagem entram na conta; e a rota em andamento só vale para a família da viagem que está rodando.
+  const minhas = serverState.paradas
+    .filter((p: any) => donoDaParada(p) === driverId && confirmada(p) && grupoDe(p) === grupoDe(mine))
+    .sort((a: any, b: any) => ordemNo(a, sentido) - ordemNo(b, sentido));
   const agora = new Date().toISOString();
-  const st = String(trip.viagem.status);
+  const st = viagemDoAlunoEmFoco(driverId, mine) ? String(trip.viagem.status) : 'AGENDADA';
   const rotaAtiva = st === 'EM_ANDAMENTO';
   const gps = trip.gpsAtual;
   const gpsOk = gps.accuracyMeters > 0 && Date.now() - new Date(gps.timestamp).getTime() <= GPS_VALIDADE_MS;
@@ -937,7 +955,8 @@ const deMin = (m: number) => {
 /** Horários previstos de ida e volta: o motorista pode fixar à mão; senão vêm do horário da escola. */
 function horariosDaParada(p: any): { hora_ida: string | null; hora_volta: string | null } {
   const dono = donoDaParada(p);
-  const base = serverState.paradas.filter((x: any) => donoDaParada(x) === dono && confirmada(x));
+  // Cada viagem tem a sua própria fila: o horário de um aluno depende só de quem está na mesma viagem.
+  const base = serverState.paradas.filter((x: any) => donoDaParada(x) === dono && confirmada(x) && grupoDe(x) === grupoDe(p));
   const posNo = (sentido: string) => {
     const grupo = [...base].sort((a: any, b: any) => ordemNo(a, sentido) - ordemNo(b, sentido));
     const pos = grupo.findIndex((x: any) => x.id === p.id);
@@ -999,14 +1018,21 @@ function getFilteredStateForUser(user: SessionPayload, pref?: number) {
   // Motorista vê EXCLUSIVAMENTE suas próprias paradas/alunos
   if (user.role === 'motorista') {
     const sentidoAtivo = sentidoDaViagem(trip);
-    cloned.paradas = cloned.paradas
-      .filter((p: any) => donoDaParada(p) === user.userId && p.vinculo !== 'RECUSADO')
+    const foco = focoDe(user.userId);
+    cloned.viagem.viagem_foco = foco ?? null;
+    // Só a viagem em foco aparece (quem ainda não foi confirmado continua aparecendo para o motorista decidir).
+    // A numeração é da viagem: 1, 2, 3... sem buracos.
+    const doFoco = cloned.paradas
+      .filter((p: any) => donoDaParada(p) === user.userId && p.vinculo !== 'RECUSADO' && (!confirmada(p) || foco === undefined || grupoDe(p) === foco));
+    const rank = (sentido: string) => new Map<number, number>([...doFoco].filter((p: any) => confirmada(p)).sort((a: any, b: any) => ordemNo(a, sentido) - ordemNo(b, sentido)).map((p: any, i: number) => [p.id, i + 1] as [number, number]));
+    const rIda = rank('IDA'), rVolta = rank('VOLTA'), rAtivo = sentidoAtivo === 'VOLTA' ? rVolta : rIda;
+    cloned.paradas = doFoco
       .sort((a: any, b: any) => ordemNo(a, sentidoAtivo) - ordemNo(b, sentidoAtivo))
       .map((p: any) => ({
         ...p,
-        ordem_sequencia: ordemNo(p, sentidoAtivo),
-        ordem_ida: ordemNo(p, 'IDA'),
-        ordem_volta: ordemNo(p, 'VOLTA'),
+        ordem_sequencia: rAtivo.get(p.id) ?? ordemNo(p, sentidoAtivo),
+        ordem_ida: rIda.get(p.id) ?? ordemNo(p, 'IDA'),
+        ordem_volta: rVolta.get(p.id) ?? ordemNo(p, 'VOLTA'),
         endereco_real: undefined,
         responsavel_telefone: undefined,
         responsavel_telefone_mascarado: p.responsavel_telefone ? `(${p.responsavel_telefone.slice(0,2)}) 9****-${p.responsavel_telefone.slice(-4)}` : undefined
@@ -1031,6 +1057,9 @@ function getFilteredStateForUser(user: SessionPayload, pref?: number) {
     const recResp = usersDB.find((u) => u.id === user.userId);
     cloned.motoristas = Array.from(new Set([...(recResp?.motoristasVinculados || []), ...motoristasDoResponsavel(user.userId, user.studentId)]))
       .map((id) => ({ id, nome: perfilMotorista(id)?.nome ?? 'Motorista' }));
+    const filhoAtivo: any = studentId ? serverState.paradas.find((p: any) => p.id_aluno === studentId) : null;
+    if (filhoAtivo && driverId !== null && !viagemDoAlunoEmFoco(driverId, filhoAtivo)) cloned.viagem.status = 'AGENDADA'; // outra viagem do motorista está rodando
+    delete cloned.viagem.viagem_foco; // a família não precisa saber das viagens
     if (studentId) {
       cloned.paradas = cloned.paradas.filter((p: any) => p.id_aluno === studentId).map(paradaParaResponsavel);
     } else {
@@ -2999,6 +3028,19 @@ async function startServer() {
     res.json({ sucesso: true, mensagem: msgPublica(nova) });
   });
 
+  /**
+   * Grava a ordem nova só para os alunos da viagem em foco, sem mexer na posição relativa dos das outras viagens:
+   * os lugares que a viagem ocupava na lista geral são preenchidos, na ordem, pelos ids novos.
+   */
+  const aplicarOrdemDoGrupo = (driverId: number, sentido: 'IDA' | 'VOLTA', ids: number[]) => {
+    const naRota = noFoco(driverId);
+    const todas = (serverState.paradas as any[]).filter((p) => donoDaParada(p) === driverId && confirmada(p)).sort((a, b) => ordemNo(a, sentido) - ordemNo(b, sentido));
+    const porId = new Map<number, any>(todas.map((p) => [p.id, p]));
+    let k = 0;
+    const lista = todas.map((p) => (naRota(p) ? porId.get(ids[k++]) ?? p : p));
+    lista.forEach((p, i) => { if (sentido === 'VOLTA') p.ordem_volta = i + 1; else p.ordem_sequencia = i + 1; });
+  };
+
   // ---- Sugestão de rota: o app propõe a ordem pelas distâncias; o motorista reordena à mão e aplica ----
   app.get('/api/rotas/sugestao', authenticate, requireDriver, (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
@@ -3006,8 +3048,9 @@ async function startServer() {
     const trip = getTrip(driverId);
     const sentido: 'IDA' | 'VOLTA' = String(req.query.sentido || sentidoDaViagem(trip)).toUpperCase() === 'VOLTA' ? 'VOLTA' : 'IDA';
     const volta = sentido === 'VOLTA';
+    const naRota = noFoco(driverId);
     const todas = serverState.paradas
-      .filter((p: any) => donoDaParada(p) === driverId && confirmada(p))
+      .filter((p: any) => donoDaParada(p) === driverId && confirmada(p) && naRota(p))
       .sort((a: any, b: any) => ordemNo(a, sentido) - ordemNo(b, sentido));
     // Só a rota em andamento, do mesmo sentido, tem alunos já atendidos; na outra aba todos contam como pendentes.
     const emAndamento = trip.viagem.status === 'EM_ANDAMENTO' && sentidoDaViagem(trip) === sentido;
@@ -3059,8 +3102,9 @@ async function startServer() {
     const trip = getTrip(driverId);
     const sentido: 'IDA' | 'VOLTA' = String(req.body?.sentido).toUpperCase() === 'VOLTA' ? 'VOLTA' : 'IDA';
     if (trip.viagem.status === 'EM_ANDAMENTO') return res.status(409).json({ error: 'Encerre a rota em andamento antes de montar o cronograma.' });
+    const naRota = noFoco(driverId);
     const alunos: any[] = serverState.paradas
-      .filter((p: any) => donoDaParada(p) === driverId && confirmada(p))
+      .filter((p: any) => donoDaParada(p) === driverId && confirmada(p) && naRota(p))
       .sort((a: any, b: any) => ordemNo(a, sentido) - ordemNo(b, sentido));
     if (alunos.length === 0) return res.status(400).json({ error: 'Não há alunos confirmados na van.' });
     const escolas = new Set(alunos.map((p) => chaveEscola(p.escola_destino)));
@@ -3122,7 +3166,8 @@ async function startServer() {
     const driverId = driverIdFor(user) as number;
     const sentido: 'IDA' | 'VOLTA' = String(req.body?.sentido).toUpperCase() === 'VOLTA' ? 'VOLTA' : 'IDA';
     const prop = propostasRota.get(`${driverId}:${sentido}`);
-    const atuais = serverState.paradas.filter((p: any) => donoDaParada(p) === driverId && confirmada(p)).map((p: any) => p.id as number).sort((a: number, b: number) => a - b);
+    const naRotaFixar = noFoco(driverId);
+    const atuais = serverState.paradas.filter((p: any) => donoDaParada(p) === driverId && confirmada(p) && naRotaFixar(p)).map((p: any) => p.id as number).sort((a: number, b: number) => a - b);
     if (!prop || Date.now() - prop.criadaEm > 30 * 60000 || prop.confirmados.length !== atuais.length || !prop.confirmados.every((id, i) => id === atuais[i])) {
       return res.status(409).json({ error: 'A proposta ficou desatualizada. Monte o cronograma de novo.' });
     }
@@ -3130,10 +3175,10 @@ async function startServer() {
       return res.status(409).json({ error: 'A proposta tem avisos de horário. Confirme para fixar mesmo assim.', precisaConfirmar: true, avisos: prop.avisos.map((a) => a.texto) });
     }
     const campo = sentido === 'IDA' ? 'hora_ida_manual' : 'hora_volta_manual';
-    prop.ids.forEach((id, i) => {
+    aplicarOrdemDoGrupo(driverId, sentido, prop.ids);
+    prop.ids.forEach((id) => {
       const p: any = serverState.paradas.find((x: any) => x.id === id);
       if (!p) return;
-      if (sentido === 'VOLTA') p.ordem_volta = i + 1; else p.ordem_sequencia = i + 1;
       p[campo] = deMin(prop.horarios[id]);
     });
     const rec = usersDB.find((u) => u.id === driverId);
@@ -3149,12 +3194,13 @@ async function startServer() {
     const user = (req as any).user as SessionPayload;
     const driverId = driverIdFor(user) as number;
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.map((x: unknown) => Number(x)) : null;
-    const minhas = serverState.paradas.filter((p: any) => donoDaParada(p) === driverId && confirmada(p));
+    const naRotaOrdem = noFoco(driverId);
+    const minhas = serverState.paradas.filter((p: any) => donoDaParada(p) === driverId && confirmada(p) && naRotaOrdem(p));
     if (!ids || ids.length !== minhas.length || new Set(ids).size !== ids.length || !minhas.every((p: any) => ids.includes(p.id))) {
       return res.status(400).json({ error: 'A ordem precisa conter exatamente os alunos confirmados da sua van, sem repetir.' });
     }
     const sentidoOrdem = String(req.body?.sentido).toUpperCase() === 'VOLTA' ? 'VOLTA' : 'IDA';
-    ids.forEach((id: number, i: number) => { const p: any = minhas.find((x: any) => x.id === id); if (sentidoOrdem === 'VOLTA') p.ordem_volta = i + 1; else p.ordem_sequencia = i + 1; });
+    aplicarOrdemDoGrupo(driverId, sentidoOrdem, ids);
     auditLog('ROTA_REORDENADA', user.email, `Nova ordem (${sentidoOrdem}): ${ids.join(', ')}`);
     broadcast('HORARIOS_ATUALIZADOS', {}, driverId);
     res.json({ sucesso: true });
@@ -3449,24 +3495,54 @@ async function startServer() {
     res.json({ sucesso: true });
   });
 
+  // ---- Viagem em foco: o motorista escolhe qual viagem aparece em Hoje e qual será iniciada ----
+  // valor: id da viagem; 'SEM' = alunos sem viagem; null = todos. Devolve undefined (todos), '' (sem viagem) ou o id; null se inválido.
+  const lerFocoPedido = (driverId: number, valor: unknown): string | undefined | null => {
+    if (valor === null || valor === '') return undefined;
+    if (valor === 'SEM') return '';
+    return typeof valor === 'string' && acharViagem(driverId, valor) ? valor : null;
+  };
+  const aplicarFoco = (driverId: number, valor: unknown): string | null => {
+    const f = lerFocoPedido(driverId, valor);
+    if (f === null) return 'Viagem não encontrada.';
+    if (f === undefined) delete (getTrip(driverId).viagem as any).viagem_foco; else (getTrip(driverId).viagem as any).viagem_foco = f;
+    return null;
+  };
+  app.put('/api/rotas/viagem', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
+    const driverId = driverIdFor((req as any).user) as number;
+    if (getTrip(driverId).viagem.status === 'EM_ANDAMENTO') return res.status(409).json({ error: 'Encerre a rota em andamento antes de trocar de viagem.' });
+    const erro = aplicarFoco(driverId, req.body?.viagemId === undefined ? null : req.body.viagemId);
+    if (erro) return res.status(404).json({ error: erro });
+    broadcast('ROTA_STATUS_ALTERADO', { status: getTrip(driverId).viagem.status }, driverId);
+    res.json({ sucesso: true, viagemFoco: focoDe(driverId) ?? null });
+  });
+
   app.post('/api/rotas/:acao', authenticate, requireDriver, requireTripOwnership, (req: Request, res: Response) => {
     const { acao } = req.params;
     const driverId = driverIdFor((req as any).user) as number;
     const trip = getTrip(driverId);
     if (acao === 'iniciar') {
-      // O motorista escolhe o sentido: IDA (casa → escola) ou VOLTA (escola → casa).
+      // O motorista escolhe a viagem (se usa viagens) e o sentido: IDA (casa → escola) ou VOLTA (escola → casa).
+      if (req.body?.viagemId !== undefined) {
+        if (trip.viagem.status === 'EM_ANDAMENTO' && lerFocoPedido(driverId, req.body.viagemId) !== focoDe(driverId)) return res.status(409).json({ error: 'Encerre a rota em andamento antes de iniciar outra viagem.' });
+        const erroFoco = aplicarFoco(driverId, req.body.viagemId);
+        if (erroFoco) return res.status(404).json({ error: erroFoco });
+      }
+      if (viagensDe(driverId).length > 0 && focoDe(driverId) === undefined) return res.status(409).json({ error: 'Escolha a viagem antes de iniciar a rota.' });
+      const naRota = noFoco(driverId);
+      const nomeViagem = viagensDe(driverId).find((v) => v.id === focoDe(driverId))?.nome;
       const sentido = req.body?.sentido === 'VOLTA' ? 'VOLTA' : 'IDA';
       const mudou = (trip.viagem as any).sentido !== sentido;
       // Histórico: um trecho novo começa quando a rota inicia (ou troca de sentido); se já estava rodando no mesmo sentido, segue o mesmo.
-      if (trip.viagem.status !== 'EM_ANDAMENTO' || mudou || !trip.trechoAtual) trip.trechoAtual = HV.novoTrecho(sentido, new Date());
+      if (trip.viagem.status !== 'EM_ANDAMENTO' || mudou || !trip.trechoAtual) trip.trechoAtual = { ...HV.novoTrecho(sentido, new Date()), ...(nomeViagem ? { viagem: nomeViagem } : {}) };
       (trip.viagem as any).sentido = sentido;
       (trip.viagem as any).periodo = sentido === 'VOLTA' ? 'MANHA_VOLTA' : 'MANHA_IDA';
       trip.viagem.status = 'EM_ANDAMENTO';
       trip.refKm = {};
       if (mudou) {
-        // Novo sentido: todos voltam a PENDENTE, exceto quem avisou ausência para este sentido.
+        // Novo sentido: os alunos da viagem voltam a PENDENTE, exceto quem avisou ausência para este sentido.
         for (const p of serverState.paradas as any[]) {
-          if (donoDaParada(p) !== driverId) continue;
+          if (donoDaParada(p) !== driverId || !naRota(p)) continue;
           const trechoAus = p.ausencia_trecho ?? (p.status_embarque === 'AUSENTE' ? 'AMBOS' : null);
           const ausente = trechoAus === sentido || trechoAus === 'AMBOS';
           p.status_embarque = ausente ? 'AUSENTE' : 'PENDENTE';
@@ -3477,7 +3553,8 @@ async function startServer() {
       // Histórico: fecha o trecho com o estado atual dos alunos da van.
       if (trip.viagem.status === 'EM_ANDAMENTO' && trip.trechoAtual) {
         const agora = new Date();
-        const alunosDaVan = serverState.paradas.filter((p: any) => donoDaParada(p) === driverId && confirmada(p));
+        const naRota = noFoco(driverId);
+        const alunosDaVan = serverState.paradas.filter((p: any) => donoDaParada(p) === driverId && confirmada(p) && naRota(p));
         const temGps = trip.gpsAtual.accuracyMeters > 0;
         trip.historico = HV.acrescentar(trip.historico ?? [], HV.fecharTrecho(trip.trechoAtual, alunosDaVan as any, agora, temGps), agora);
       }
@@ -3773,7 +3850,7 @@ async function startServer() {
       return !(trechoAus === sentido || trechoAus === 'AMBOS');
     };
     const fila = serverState.paradas
-      .filter((p: any) => donoDaParada(p) === driverId && confirmada(p) && (emAndamento ? p.status_embarque === 'PENDENTE' : vaiNoTrecho(p)))
+      .filter((p: any) => donoDaParada(p) === driverId && confirmada(p) && noFoco(driverId)(p) && (emAndamento ? p.status_embarque === 'PENDENTE' : vaiNoTrecho(p)))
       .sort((a: any, b: any) => ordemNo(a, sentido) - ordemNo(b, sentido));
     if (fila.length === 0) return res.status(409).json({ error: 'Não há alunos confirmados e pendentes para esta rota.' });
     const primeira: any = fila[0];
