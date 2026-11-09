@@ -487,6 +487,16 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   /** Em rota: o aluno que o motorista atende agora (primeiro pendente na ordem do sentido). */
   const proximaPendente = isRotaAtiva && filtroStatus === 'TODOS' ? paradasFiltradas.find((p) => p.status_embarque === 'PENDENTE') : undefined;
   const feitos = sentidoRota === 'VOLTA' ? entregues + ausentes : embarcados + entregues + ausentes;
+  /**
+   * Ida em andamento: o motorista vê só a próxima parada e a seguinte (as duas primeiras pendentes na ordem).
+   * Ao embarcar um aluno ele sai da tela e entra o próximo da fila. Sem ninguém pendente (chegou na escola),
+   * a lista completa volta para marcar "Entregue". Na volta e nos filtros a lista segue completa.
+   */
+  const pendentesNaOrdem = paradasFiltradas.filter((p) => p.status_embarque === 'PENDENTE');
+  const janelaDaIda = isRotaAtiva && sentidoRota === 'IDA' && filtroStatus === 'TODOS' && pendentesNaOrdem.length > 0;
+  const idsDaJanela = janelaDaIda ? new Set(pendentesNaOrdem.slice(0, 2).map((p) => p.parada_id)) : null;
+  const paradasVisiveis = idsDaJanela ? paradasFiltradas.filter((p) => idsDaJanela.has(p.parada_id)) : paradasFiltradas;
+  const paradasDepois = janelaDaIda ? Math.max(0, pendentesNaOrdem.length - 2) : 0;
 
   return (
     <div className="flex flex-col h-full bg-slate-950 text-slate-100 font-sans">
@@ -734,7 +744,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
             </div>
           )}
 
-          {!carregando && paradasFiltradas.map((item) => {
+          {!carregando && paradasVisiveis.map((item) => {
             const isMariaClara = item.aluno_id === 201;
             const isBusy = processandoAcaoId === item.aluno_id;
             const aberto = abertoId === item.parada_id;
@@ -1016,6 +1026,15 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
               </div>
             );
           })}
+
+          {!carregando && janelaDaIda && (
+            <p data-testid="paradas-restantes" className="text-center text-xs text-slate-500 pt-1">
+              {paradasDepois > 0
+                ? `Mais ${paradasDepois} ${paradasDepois === 1 ? 'parada' : 'paradas'} depois dessas`
+                : 'Esta é a última parada antes da escola'}
+              {embarcados > 0 ? ` · ${embarcados} a bordo` : ''}
+            </p>
+          )}
         </div>
           </>
         )}
