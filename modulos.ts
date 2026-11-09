@@ -54,6 +54,12 @@ export const MODULOS: readonly ModuloDef[] = [
     padrao: false
   },
   {
+    chave: 'consumo',
+    nome: 'Consumo de combustível',
+    descricao: 'Informe quantos km a van faz por litro e veja o gasto estimado por dia, semana, quinzena e mês.',
+    padrao: false
+  },
+  {
     chave: 'pagamento-pix',
     nome: 'Pagamento por Pix (teste)',
     descricao: 'O responsável vê o QR Code Pix da mensalidade e avisa que pagou; você confere no banco e confirma.',

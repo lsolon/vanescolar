@@ -682,7 +682,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
               ['abastecimento', 'Lançar abastecimento', 'Registrar rápido, direto no posto', Fuel],
               ['historico', 'Histórico de viagens', 'Cada trecho de ida e volta: horários, alunos e km', History],
               ['ajustes', 'Rotas e ajustes', 'Horários das escolas, rotas de ida e volta, código', Settings]
-            ] as const).filter(([k]) => (k !== 'gestao' || (!!onAbrirGestao && (modulos.ativo('mensalidades') || modulos.ativo('financeiro') || modulos.ativo('manutencao', false)))) && (k !== 'abastecimento' || modulos.ativo('financeiro'))).map(([k, titulo, desc, Icone]) => (
+            ] as const).filter(([k]) => (k !== 'gestao' || (!!onAbrirGestao && (modulos.ativo('mensalidades') || modulos.ativo('financeiro') || modulos.ativo('manutencao', false) || modulos.ativo('consumo', false)))) && (k !== 'abastecimento' || modulos.ativo('financeiro'))).map(([k, titulo, desc, Icone]) => (
               <button key={k} type="button" onClick={() => (k === 'gestao' ? onAbrirGestao?.() : setAba(k))} className="w-full flex items-center gap-3 px-4 py-3 min-h-[60px] rounded-2xl bg-slate-900 border border-slate-800 text-left cursor-pointer active:scale-[0.99]">
                 <Icone className="w-5 h-5 text-amber-300 shrink-0" />
                 <span className="flex-1 min-w-0">

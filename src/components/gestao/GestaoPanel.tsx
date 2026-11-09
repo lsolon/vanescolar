@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, LayoutDashboard, TrendingUp, Wallet, Wrench } from 'lucide-react';
+import { ArrowLeft, Fuel, LayoutDashboard, TrendingUp, Wallet, Wrench } from 'lucide-react';
 import { TransportRepository } from '../../services/api';
-import type { MensalidadesMotorista, PainelManutencao, ResumoFinanceiro } from '../../services/api';
+import type { MensalidadesMotorista, PainelConsumo, PainelManutencao, ResumoFinanceiro } from '../../services/api';
 import { Mensalidades } from '../driver/Mensalidades';
 import { Financeiro } from '../driver/Financeiro';
 import { Manutencao } from '../driver/Manutencao';
+import { Consumo } from '../driver/Consumo';
 import { useModulos } from '../../hooks/useModulos';
 
 /**
@@ -12,12 +13,13 @@ import { useModulos } from '../../hooks/useModulos';
  * manutenção, documentos e relatórios). Usa o mesmo login e os mesmos dados do painel do dia a dia.
  * O servidor só entrega estes dados ao motorista logado; aqui só organizamos a tela.
  */
-type Secao = 'resumo' | 'mensalidades' | 'financeiro' | 'manutencao';
+type Secao = 'resumo' | 'mensalidades' | 'financeiro' | 'consumo' | 'manutencao';
 
 const SECOES: ReadonlyArray<readonly [Secao, string, React.ComponentType<{ className?: string }>]> = [
   ['resumo', 'Resumo', LayoutDashboard],
   ['mensalidades', 'Mensalidades', Wallet],
   ['financeiro', 'Financeiro', TrendingUp],
+  ['consumo', 'Consumo', Fuel],
   ['manutencao', 'Manutenção', Wrench]
 ];
 
@@ -36,10 +38,11 @@ const Cartao: React.FC<{ rotulo: string; valor: string; sub?: string; cor?: stri
   </button>
 );
 
-const Resumo: React.FC<{ onIr: (s: Secao) => void; comFin: boolean; comMen: boolean; comMan: boolean }> = ({ onIr, comFin, comMen, comMan }) => {
+const Resumo: React.FC<{ onIr: (s: Secao) => void; comFin: boolean; comMen: boolean; comMan: boolean; comCon: boolean }> = ({ onIr, comFin, comMen, comMan, comCon }) => {
   const [fin, setFin] = useState<ResumoFinanceiro | null>(null);
   const [men, setMen] = useState<MensalidadesMotorista | null>(null);
   const [man, setMan] = useState<PainelManutencao | null>(null);
+  const [con, setCon] = useState<PainelConsumo | null>(null);
   const [carregado, setCarregado] = useState(false);
   const [erro, setErro] = useState<string | null>(null);
 
@@ -49,12 +52,13 @@ const Resumo: React.FC<{ onIr: (s: Secao) => void; comFin: boolean; comMen: bool
     Promise.all([
       comFin ? TransportRepository.resumoFinanceiro() : Promise.resolve(null),
       comMen ? TransportRepository.listarMensalidades() : Promise.resolve(null),
-      comMan ? TransportRepository.listarManutencao() : Promise.resolve(null)
+      comMan ? TransportRepository.listarManutencao() : Promise.resolve(null),
+      comCon ? TransportRepository.consumoCombustivel() : Promise.resolve(null)
     ])
-      .then(([f, m, mt]) => { if (vivo) { setFin(f); setMen(m); setMan(mt); setCarregado(true); } })
+      .then(([f, m, mt, cb]) => { if (vivo) { setFin(f); setMen(m); setMan(mt); setCon(cb); setCarregado(true); } })
       .catch((e: any) => { if (vivo) setErro(e?.message || 'Não foi possível carregar o resumo.'); });
     return () => { vivo = false; };
-  }, [comFin, comMen, comMan]);
+  }, [comFin, comMen, comMan, comCon]);
 
   if (erro) {
     return (
@@ -87,6 +91,16 @@ const Resumo: React.FC<{ onIr: (s: Secao) => void; comFin: boolean; comMen: bool
           </>
         )}
       </div>
+      {con && (
+        <div className="grid grid-cols-2 gap-3">
+          <Cartao rotulo="Combustível do mês" cor="text-amber-200"
+            valor={con.consumo ? `${con.consumo.mes.litros.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} L` : 'Configurar'}
+            sub={con.consumo
+              ? `${con.consumo.mes.km.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} km${con.consumo.mes.custo !== null ? ` · ${brl(con.consumo.mes.custo)}` : ''} (estimado)`
+              : 'Informe quantos km a van faz com 1 litro'}
+            onClick={() => onIr('consumo')} />
+        </div>
+      )}
       {man && (
         <div className="grid grid-cols-2 gap-3">
           <Cartao rotulo="Manutenção" cor={man.resumo.vencidos > 0 ? 'text-rose-300' : man.resumo.atencao > 0 ? 'text-amber-200' : 'text-emerald-300'}
@@ -109,8 +123,9 @@ export const GestaoPanel: React.FC<{ onVoltar: () => void }> = ({ onVoltar }) =>
   const comMen = modulos.ativo('mensalidades');
   const comFin = modulos.ativo('financeiro');
   const comMan = modulos.ativo('manutencao', false);
-  const secoes = SECOES.filter(([k]) => k === 'resumo' || (k === 'mensalidades' ? comMen : k === 'financeiro' ? comFin : comMan));
-  const nenhum = !comMen && !comFin && !comMan;
+  const comCon = modulos.ativo('consumo', false);
+  const secoes = SECOES.filter(([k]) => k === 'resumo' || (k === 'mensalidades' ? comMen : k === 'financeiro' ? comFin : k === 'consumo' ? comCon : comMan));
+  const nenhum = !comMen && !comFin && !comMan && !comCon;
   // Se o módulo da seção aberta for desligado, volta ao resumo.
   const secaoAtual: Secao = secoes.some(([k]) => k === secao) ? secao : 'resumo';
 
@@ -153,12 +168,13 @@ export const GestaoPanel: React.FC<{ onVoltar: () => void }> = ({ onVoltar }) =>
         <main className="flex-1 min-w-0 md:max-w-2xl space-y-4">
           {nenhum && (
             <p role="status" className="text-xs text-slate-300 bg-slate-900 border border-slate-800 rounded-2xl p-4">
-              Nenhum módulo ligado. Para usar a Gestão, ligue Mensalidades, Financeiro ou Manutenção em Painel &gt; Mais &gt; Rotas e ajustes &gt; Módulos.
+              Nenhum módulo ligado. Para usar a Gestão, ligue Mensalidades, Financeiro, Consumo ou Manutenção em Painel &gt; Mais &gt; Rotas e ajustes &gt; Módulos.
             </p>
           )}
-          {!nenhum && secaoAtual === 'resumo' && <Resumo onIr={setSecao} comFin={comFin} comMen={comMen} comMan={comMan} />}
+          {!nenhum && secaoAtual === 'resumo' && <Resumo onIr={setSecao} comFin={comFin} comMen={comMen} comMan={comMan} comCon={comCon} />}
           {secaoAtual === 'mensalidades' && comMen && <Mensalidades />}
           {secaoAtual === 'financeiro' && comFin && <Financeiro />}
+          {secaoAtual === 'consumo' && comCon && <Consumo />}
           {secaoAtual === 'manutencao' && comMan && <Manutencao />}
         </main>
       </div>

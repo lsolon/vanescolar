@@ -1978,21 +1978,21 @@ test('Módulos: começam ligados, o motorista liga e desliga só os dele, entrad
 
   const inicial = await jsonReq('GET', '/api/motorista/modulos', a);
   assert.equal(inicial.status, 200);
-  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true, manutencao: false }, 'quem já usava mantém tudo ligado');
+  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true, manutencao: false, consumo: false }, 'quem já usava mantém tudo ligado');
   for (const m of inicial.data.modulos) { assert.ok(m.nome && m.descricao, 'cada módulo traz nome e descrição'); }
 
   const desligar = await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'financeiro', ativo: false });
   assert.equal(desligar.status, 200);
-  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: false, manutencao: false });
-  assert.deepEqual(await mapa(b), { mensalidades: true, financeiro: true, manutencao: false }, 'o outro motorista não é afetado');
+  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: false, manutencao: false, consumo: false });
+  assert.deepEqual(await mapa(b), { mensalidades: true, financeiro: true, manutencao: false, consumo: false }, 'o outro motorista não é afetado');
 
   assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'financeiro', ativo: true })).status, 200);
-  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true, manutencao: false }, 'dá para ligar de novo');
+  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true, manutencao: false, consumo: false }, 'dá para ligar de novo');
 
   assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'foguete', ativo: true })).status, 400);
   assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'financeiro', ativo: 'sim' })).status, 400);
   assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: '__proto__', ativo: true })).status, 400);
-  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true, manutencao: false }, 'pedidos inválidos não mudam nada');
+  assert.deepEqual(await mapa(a), { mensalidades: true, financeiro: true, manutencao: false, consumo: false }, 'pedidos inválidos não mudam nada');
 
   // Desligar só esconde: os dados do financeiro continuam guardados
   assert.equal((await jsonReq('PUT', '/api/motorista/modulos', a, { chave: 'financeiro', ativo: false })).status, 200);
@@ -2126,6 +2126,88 @@ test('Manutenção: cada motorista cuida dos seus serviços, o km vem dos abaste
   const r = await jsonReq('GET', '/api/motorista/manutencao', resp);
   assert.ok(r.status === 401 || r.status === 403, 'responsável não vê a manutenção do motorista');
   assert.equal((await jsonReq('POST', '/api/motorista/manutencao', resp, { nome: 'Óleo', intervalo_km: 1000 })).status === 200, false);
+});
+
+test('Consumo de combustível: km/L do motorista × km do GPS por dia, semana, quinzena e mês; custo pelo preço dos abastecimentos; isolado e sem dados de aluno', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const a = await novoMotorista(adm, 'ConsA');
+  const b = await novoMotorista(adm, 'ConsB');
+
+  // módulo desligado por padrão; sem km/L informado não há conta
+  const mods = (await jsonReq('GET', '/api/motorista/modulos', a)).data.modulos as any[];
+  assert.equal(mods.find((m) => m.chave === 'consumo').ativo, false);
+  const vazio = await jsonReq('GET', '/api/motorista/consumo', a);
+  assert.equal(vazio.status, 200);
+  assert.equal(vazio.data.config, null);
+  assert.equal(vazio.data.consumo, null);
+  assert.equal(vazio.data.preco_litro, null);
+  assert.equal((await jsonReq('GET', '/api/motorista/consumo')).status, 401, 'visitante sem sessão');
+
+  // entradas inválidas são recusadas e não gravam
+  for (const ruim of [{}, { km_por_litro: 'abc' }, { km_por_litro: 0 }, { km_por_litro: -4 }, { km_por_litro: 51 }, { km_por_litro: '' }]) {
+    assert.equal((await jsonReq('PUT', '/api/motorista/consumo', a, ruim)).status, 400, JSON.stringify(ruim));
+  }
+  assert.equal((await jsonReq('GET', '/api/motorista/consumo', a)).data.config, null);
+
+  // informa 9,5 km/L (vírgula do brasileiro)
+  const salvo = await jsonReq('PUT', '/api/motorista/consumo', a, { km_por_litro: '9,5' });
+  assert.equal(salvo.status, 200, JSON.stringify(salvo.data));
+  assert.equal(salvo.data.config.km_por_litro, 9.5);
+  assert.equal(salvo.data.consumo.mes.km, 0);
+  assert.deepEqual(salvo.data.consumo.trechos_de_hoje, []);
+
+  // uma ida com cerca de 1,1 km de GPS: aparece "em andamento" e depois fechada
+  const c = (await jsonReq('POST', '/api/motorista/alunos', a, { nomeAluno: 'Clara Medeiros Souza', escola: 'Escola CF', turno: 'MANHA', nomeResponsavel: 'Paula', telefoneResponsavel: '21955554444', endereco: 'Rua Muito Secreta, 77', latitude: -22.90, longitude: -43.20, autorizacaoResponsavel: true })).data;
+  await jsonReq('POST', '/api/rotas/iniciar', a, { sentido: 'IDA' });
+  await jsonReq('POST', '/api/gps', a, { latitude: -22.90, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  await jsonReq('POST', '/api/gps', a, { latitude: -22.91, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
+  const andando = (await jsonReq('GET', '/api/motorista/consumo', a)).data.consumo;
+  assert.equal(andando.trechos_de_hoje.length, 1);
+  assert.equal(andando.trechos_de_hoje[0].em_andamento, true);
+  assert.ok(andando.dia.km > 1 && andando.dia.km < 1.3, `km=${andando.dia.km}`);
+  await jsonReq('POST', `/api/paradas/${c.paradaId}/status`, a, { status: 'EMBARCOU' });
+  await jsonReq('POST', `/api/paradas/${c.paradaId}/status`, a, { status: 'ENTREGUE' });
+  await jsonReq('POST', '/api/rotas/encerrar', a, {});
+  const fechado = (await jsonReq('GET', '/api/motorista/consumo', a)).data;
+  assert.equal(fechado.consumo.trechos_de_hoje.length, 1);
+  assert.equal(fechado.consumo.trechos_de_hoje[0].em_andamento, false);
+  assert.equal(fechado.consumo.trechos_de_hoje[0].sentido, 'IDA');
+  assert.equal(fechado.consumo.dia.litros, 0.12, 'cerca de 1,1 km ÷ 9,5 km/L');
+  for (const per of ['dia', 'semana', 'quinzena', 'mes']) assert.equal(fechado.consumo[per].trechos, 1, per);
+  assert.equal(fechado.consumo.dias.length, 1);
+  assert.equal(fechado.consumo.dia.custo, null, 'sem abastecimento lançado não há preço do litro');
+
+  // o preço do litro e a média real vêm dos abastecimentos do Financeiro
+  const hoje = fechado.hoje as string;
+  const lanc = (km: number, litros: number, valor: number) => jsonReq('POST', '/api/motorista/financeiro/lancamentos', a, { tipo: 'DESPESA', categoria: 'COMBUSTIVEL', valor, litros, km, combustivel: 'GASOLINA', tanque_cheio: true, data: hoje });
+  assert.equal((await lanc(60500, 40, 200)).status, 200);
+  assert.equal((await lanc(61000, 50, 250)).status, 200);
+  const comPreco = (await jsonReq('GET', '/api/motorista/consumo', a)).data;
+  assert.equal(comPreco.preco_litro, 5);
+  assert.equal(comPreco.sugestao_km_por_litro, 10, '500 km ÷ 50 L entre os dois tanques cheios');
+  assert.equal(comPreco.consumo.dia.custo, 0.58);
+  assert.equal(comPreco.consumo.trechos_de_hoje[0].custo, 0.58);
+
+  // trocar o km/L recalcula
+  const novo = await jsonReq('PUT', '/api/motorista/consumo', a, { km_por_litro: 10 });
+  assert.equal(novo.data.consumo.dia.litros, 0.11);
+
+  // privacidade: só km, datas e nome da viagem
+  const texto = JSON.stringify(comPreco);
+  for (const proibido of ['Secreta', '21955554444', 'Medeiros', 'Souza', 'Clara', 'latitude', 'longitude', '-22.9', 'Paula']) assert.ok(!texto.includes(proibido), `vazou: ${proibido}`);
+
+  // isolamento: outro motorista não vê nem herda
+  const outro = (await jsonReq('GET', '/api/motorista/consumo', b)).data;
+  assert.equal(outro.config, null);
+  assert.equal(outro.consumo, null);
+  assert.equal(outro.preco_litro, null);
+
+  // responsável não acessa
+  const aluno = (await jsonReq('POST', '/api/paradas/nova', a, { nomeAluno: 'Aluno Cons', endereco: 'Rua C, 1', pontoReferencia: '', escola: 'Esc', nomeResponsavel: 'R', telefoneResponsavel: '21988887777' })).data;
+  const resp = await novoResponsavel(aluno.codigoVinculo);
+  const r = await jsonReq('GET', '/api/motorista/consumo', resp);
+  assert.ok(r.status === 401 || r.status === 403, 'responsável não vê o consumo do motorista');
+  assert.equal((await jsonReq('PUT', '/api/motorista/consumo', resp, { km_por_litro: 8 })).status === 200, false);
 });
 
 // ---------------------------------------------------------------------------
