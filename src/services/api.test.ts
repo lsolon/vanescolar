@@ -3034,3 +3034,42 @@ test('Indicação entre motoristas: código IND-, link público, origem (link ou
   assert.equal(cfg.status, 200); assert.deepEqual(Object.keys(cfg.data), ['gaId']);
   assert.match(cfg.data.gaId, /^(|G-[A-Z0-9]{6,14})$/);
 });
+
+test('Ids de conta: recusar um pedido da ficha e criar outra conta nunca repete id nem mistura as famílias', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'IdsConta');
+  const token = (await jsonReq('POST', '/api/motorista/pre-cadastro/link', mot)).data.link.url.split('?pre=')[1];
+  const url = `/api/pre-cadastro/${token}`;
+  const sufixo = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const emailDe = (n: string) => `ids_${n}_${sufixo}@teste.com`;
+  const ficha = (nome: string, aluno: string) => ({
+    adesao: true, nomeResponsavel: `Resp ${nome}`, telefoneResponsavel: '(21) 99888-1234', cpf: '529.982.247-25', parentesco: 'Mãe',
+    enderecoResponsavel: 'Rua das Flores, 100, Taquara, 22710-000', contatoEmergenciaNome: 'Tia Rosa', contatoEmergenciaTelefone: '(21) 98777-0000',
+    responsavelFinanceiro: true, email: emailDe(nome), senha: 'senhaSegura123!', senhaRepetida: 'senhaSegura123!',
+    aceiteLgpd: true, aceiteSaude: false, avisosWhatsapp: false, declaracaoResponsavel: true,
+    alunos: [{ nomeAluno: aluno, escola: 'Escola Ids', turno: 'manha', endereco: `Rua do ${aluno}, 9`, pontoReferencia: 'Praça', dataNascimento: '15/03/2016', serie: '4º ano', autorizados: [], saude: '' }]
+  });
+  const paradaDe = async (aluno: string) => ((await jsonReq('GET', '/api/estado', mot)).data.paradas as any[]).find((p) => (p.nome_completo_para_chamada ?? p.nome_aluno) === aluno);
+  const entrar = async (nome: string) => (await jsonReq('POST', '/api/auth/login-email', undefined, { email: emailDe(nome), password: 'senhaSegura123!' }));
+
+  // três famílias enviam a ficha; o motorista recusa a do meio (a conta dela é apagada)
+  for (const [n, a] of [['A', 'Aluno Aaa'], ['B', 'Aluno Bbb'], ['C', 'Aluno Ccc']]) assert.equal((await jsonReq('POST', url, undefined, ficha(n, a))).status, 200);
+  assert.equal((await jsonReq('POST', `/api/paradas/${(await paradaDe('Aluno Bbb')).id}/remover`, mot, {})).status, 200);
+  assert.equal((await entrar('B')).status, 401, 'conta recusada foi apagada');
+  // uma quarta família se cadastra DEPOIS da remoção: com a regra antiga ela herdava o id da conta C
+  assert.equal((await jsonReq('POST', url, undefined, ficha('D', 'Aluno Ddd'))).status, 200);
+  for (const a of ['Aluno Aaa', 'Aluno Ccc', 'Aluno Ddd']) assert.equal((await jsonReq('POST', `/api/paradas/${(await paradaDe(a)).id}/confirmar`, mot, {})).status, 200);
+
+  // cada família vê só o seu filho
+  for (const [n, a] of [['A', 'Aluno Aaa'], ['C', 'Aluno Ccc'], ['D', 'Aluno Ddd']]) {
+    const l = await entrar(n);
+    assert.equal(l.status, 200, `${n}: ${JSON.stringify(l.data)}`);
+    const filhos = (await jsonReq('GET', '/api/estado', l.data.token)).data.filhos as any[];
+    assert.deepEqual(filhos.map((f) => f.nome_aluno), [a], `família ${n} vê só o próprio filho`);
+  }
+
+  // o painel do admin lista as três contas com ids diferentes
+  const contas = ((await jsonReq('GET', '/api/admin/cadastros', adm)).data.cadastros as any[]).filter((u) => String(u.email).endsWith(`_${sufixo}@teste.com`));
+  assert.equal(contas.length, 3, 'A, C e D existem');
+  assert.equal(new Set(contas.map((u: any) => u.id)).size, 3, 'ids diferentes');
+});
