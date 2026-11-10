@@ -2891,6 +2891,8 @@ test('Ficha de adesão: valida CPF, nascimento, saúde e senha; cria o acesso; a
   assert.equal((await jsonReq('POST', url, undefined, ficha({ email: email2 }, { nomeAluno: 'Caco Recusado', autorizados: [], saude: '' }))).status, 200);
   const caco = ((await jsonReq('GET', '/api/estado', mot)).data.paradas as any[]).find((p) => (p.nome_completo_para_chamada ?? p.nome_aluno) === 'Caco Recusado');
   await jsonReq('POST', `/api/paradas/${caco.id}/remover`, mot, {});
-  const fam2 = (await jsonReq('POST', '/api/auth/login-email', undefined, { email: email2, password: 'senhaSegura123!' })).data.token;
-  assert.equal(((await jsonReq('GET', '/api/estado', fam2)).data.filhos ?? []).length, 0);
+  // LGPD: pedido recusado apaga também a conta criada pela ficha (CPF, endereço e saúde saem junto)
+  assert.equal((await jsonReq('POST', '/api/auth/login-email', undefined, { email: email2, password: 'senhaSegura123!' })).status, 401, 'conta do pedido recusado é apagada');
+  // o mesmo e-mail pode tentar de novo depois da recusa
+  assert.equal((await jsonReq('POST', url, undefined, ficha({ email: email2 }, { nomeAluno: 'Caco Recusado', autorizados: [], saude: '' }))).status, 200);
 });
