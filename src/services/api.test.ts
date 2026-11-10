@@ -2724,3 +2724,91 @@ test('Pré-cadastro com vários alunos: irmãos no mesmo envio, tudo ou nada, re
   assert.equal((await jsonReq('POST', url, undefined, { ...resp, ...al('Fabi Antiga') })).status, 200);
   assert.ok((await nomes()).includes('Fabi Antiga'));
 });
+
+test('Ficha de adesão: valida CPF, nascimento, saúde e senha; cria o acesso; a família só vê o aluno depois da aprovação; dados sensíveis não vazam', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'Adesao');
+  const token = (await jsonReq('POST', '/api/motorista/pre-cadastro/link', mot)).data.link.url.split('?pre=')[1];
+  const url = `/api/pre-cadastro/${token}`;
+  const email = `adesao_${Date.now()}_${Math.random().toString(36).slice(2, 6)}@teste.com`;
+  const SAUDE = 'Alergia a amendoim (teste)';
+  const ficha = (extra: any = {}, aluno: any = {}) => ({
+    adesao: true, nomeResponsavel: 'Helena Adesão', telefoneResponsavel: '(21) 99888-1234', cpf: '529.982.247-25', parentesco: 'Mãe',
+    enderecoResponsavel: 'Rua das Flores, 100, Taquara, 22710-000', contatoEmergenciaNome: 'Tia Rosa', contatoEmergenciaTelefone: '(21) 98777-0000',
+    responsavelFinanceiro: true, email, senha: 'senhaSegura123!', senhaRepetida: 'senhaSegura123!',
+    aceiteLgpd: true, aceiteSaude: true, avisosWhatsapp: true, declaracaoResponsavel: true,
+    alunos: [{ nomeAluno: 'Bento Adesão', escola: 'Escola Adesão', turno: 'tarde', endereco: 'Rua do Bento, 9', pontoReferencia: 'Padaria', dataNascimento: '15/03/2016', serie: '4º ano',
+      autorizados: [{ nome: 'Vó Lia', telefone: '(21) 97666-1111' }, { nome: '', telefone: '' }], saude: SAUDE, ...aluno }],
+    ...extra
+  });
+  const nomes = async () => ((await jsonReq('GET', '/api/estado', mot)).data.paradas as any[]).map((p) => p.nome_completo_para_chamada ?? p.nome_aluno);
+
+  // validações: nada é criado enquanto algo estiver errado
+  const erros: [any, RegExp][] = [
+    [ficha({ cpf: '111.111.111-11' }), /CPF/],
+    [ficha({ cpf: '529.982.247-26' }), /CPF/],
+    [ficha({ parentesco: 'Vizinho' }), /parentesco/i],
+    [ficha({ enderecoResponsavel: 'Rua' }), /endereço/i],
+    [ficha({ contatoEmergenciaTelefone: '123' }), /emerg/i],
+    [ficha({ email: 'sem-arroba' }), /e-mail/i],
+    [ficha({ senha: 'curta', senhaRepetida: 'curta' }), /10 caracteres/],
+    [ficha({ senhaRepetida: 'outraSenha123!' }), /não são iguais/],
+    [ficha({ declaracaoResponsavel: false }), /responsável legal/],
+    [ficha({ aceiteSaude: false }), /saúde/i],
+    [ficha({}, { dataNascimento: '31/02/2016' }), /nascimento/i],
+    [ficha({}, { dataNascimento: '01/01/2999' }), /nascimento/i],
+    [ficha({}, { serie: '' }), /série/i],
+    [ficha({}, { autorizados: [{ nome: 'Só nome', telefone: '' }] }), /autorizada/i]
+  ];
+  for (const [corpo, re] of erros) {
+    const r = await jsonReq('POST', url, undefined, corpo);
+    assert.equal(r.status, 400, JSON.stringify(r.data)); assert.match(r.data.error, re);
+  }
+  assert.ok(!(await nomes()).includes('Bento Adesão'), 'nada foi criado');
+  assert.equal((await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'senhaSegura123!' })).status, 401, 'conta não existe');
+
+  // envio válido: cria o aluno pendente e a conta do responsável
+  const ok = await jsonReq('POST', url, undefined, ficha());
+  assert.equal(ok.status, 200, JSON.stringify(ok.data)); assert.deepEqual(ok.data, { sucesso: true });
+  assert.equal((await jsonReq('POST', url, undefined, ficha({}, { nomeAluno: 'Outro Nome' }))).status, 400, 'e-mail já usado');
+
+  // o motorista vê os dados de cuidado, mas nunca CPF nem endereço do responsável
+  const lista: any[] = (await jsonReq('GET', '/api/estado', mot)).data.paradas;
+  const bento = lista.find((p) => (p.nome_completo_para_chamada ?? p.nome_aluno) === 'Bento Adesão');
+  assert.ok(bento); assert.equal(bento.vinculo, 'PENDENTE');
+  assert.equal(bento.saude, SAUDE); assert.equal(bento.aluno_serie, '4º ano'); assert.equal(bento.aluno_maior_idade, false);
+  assert.equal(bento.autorizados_buscar.length, 1); assert.equal(bento.responsavel_parentesco, 'Mãe');
+  const brutoMot = JSON.stringify((await jsonReq('GET', '/api/estado', mot)).data);
+  assert.ok(!brutoMot.includes('52998224725') && !brutoMot.includes('Rua das Flores'), 'CPF e endereço do responsável não vão ao motorista');
+  assert.ok(!brutoMot.includes('usuario_pre_id'));
+
+  // a família entra com o e-mail e a senha criados, mas ainda não enxerga o aluno (vaga não aprovada)
+  const login = await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'senhaSegura123!' });
+  assert.equal(login.status, 200, JSON.stringify(login.data));
+  const fam: string = login.data.token;
+  const antes = await jsonReq('GET', '/api/estado', fam);
+  assert.equal((antes.data.filhos ?? []).length, 0, 'sem filho antes da aprovação');
+  assert.ok(!JSON.stringify(antes.data).includes('Bento'));
+
+  // aprovação: liga a conta ao aluno
+  assert.equal((await jsonReq('POST', `/api/paradas/${bento.id}/confirmar`, mot, {})).status, 200);
+  const depois = await jsonReq('GET', '/api/estado', fam);
+  assert.equal(depois.data.filhos.length, 1); assert.equal(depois.data.filhos[0].nome_aluno, 'Bento Adesão');
+  const brutoFam = JSON.stringify(depois.data);
+  for (const segredo of [SAUDE, '52998224725', '529.982.247-25', 'Rua do Bento', 'Vó Lia', 'Tia Rosa', 'Rua das Flores', '997666111']) {
+    assert.ok(!brutoFam.includes(segredo), `a família não recebe: ${segredo}`);
+  }
+
+  // o aviso de WhatsApp pós-aprovação não traz código nem senha
+  const conv = await jsonReq('GET', `/api/paradas/${bento.id}/convite`, mot);
+  assert.equal(conv.data.disponivel, true);
+  assert.ok(!conv.data.codigoVinculo); assert.match(conv.data.mensagem, /vaga de Bento está confirmada/); assert.ok(!conv.data.mensagem.includes('senhaSegura'));
+
+  // recusar não liga ninguém: o aluno recusado fica sem acesso
+  const email2 = `adesao2_${Date.now()}_${Math.random().toString(36).slice(2, 6)}@teste.com`;
+  assert.equal((await jsonReq('POST', url, undefined, ficha({ email: email2 }, { nomeAluno: 'Caco Recusado', autorizados: [], saude: '' }))).status, 200);
+  const caco = ((await jsonReq('GET', '/api/estado', mot)).data.paradas as any[]).find((p) => (p.nome_completo_para_chamada ?? p.nome_aluno) === 'Caco Recusado');
+  await jsonReq('POST', `/api/paradas/${caco.id}/remover`, mot, {});
+  const fam2 = (await jsonReq('POST', '/api/auth/login-email', undefined, { email: email2, password: 'senhaSegura123!' })).data.token;
+  assert.equal(((await jsonReq('GET', '/api/estado', fam2)).data.filhos ?? []).length, 0);
+});

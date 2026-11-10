@@ -202,6 +202,8 @@ export interface ParadaMotoristaSanitizada {
   viagem_nomeada_id?: string;
   horario_da_escola?: boolean;
   vinculo?: 'PENDENTE' | 'CONFIRMADO' | 'RECUSADO';
+  /** Ficha de adesão (só o motorista vê): dados extras que a família informou. */
+  adesao?: { parentesco?: string; serie?: string; nascimento?: string; maiorIdade?: boolean; saude?: string; autorizados?: { nome: string; telefone: string }[]; emergencia?: { nome: string; telefone: string }; responsavelNome?: string };
   /** Escola do aluno (para a solicitação pendente) */
   escola_nome?: string;
   hora_embarque?: string;
