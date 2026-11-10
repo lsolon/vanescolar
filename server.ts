@@ -26,6 +26,7 @@ import * as CON from './consumo';
 import * as RR from './src/services/rotaRuas';
 import { preverRota } from './src/services/atrasoRota';
 import { hashPassword, verifyPassword, upgradePasswordHash } from './senhas';
+import { proximoIdUsuario, idsDuplicados } from './idsUsuario';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -269,6 +270,19 @@ function getSeedUsers(): UserRecord[] {
 }
 
 let usersDB: UserRecord[] = getSeedUsers();
+/** Maior id de usuário já entregue. Fica salvo junto das configurações para que um id apagado nunca seja reutilizado. */
+let ultimoIdUsuario = 0;
+/** Único ponto que cria ids de conta: nunca repete um id de conta existente nem um ainda referenciado por algum aluno. */
+function novoIdUsuario(): number {
+  const id = proximoIdUsuario(usersDB, serverState.paradas as any[], ultimoIdUsuario);
+  ultimoIdUsuario = id;
+  return id;
+}
+/** Alarme: dois usuários com o mesmo id se sobrescrevem no banco. Não corrige sozinho (as referências seriam ambíguas). */
+function alertarIdsDuplicados(origem: string) {
+  const rep = idsDuplicados(usersDB);
+  if (rep.length) console.error(`[ALERTA] Ids de usuário repetidos (${origem}): ${rep.join(', ')}. Dois usuários com o mesmo id se sobrescrevem no banco.`);
+}
 /** Mensalidades (config por aluno + baixas de pagamento), separadas por motorista. */
 const mensalidadesDB: M.MensalidadesDB = M.novoMensalidadesDB();
 /** Financeiro do motorista (despesas, receitas extras, custos fixos, abastecimentos). Cada motorista só enxerga o seu. */
@@ -1214,6 +1228,8 @@ async function startServer() {
         if (t?.trechoAtual && typeof t.trechoAtual === 'object' && (t.trechoAtual.sentido === 'IDA' || t.trechoAtual.sentido === 'VOLTA')) trip.trechoAtual = t.trechoAtual;
       }
     }
+    if (Number.isFinite(Number(saved.settings?.ultimoIdUsuario))) ultimoIdUsuario = Math.max(ultimoIdUsuario, Math.floor(Number(saved.settings.ultimoIdUsuario)));
+    alertarIdsDuplicados('ao carregar');
     if (Array.isArray(saved.settings?.adminEmails)) {
       for (const e of saved.settings.adminEmails) {
         const email = String(e).toLowerCase().trim();
@@ -1236,7 +1252,7 @@ async function startServer() {
       paradas: serverState.paradas,
       trips: Object.fromEntries([...tripsDB.entries()].map(([id, t]) => [id, tripParaDisco(t)]))
     },
-    settings: { adminEmails: ADMIN_EMAILS },
+    settings: { adminEmails: ADMIN_EMAILS, ultimoIdUsuario },
     mensalidades: mensalidadesDB,
     financeiro: financeiroDB,
     mensagens: mensagensDB
@@ -1294,7 +1310,7 @@ async function startServer() {
   // sobrescrevia a da outra). Nas rotas de contas e convites, relê usuários e convites do armazenamento antes
   // de atender e grava logo depois de alterar.
   app.use(async (req: Request, res: Response, next: NextFunction) => {
-    const sensivel = req.path.startsWith('/api/auth/') || req.path.startsWith('/api/admin/') || req.path === '/api/vincular'
+    const sensivel = req.path.startsWith('/api/auth/') || req.path.startsWith('/api/admin/') || req.path === '/api/vincular' || req.path.startsWith('/api/pre-cadastro/')
       || req.path.startsWith('/api/motorista/mensalidades') || req.path.startsWith('/api/mensalidades') || req.path.startsWith('/api/motorista/pix')
       || req.path.startsWith('/api/motorista/financeiro')
       || req.path.startsWith('/api/motorista/mensagens') || req.path.startsWith('/api/conversa');
@@ -1305,6 +1321,7 @@ async function startServer() {
       const saved = await persistence.reloadIfChanged(['users', 'invitations', 'mensalidades', 'financeiro', 'mensagens']);
       if (Array.isArray(saved.users)) {
         usersDB.splice(0, usersDB.length, ...saved.users);
+        alertarIdsDuplicados('ao reler');
         if (!SEED_LOGIN_ENABLED) for (const u of usersDB) if (seedEmails.has(u.email.toLowerCase())) u.passwordHash = '';
       }
       if (Array.isArray(saved.invitations)) driverInvitationsDB.splice(0, driverInvitationsDB.length, ...saved.invitations);
@@ -1437,7 +1454,7 @@ async function startServer() {
     if (!user) {
       if (usersDB.filter((u) => u.email.endsWith('@teste.local')).length >= 100) return null;
       user = {
-        id: usersDB.reduce((m, u) => Math.max(m, u.id), 200) + 1,
+        id: novoIdUsuario(),
         fullName: String(nomeInformado || (papel === 'motorista' ? 'Motorista Teste' : 'Responsável Teste')).slice(0, 60),
         email,
         passwordHash: '',
@@ -1495,7 +1512,7 @@ async function startServer() {
       return res.status(400).json({ error: 'Não foi possível completar o cadastro de motorista com este e-mail.' });
     }
 
-    const newDriverId = usersDB.length + 1;
+    const newDriverId = novoIdUsuario();
 
     const newDriverUser: UserRecord = {
       id: newDriverId,
@@ -1638,7 +1655,7 @@ async function startServer() {
     let user = usersDB.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
     if (!user) {
       user = {
-        id: 200 + usersDB.length + 1,
+        id: novoIdUsuario(),
         fullName: fullName || 'Responsável Google',
         email: email.trim().toLowerCase(),
         passwordHash: '',
@@ -1763,7 +1780,7 @@ async function startServer() {
     }
     const passwordHash = hashPassword(password);
     const newDriver: UserRecord = {
-      id: usersDB.length + 200,
+      id: novoIdUsuario(),
       fullName: fullName.trim(),
       email: email.trim().toLowerCase(),
       passwordHash,
@@ -1943,7 +1960,7 @@ async function startServer() {
     let user = usersDB.find((u) => u.email.toLowerCase() === sanitizedEmail);
     if (!user) {
       user = {
-        id: 999 + usersDB.length,
+        id: novoIdUsuario(),
         fullName: 'Administrador ' + (sanitizedEmail.split('@')[0]),
         email: sanitizedEmail,
         passwordHash: '',
@@ -1989,7 +2006,7 @@ async function startServer() {
 
     const passwordHash = hashPassword(password);
     const newUser: UserRecord = {
-      id: 200 + usersDB.length + 1,
+      id: novoIdUsuario(),
       fullName: fullName.trim(),
       email: email.trim().toLowerCase(),
       ...(loginId ? { loginId } : {}),
@@ -4320,7 +4337,7 @@ async function startServer() {
       const emailJaExiste = usersDB.some((u) => u.email.toLowerCase() === resp!.email) || ADMIN_EMAILS.includes(resp.email);
       if (emailJaExiste) return res.status(400).json({ error: 'Não foi possível completar o cadastro com este e-mail. Use outro e-mail.' });
       const novoUser: UserRecord = {
-        id: 200 + usersDB.length + 1,
+        id: novoIdUsuario(),
         fullName: nomeResp,
         email: resp.email,
         passwordHash: hashPassword(resp.senha),
