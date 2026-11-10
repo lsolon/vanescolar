@@ -662,6 +662,24 @@ export interface PainelManutencao {
 }
 export interface NovoItemManutencao { nome: string; intervalo_km?: number | string; intervalo_meses?: number | string; ultimo_km?: number | string; ultima_data?: string }
 
+/** Consumo de combustível estimado (km do GPS ÷ km/L informado). Só km, datas e nome da viagem: nada de aluno. */
+export interface TotalConsumo { de: string; ate: string; km: number; litros: number; custo: number | null; trechos: number; sem_gps: number }
+export interface DiaConsumo { data: string; km: number; litros: number; custo: number | null; trechos: number }
+export interface TrechoConsumoDoDia { sentido: 'IDA' | 'VOLTA'; viagem: string | null; km: number | null; litros: number | null; custo: number | null; em_andamento: boolean }
+export interface ConsumoEstimado {
+  km_por_litro: number; preco_litro: number | null;
+  dia: TotalConsumo; semana: TotalConsumo; quinzena: TotalConsumo; mes: TotalConsumo;
+  dias: DiaConsumo[]; trechos_de_hoje: TrechoConsumoDoDia[];
+}
+export interface PainelConsumo {
+  hoje: string;
+  config: { km_por_litro: number; atualizado_em: string } | null;
+  /** média real calculada pelos abastecimentos de tanque cheio do Financeiro, se houver */
+  sugestao_km_por_litro: number | null;
+  preco_litro: number | null;
+  consumo: ConsumoEstimado | null;
+}
+
 export interface ModuloMotorista { chave: string; nome: string; descricao: string; padrao: boolean; ativo: boolean }
 export interface ResumoFinanceiro {
   mes: string; hoje: string;
@@ -2120,6 +2138,20 @@ export const TransportRepository = {
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível apagar.');
     return d as PainelManutencao;
+  },
+
+  // ---- Consumo de combustível estimado (módulo desligado por padrão) ----
+  async consumoCombustivel(): Promise<PainelConsumo> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/consumo`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível carregar o consumo.');
+    return d as PainelConsumo;
+  },
+  async definirKmPorLitro(kmPorLitro: number | string): Promise<PainelConsumo> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/consumo`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ km_por_litro: kmPorLitro }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível salvar o consumo.');
+    return d as PainelConsumo;
   },
 
   /** Público (sem login): nome e bairro do motorista a partir do link ?m=MOT-… */

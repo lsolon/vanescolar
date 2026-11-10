@@ -22,6 +22,7 @@ import * as P from './push';
 import webpush from 'web-push';
 import * as G from './mensagens';
 import * as HV from './historico';
+import * as CON from './consumo';
 import * as RR from './src/services/rotaRuas';
 import { hashPassword, verifyPassword, upgradePasswordHash } from './senhas';
 
@@ -154,6 +155,8 @@ interface UserRecord {
   pushSubs?: P.AssinaturaPush[];
   /** Motorista: revisões da van (óleo, pneus...) com intervalo em km e/ou meses. Dados só dele. */
   manutencao?: MAN.ItemManutencao[];
+  /** Motorista: km que a van faz com 1 litro, informado por ele (módulo "consumo"). Dado só dele. */
+  consumo?: CON.ConfigConsumo;
   /** Motorista: local de cada escola atendida (chave = nome normalizado) */
   escolasLocal?: Record<string, { latitude: number; longitude: number }>;
   /** Motorista: horários de entrada e saída por escola e turno (definidos uma vez; o aluno novo herda) */
@@ -2098,6 +2101,39 @@ async function startServer() {
     persistence.scheduleSave();
     auditLog('MODULO_ALTERADO', rec.email, `${req.body.chave}=${req.body.ativo ? 'ligado' : 'desligado'}`);
     res.json({ modulos: MOD.listarModulos(rec.modulos, liberadosDe(rec)) });
+  });
+
+  // ---- Consumo de combustível estimado (módulo "consumo", desligado por padrão): km/L informado pelo motorista × km do GPS no histórico ----
+  // Só km, datas e nome da viagem: nenhum dado de aluno entra aqui. O preço do litro vem dos abastecimentos do Financeiro.
+  const painelConsumo = (rec: UserRecord, driverId: number) => {
+    const hoje = M.hojeBrasil();
+    const lan = financeiroDB.lancamentos.filter((l) => l.id_motorista === driverId);
+    const precoLitro = CON.precoMedioLitro(lan, hoje);
+    const base = { hoje, config: rec.consumo ?? null, sugestao_km_por_litro: F.calcularConsumo(lan).media_km_por_litro, preco_litro: precoLitro };
+    if (!rec.consumo) return { ...base, consumo: null };
+    const trip = getTrip(driverId);
+    const trechos = (trip.historico ?? []).map((h) => ({ data: h.data, sentido: h.sentido, viagem: h.viagem ?? null, km: h.km, iniciado_em: h.iniciado_em }));
+    const atual = trip.viagem.status === 'EM_ANDAMENTO' && trip.trechoAtual
+      ? { sentido: trip.trechoAtual.sentido, viagem: trip.trechoAtual.viagem ?? null, km: trip.trechoAtual.km }
+      : null;
+    return { ...base, consumo: CON.estimarConsumo(trechos, atual, rec.consumo.km_por_litro, precoLitro, hoje) };
+  };
+
+  app.get('/api/motorista/consumo', authenticate, requireDriver, rateLimiter(60, 60000), (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    res.json(painelConsumo(rec, driverIdFor((req as any).user) as number));
+  });
+
+  app.put('/api/motorista/consumo', authenticate, requireDriver, rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const v = CON.validarConfig(req.body ?? {});
+    if (!v.ok) return res.status(400).json({ error: v.erro });
+    rec.consumo = { km_por_litro: v.km_por_litro, atualizado_em: new Date().toISOString() };
+    persistence.scheduleSave();
+    auditLog('CONSUMO_KML_DEFINIDO', rec.email, `${v.km_por_litro} km/L`);
+    res.json({ sucesso: true, ...painelConsumo(rec, driverIdFor((req as any).user) as number) });
   });
 
   // ---- Manutenção da van por km e por data (módulo "manutencao", desligado por padrão; os dados são só do motorista) ----
