@@ -3279,6 +3279,22 @@ async function startServer() {
     const user = (req as any).user as SessionPayload;
     const parada: any = serverState.paradas.find((p: any) => p.id === parseInt(req.params.id, 10));
     if (!parada || donoDaParada(parada) !== user.userId) return res.status(404).json({ error: 'Parada não encontrada' });
+    const eraPendente = parada.vinculo === 'PENDENTE';
+    // LGPD (política de privacidade, seção 8): ao sair da van, saúde, pessoas autorizadas e contato de emergência não são mais
+    // necessários e são apagados. Em pedido RECUSADO apaga-se também CPF, endereço do responsável e a conta criada na ficha.
+    if (parada.origem === 'ADESAO') {
+      delete parada.saude; delete parada.aceite_saude_em; delete parada.autorizados_buscar; delete parada.contato_emergencia;
+      if (eraPendente) {
+        delete parada.responsavel_cpf; delete parada.responsavel_endereco;
+        const contaId = parada.usuario_pre_id;
+        delete parada.usuario_pre_id;
+        const outras = contaId != null && (serverState.paradas as any[]).some((q: any) => q !== parada && (q.usuario_pre_id === contaId || q.vinculado_usuario_id === contaId));
+        if (contaId != null && !outras) {
+          const i = usersDB.findIndex((u) => u.id === contaId && u.role === 'responsavel' && u.studentId == null);
+          if (i >= 0) { auditLog('USUARIO_REMOVIDO', usersDB[i].email, 'Conta criada pela ficha de adesão removida: pedido recusado pelo motorista'); usersDB.splice(i, 1); }
+        }
+      }
+    }
     parada.vinculo = 'RECUSADO';
     parada.ordem_sequencia = 0;
     delete parada.ordem_volta;
@@ -3863,6 +3879,8 @@ async function startServer() {
   const PRE_MAX_ENVIOS = 30;      // por link
   const PRE_MAX_ALUNOS_POR_ENVIO = 6; // irmãos no mesmo pedido
   const PRE_MAX_PENDENTES = 60;   // aguardando aprovação, por motorista
+  /** Versão dos Termos de Uso e da Política de Privacidade (public/termos.html e public/privacidade.html). Troque junto com os textos. */
+  const VERSAO_TEXTOS_LEGAIS = '1.2';
   const PARENTESCOS = ['Mãe', 'Pai', 'Avó / Avô', 'Tutor(a) legal', 'Outro responsável legal'];
   /** CPF com dígitos verificadores (só números; rejeita 111.111.111-11 e parecidos). */
   const cpfValido = (v: unknown): string | null => {
@@ -4081,7 +4099,7 @@ async function startServer() {
         emailVerified: false,
         phone: tel,
         whatsapp: tel,
-        lgpdConsent: { accepted: true, timestamp: agora, version: 'v1.1-adesao-art14' }
+        lgpdConsent: { accepted: true, timestamp: agora, version: `v${VERSAO_TEXTOS_LEGAIS}-adesao-art14` }
       } as UserRecord;
       usersDB.push(novoUser);
       usuarioPreId = novoUser.id;
@@ -4122,6 +4140,7 @@ async function startServer() {
           responsavel_financeiro: resp.financeiro,
           contato_emergencia: { nome: resp.emergNome, telefone: resp.emergTel },
           aceite_declaracao_em: agora,
+          aceite_textos_versao: VERSAO_TEXTOS_LEGAIS, // versão de /termos.html e /privacidade.html vigente quando a família aceitou
           avisos_whatsapp: b.avisosWhatsapp === true,
           aluno_nascimento: al.nascimento,
           aluno_maior_idade: al.maior === true,
