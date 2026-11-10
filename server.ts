@@ -141,6 +141,17 @@ interface UserRecord {
   whatsapp?: string;
   /** Motorista: código que ele passa aos responsáveis (MOT-XXXXXX) */
   codigoMotorista?: string;
+  /** Motorista: código de indicação (IND-XXXXXX) que ele passa a outros motoristas. Diferente do MOT- (que é das famílias). */
+  codigoIndicacao?: string;
+  /** Motorista indicado: id do motorista que o indicou, e como a indicação foi registrada (link ?ind= ou convite feito pelo admin). */
+  indicadoPor?: number;
+  indicadoOrigem?: 'link' | 'convite';
+  /** Admin: benefício da indicação já concedido ao motorista que indicou (marcado no painel). */
+  beneficioIndicacaoEm?: string;
+  /** Quando a conta foi criada e movimento de acesso (só datas e contagem; sem IP nem aparelho). */
+  criadoEm?: string;
+  ultimoAcesso?: string;
+  acessos?: number;
   /** Responsável: motoristas cujo código já foi informado (só pede uma vez) */
   motoristasVinculados?: number[];
   veiculoModelo?: string;
@@ -189,6 +200,8 @@ interface DriverInvitation {
   usedBy?: string;
   revoked?: boolean;
   nota?: string;
+  /** Motorista que indicou a pessoa convidada (escolhido pelo admin ao gerar o convite). */
+  indicadoPorId?: number;
 }
 
 // O convite fixo de demonstração é público (repositório aberto): só existe com DEMO_MODE=true.
@@ -939,6 +952,33 @@ function acharUsuarioPorLogin(identificador: unknown): UserRecord | undefined {
     : usersDB.find((u) => u.loginId === ident);
 }
 
+/** Registra um login bem-sucedido: só data do último acesso e contagem. */
+function registrarAcesso(u: UserRecord) {
+  u.ultimoAcesso = new Date().toISOString();
+  u.acessos = (u.acessos ?? 0) + 1;
+}
+
+/** Data de cadastro: `criadoEm`; contas antigas usam a data do aceite da LGPD, que é gravada no cadastro. */
+function dataCadastro(u: UserRecord): string | null {
+  return u.criadoEm || u.lgpdConsent?.timestamp || null;
+}
+
+const CODIGO_INDICACAO_RE = /^IND-[A-F0-9]{6}$/;
+function lerCodigoIndicacao(v: unknown): string | null {
+  const c = String(v ?? '').trim().toUpperCase();
+  return CODIGO_INDICACAO_RE.test(c) ? c : null;
+}
+function novoCodigoIndicacao(): string {
+  for (;;) {
+    const c = `IND-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+    if (!usersDB.some((u) => u.codigoIndicacao === c)) return c;
+  }
+}
+function motoristaPorCodigoIndicacao(codigo: unknown): UserRecord | undefined {
+  const c = lerCodigoIndicacao(codigo);
+  return c ? usersDB.find((u) => u.role === 'motorista' && u.codigoIndicacao === c && !u.email.endsWith('@teste.local')) : undefined;
+}
+
 // ---- Horários da escola (informados pelo responsável) e horários previstos da van ----
 const FOLGA_CHEGADA_MIN = 15;   // a van chega à escola esta folga antes da entrada
 const TRAJETO_ESCOLA_MIN = 10;  // do último embarque até a escola
@@ -1411,6 +1451,7 @@ async function startServer() {
 
   app.post('/api/auth/register-motorista', rateLimiter(5, 60000), (req: Request, res: Response) => {
     const { fullName, email, password, phone, vehicleModel, vehiclePlate, invitationCode, lgpdConsent, firebaseUid } = req.body;
+    const indicadorLink = motoristaPorCodigoIndicacao(req.body.indicacaoCodigo);
     const loginId = req.body.loginId ? lerLoginId(req.body.loginId) : undefined;
     if (req.body.loginId && !loginId) {
       return res.status(400).json({ error: 'ID inválido. Use de 3 a 30 letras minúsculas, números, ponto, traço ou sublinhado.' });
@@ -1452,6 +1493,7 @@ async function startServer() {
       passwordHash: password ? hashPassword(password) : '',
       role: 'motorista',
       emailVerified: true,
+      criadoEm: new Date().toISOString(),
       phone: phone || '(21) 98765-4321',
       veiculoModelo: vehicleModel || 'Renault Master Executiva',
       veiculoPlaca: vehiclePlate || 'RIO-2026',
@@ -1462,6 +1504,14 @@ async function startServer() {
       }
     };
 
+    // Indicação: o convite feito pelo admin vale primeiro; sem ele, vale o link ?ind= (código IND- guardado no aparelho).
+    const indicadorConvite = inv.indicadoPorId ? usersDB.find((u) => u.id === inv.indicadoPorId && u.role === 'motorista') : undefined;
+    const indicador = indicadorConvite ?? indicadorLink;
+    if (indicador) {
+      newDriverUser.indicadoPor = indicador.id;
+      newDriverUser.indicadoOrigem = indicadorConvite ? 'convite' : 'link';
+    }
+
     usersDB.push(newDriverUser);
 
     // Marca convite como utilizado
@@ -1469,7 +1519,7 @@ async function startServer() {
     inv.usedAt = new Date().toISOString();
     inv.usedBy = newDriverUser.email;
 
-    auditLog('MOTORISTA_CADASTRADO', newDriverUser.email, `Convite ${inv.code} utilizado com sucesso`);
+    auditLog('MOTORISTA_CADASTRADO', newDriverUser.email, `Convite ${inv.code} utilizado com sucesso${indicador ? ` | indicado por motorista #${indicador.id}` : ''}`);
 
     const token = signToken({ role: 'motorista', userId: newDriverUser.id, email: newDriverUser.email, emailVerified: true }, 12);
     res.json({
@@ -1511,6 +1561,7 @@ async function startServer() {
     const role = isAdmin ? 'admin' : 'motorista';
 
     const token = signToken({ role, userId: user.id, email: user.email, emailVerified: user.emailVerified }, 12);
+    registrarAcesso(user);
     auditLog('LOGIN_MOTORISTA_SUCESSO', user.email, `Motorista autenticado como ${role}`);
     res.json({
       sucesso: true,
@@ -1552,6 +1603,7 @@ async function startServer() {
     const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase()) && (!!verified || user.emailVerified === true);
     const role = isAdmin ? 'admin' : user.role;
     const token = signToken({ role, userId: user.id, email: user.email, studentId: user.studentId, emailVerified: user.emailVerified });
+    registrarAcesso(user);
     auditLog('LOGIN_SUCESSO', user.email, `Login realizado como ${role}`);
     res.json({ sucesso: true, token, role, emailVerified: user.emailVerified, studentId: user.studentId });
   });
@@ -1574,6 +1626,7 @@ async function startServer() {
         passwordHash: '',
         role: 'responsavel',
         emailVerified: true,
+        criadoEm: new Date().toISOString(),
         lgpdConsent: { accepted: true, timestamp: new Date().toISOString(), version: 'v1.0-lgpd-art14' }
       };
       usersDB.push(user);
@@ -1582,6 +1635,7 @@ async function startServer() {
     const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
     const role = isAdmin ? 'admin' : user.role;
     const token = signToken({ role, userId: user.id, email: user.email, studentId: user.studentId, emailVerified: true });
+    registrarAcesso(user);
     auditLog('LOGIN_GOOGLE', user.email, `Autenticado via Google como ${role}`);
     res.json({ sucesso: true, token, role, emailVerified: true, studentId: user.studentId });
   });
@@ -1611,6 +1665,9 @@ async function startServer() {
   app.post('/api/admin/convites-motorista', authenticate, requireAdmin, (req: Request, res: Response) => {
     const user = (req as any).user as SessionPayload;
     const { nota } = req.body;
+    const indicadorId = Number(req.body?.indicadoPorId);
+    const indicador = Number.isInteger(indicadorId) ? usersDB.find((u) => u.id === indicadorId && u.role === 'motorista') : undefined;
+    if (req.body?.indicadoPorId && !indicador) return res.status(400).json({ error: 'Motorista que indicou não encontrado.' });
 
     const code = `DRV-${crypto.randomBytes(5).toString('hex').toUpperCase()}`;
     const newInvitation: DriverInvitation = {
@@ -1619,7 +1676,8 @@ async function startServer() {
       createdAt: new Date().toISOString(),
       expiresAt: Date.now() + 72 * 3600 * 1000,
       used: false,
-      nota: nota || ''
+      nota: nota || '',
+      ...(indicador ? { indicadoPorId: indicador.id } : {})
     };
 
     driverInvitationsDB.push(newInvitation);
@@ -1689,6 +1747,7 @@ async function startServer() {
       passwordHash,
       role: 'motorista',
       emailVerified: true,
+      criadoEm: new Date().toISOString(),
       phone: whatsapp || '(21) 98765-4321',
       whatsapp: whatsapp || '(21) 98765-4321',
       veiculoModelo: veiculoModelo || 'Renault Master Executiva',
@@ -1915,6 +1974,7 @@ async function startServer() {
       passwordHash,
       role: 'responsavel',
       emailVerified: false,
+      criadoEm: new Date().toISOString(),
       lgpdConsent: {
         accepted: true,
         timestamp: new Date().toISOString(),
@@ -1970,6 +2030,103 @@ async function startServer() {
     const mot = /^MOT-[0-9A-F]{6}$/.test(cod) ? usersDB.find((u) => u.role === 'motorista' && u.codigoMotorista === cod) : undefined;
     if (!mot) return res.status(404).json({ error: 'Link da van não encontrado.' });
     res.json({ motorista: String(mot.fullName ?? '').trim().split(/\s+/)[0] || '', bairro: mot.bairro ?? '' });
+  });
+
+  // ==========================================================================
+  // INDICAÇÃO ENTRE MOTORISTAS, PAINEL DE CADASTROS E GOOGLE ANALYTICS
+  // ==========================================================================
+  // Público: o link ?ind=IND-… mostra "indicado por João". Só primeiro nome; resposta igual para código inexistente.
+  app.get('/api/indicacao/:codigo', rateLimiter(30, 60000), (req: Request, res: Response) => {
+    const mot = motoristaPorCodigoIndicacao(req.params.codigo);
+    if (!mot) return res.status(404).json({ error: 'Link de indicação não encontrado.' });
+    res.json({ motorista: String(mot.fullName ?? '').trim().split(/\s+/)[0] || '' });
+  });
+
+  // Público: só o ID de medição do Google Analytics (não é segredo). Vazio = Analytics desligado.
+  app.get('/api/config-publica', rateLimiter(60, 60000), (_req: Request, res: Response) => {
+    const id = String(process.env.GA_MEASUREMENT_ID || '').trim();
+    res.json({ gaId: /^G-[A-Z0-9]{6,14}$/.test(id) ? id : '' });
+  });
+
+  // Motorista: seu código e link de indicação. Só contagens; os indicados não aparecem para quem indicou.
+  app.get('/api/motorista/indicacao', authenticate, requireDriver, (req: Request, res: Response) => {
+    const rec = usersDB.find((u) => u.id === ((req as any).user as SessionPayload).userId);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    if (!rec.codigoIndicacao) { rec.codigoIndicacao = novoCodigoIndicacao(); persistence.scheduleSave(); }
+    const indicados = usersDB.filter((u) => u.indicadoPor === rec.id);
+    const ativos = indicados.filter((u) => serverState.paradas.some((p: any) => p.id_motorista === u.id)).length;
+    res.json({ codigo: rec.codigoIndicacao, indicados: indicados.length, ativos });
+  });
+
+  // Admin: quem se cadastrou e quem acessou (data do cadastro, último acesso, número de acessos, quem indicou).
+  app.get('/api/admin/cadastros', authenticate, requireAdmin, (_req: Request, res: Response) => {
+    const agora = Date.now();
+    const dias = (n: number) => agora - n * 86400000;
+    const lista = usersDB
+      .filter((u) => !u.email.endsWith('@teste.local') && !ADMIN_EMAILS.includes(u.email.toLowerCase()))
+      .map((u) => {
+        const quem = u.indicadoPor ? usersDB.find((x) => x.id === u.indicadoPor) : undefined;
+        return {
+          id: u.id,
+          nome: u.fullName,
+          email: u.email,
+          papel: u.role,
+          criadoEm: dataCadastro(u),
+          ultimoAcesso: u.ultimoAcesso ?? null,
+          acessos: u.acessos ?? 0,
+          emailVerificado: !!u.emailVerified,
+          alunos: u.role === 'motorista' ? serverState.paradas.filter((p: any) => p.id_motorista === u.id).length : filhosDe(u.id, u.studentId).length,
+          indicadoPor: quem ? { id: quem.id, nome: quem.fullName } : null
+        };
+      })
+      .sort((a, b) => String(b.criadoEm ?? '').localeCompare(String(a.criadoEm ?? '')));
+    const desde = (iso: string | null, ms: number) => !!iso && new Date(iso).getTime() >= ms;
+    res.json({
+      sucesso: true,
+      resumo: {
+        motoristas: lista.filter((c) => c.papel === 'motorista').length,
+        responsaveis: lista.filter((c) => c.papel === 'responsavel').length,
+        novos7dias: lista.filter((c) => desde(c.criadoEm, dias(7))).length,
+        novos30dias: lista.filter((c) => desde(c.criadoEm, dias(30))).length,
+        ativos7dias: lista.filter((c) => desde(c.ultimoAcesso, dias(7))).length,
+        nuncaAcessaram: lista.filter((c) => !c.ultimoAcesso).length,
+        indicados: lista.filter((c) => c.indicadoPor).length
+      },
+      cadastros: lista
+    });
+  });
+
+  // Admin: quem indicou quem. "Ativo" = o motorista indicado já tem aluno cadastrado.
+  app.get('/api/admin/indicacoes', authenticate, requireAdmin, (_req: Request, res: Response) => {
+    const porIndicador = new Map<number, UserRecord[]>();
+    for (const u of usersDB) if (u.indicadoPor) porIndicador.set(u.indicadoPor, [...(porIndicador.get(u.indicadoPor) ?? []), u]);
+    const indicadores = [...porIndicador.entries()].flatMap(([id, indicados]) => {
+      const ind = usersDB.find((x) => x.id === id);
+      if (!ind) return [];
+      const itens = indicados
+        .sort((a, b) => String(dataCadastro(b) ?? '').localeCompare(String(dataCadastro(a) ?? '')))
+        .map((u) => {
+          const alunos = serverState.paradas.filter((p: any) => p.id_motorista === u.id).length;
+          return {
+            id: u.id, nome: u.fullName, email: u.email, criadoEm: dataCadastro(u), ultimoAcesso: u.ultimoAcesso ?? null,
+            origem: u.indicadoOrigem ?? null, alunos, ativo: alunos > 0, beneficioEm: u.beneficioIndicacaoEm ?? null
+          };
+        });
+      return [{
+        id: ind.id, nome: ind.fullName, email: ind.email, codigo: ind.codigoIndicacao ?? null,
+        total: itens.length, ativos: itens.filter((i) => i.ativo).length, beneficiosConcedidos: itens.filter((i) => i.beneficioEm).length, indicados: itens
+      }];
+    }).sort((a, b) => b.ativos - a.ativos || b.total - a.total);
+    res.json({ sucesso: true, indicadores });
+  });
+
+  // Admin: marca (ou desmarca) que o benefício desta indicação já foi dado a quem indicou.
+  app.post('/api/admin/indicacoes/:id/beneficio', authenticate, requireAdmin, (req: Request, res: Response) => {
+    const alvo = usersDB.find((u) => u.id === parseInt(req.params.id, 10) && u.indicadoPor);
+    if (!alvo) return res.status(404).json({ error: 'Indicação não encontrada.' });
+    if (req.body?.concedido === false) delete alvo.beneficioIndicacaoEm; else alvo.beneficioIndicacaoEm = new Date().toISOString();
+    auditLog('BENEFICIO_INDICACAO', ((req as any).user as SessionPayload).email, `Benefício da indicação de #${alvo.id} ${alvo.beneficioIndicacaoEm ? 'concedido' : 'desmarcado'}`);
+    res.json({ sucesso: true, beneficioEm: alvo.beneficioIndicacaoEm ?? null });
   });
 
   // ==========================================================================
@@ -4079,6 +4236,7 @@ async function startServer() {
         passwordHash: hashPassword(resp.senha),
         role: 'responsavel',
         emailVerified: false,
+        criadoEm: agora,
         phone: tel,
         whatsapp: tel,
         lgpdConsent: { accepted: true, timestamp: agora, version: 'v1.1-adesao-art14' }

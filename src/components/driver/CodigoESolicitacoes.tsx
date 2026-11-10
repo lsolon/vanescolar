@@ -50,6 +50,32 @@ export const CodigoMotorista: React.FC<{ nome?: string }> = ({ nome }) => {
   );
 };
 
+/** Indicação: o motorista passa o link a colegas; o painel do admin registra quem entrou por ele. Só contagens, sem dados dos indicados. */
+export const IndicarMotorista: React.FC<{ nome?: string }> = ({ nome }) => {
+  const [info, setInfo] = useState<{ codigo: string; indicados: number; ativos: number } | null>(null);
+  const [erro, setErro] = useState<string | null>(null);
+  const [copiado, setCopiado] = useState(false);
+  useEffect(() => { TransportRepository.obterIndicacaoMotorista().then(setInfo).catch((e) => setErro(e.message)); }, []);
+  const link = info ? `${window.location.origin}/?ind=${info.codigo}` : '';
+  const texto = info
+    ? `Olá! Eu uso o VanEscolar para organizar meu transporte escolar (rotas, avisos para os pais e mensalidades) e acho que vai te ajudar também. Conheça por este link: ${link}\n— ${nome || 'um colega motorista'}`
+    : '';
+  const copiar = async () => { try { await navigator.clipboard.writeText(link); setCopiado(true); setTimeout(() => setCopiado(false), 2000); } catch {} };
+  return (
+    <section aria-label="Indicar um colega motorista" className="bg-slate-900 border border-emerald-400/30 rounded-2xl p-4 space-y-2">
+      <h3 className="text-xs font-bold text-emerald-300">Indique um colega motorista</h3>
+      <p className="text-[11px] text-slate-400">Mande seu link para quem trabalha com transporte escolar. Quando ele criar a conta pelo seu link, a indicação fica registrada em seu nome para você receber o benefício.</p>
+      <div className="flex items-center gap-2 flex-wrap">
+        <button type="button" onClick={copiar} disabled={!info} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-200 text-xs font-bold min-h-[44px] cursor-pointer disabled:opacity-50">{copiado ? 'Link copiado!' : 'Copiar link'}</button>
+        <a href={info ? `https://wa.me/?text=${encodeURIComponent(texto)}` : undefined} target="_blank" rel="noreferrer" className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold min-h-[44px] inline-flex items-center">WhatsApp</a>
+      </div>
+      {info && <p className="text-[11px] text-slate-500 break-all">Seu link: <span className="select-all text-slate-300">{link}</span></p>}
+      {info && <p className="text-[11px] text-slate-300">Indicados: <b>{info.indicados}</b> · Já usando o app: <b>{info.ativos}</b></p>}
+      {erro && <p role="alert" className="text-[11px] text-rose-300">{erro}</p>}
+    </section>
+  );
+};
+
 /** Bairro que aparece no cabeçalho ("Van do João • Freguesia") para o motorista e para as famílias. */
 export const BairroDoMotorista: React.FC<{ inicial?: string; nome?: string; onSalvo?: (b: string) => void }> = ({ inicial = '', nome, onSalvo }) => {
   const [bairro, setBairro] = useState(inicial);
