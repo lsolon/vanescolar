@@ -1318,6 +1318,7 @@ export const TransportRepository = {
             hora_prevista: p.hora_prevista,
             hora_ida: p.hora_ida,
             hora_volta: p.hora_volta,
+            chegar_escola_ate: p.chegar_escola_ate,
             escola_entrada: p.escola_entrada,
             escola_saida: p.escola_saida,
             turno: p.turno,
@@ -1515,6 +1516,7 @@ export const TransportRepository = {
               hora_prevista: paradaServidor.hora_prevista,
               hora_ida: paradaServidor.hora_ida,
               hora_volta: paradaServidor.hora_volta,
+              chegar_escola_ate: paradaServidor.chegar_escola_ate,
               escola_entrada: paradaServidor.escola_entrada,
               escola_saida: paradaServidor.escola_saida,
               turno: paradaServidor.turno,
@@ -2212,6 +2214,18 @@ export const TransportRepository = {
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível salvar o bairro.');
     return d.bairro as string;
+  },
+  async obterFolgaChegada(): Promise<{ minutos: number; minimo: number; maximo: number; padrao: number }> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/folga-chegada`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível ler a antecedência.');
+    return d;
+  },
+  async salvarFolgaChegada(minutos: number): Promise<number> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/folga-chegada`, { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify({ minutos }) });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível salvar a antecedência.');
+    return d.minutos as number;
   },
   async obterCodigoMotorista(): Promise<string> {
     const res = await fetch(`${getBaseUrl()}/api/motorista/codigo`, { headers: getAuthHeaders() });

@@ -81,7 +81,7 @@ import { CodigoMotorista, BairroDoMotorista, SolicitacoesPendentes, IndicarMotor
 import { salvarVan, rotuloDaVan } from '../../services/vanPersonalizada';
 import { QuandoSair } from './QuandoSair';
 import { NovoAlunoMotorista, ConviteFamilia, ConvidarFamilias, ImportarAlunos } from './NovoAluno';
-import { EscolasDoMotorista, HorariosPorEscola, RotasIdaVolta, ViagensDoMotorista } from './RotaEEscolas';
+import { EscolasDoMotorista, HorariosPorEscola, FolgaChegadaEscola, RotasIdaVolta, ViagensDoMotorista } from './RotaEEscolas';
 import { GuiaPrimeiroAcesso, useGuiaPrimeiroAcesso } from '../shared/GuiaPrimeiroAcesso';
 import type { AbaMotorista } from '../shared/guiaPassos';
 
@@ -1253,6 +1253,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
     { id: 'bairro', titulo: 'Bairro de atuação', descricao: 'Onde você trabalha', conteudo: (<><BairroDoMotorista inicial={motorista?.bairro} nome={motorista?.nome} onSalvo={carregarDadosZeroCache} /></>) },
     { id: 'viagens', titulo: 'Viagens', descricao: 'Nomes e turnos das suas viagens', conteudo: (<><ViagensDoMotorista versao={paradas.length} onMudou={carregarDadosZeroCache} /></>) },
     { id: 'horarios', titulo: 'Horários das escolas', descricao: 'Entrada e saída, por turno', conteudo: (<><HorariosPorEscola versao={paradas.length} onMudou={carregarDadosZeroCache} /></>) },
+    { id: 'folga', titulo: 'Chegada à escola', descricao: 'Minutos de antecedência da van (10 a 30)', conteudo: (<><FolgaChegadaEscola onMudou={carregarDadosZeroCache} /></>) },
     { id: 'locais', titulo: 'Local das escolas', descricao: 'Ponto de cada escola no mapa', conteudo: (<><EscolasDoMotorista versao={paradas.length} /></>) },
     { id: 'rotas', titulo: 'Rotas de ida e volta', descricao: 'Ordem das paradas em cada sentido', conteudo: (<><RotasIdaVolta sentidoAtivo={sentidoRota} versao={paradas.length} onAplicado={carregarDadosZeroCache} /></>) },
     { id: 'idacesso', titulo: 'ID de acesso', descricao: 'Seu identificador no app', conteudo: (<><MeuIdAcesso /></>) },

@@ -413,3 +413,34 @@ export const ViagensDoMotorista: React.FC<{ versao?: number; onMudou?: () => voi
     </section>
   );
 };
+
+/** Com quantos minutos de antecedência a van chega à escola (10 a 30). Não altera os horários combinados com as famílias. */
+export const FolgaChegadaEscola: React.FC<{ onMudou?: () => void }> = ({ onMudou }) => {
+  const [lim, setLim] = useState({ minimo: 10, maximo: 30, padrao: 15 });
+  const [minutos, setMinutos] = useState<number | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; t: string } | null>(null);
+  useEffect(() => {
+    TransportRepository.obterFolgaChegada().then((d) => { setLim({ minimo: d.minimo, maximo: d.maximo, padrao: d.padrao }); setMinutos(d.minutos); }).catch(() => setMinutos(15));
+  }, []);
+  const opcoes: number[] = [];
+  for (let m = lim.minimo; m <= lim.maximo; m += 5) opcoes.push(m);
+  const escolher = async (m: number) => {
+    const anterior = minutos;
+    setMinutos(m); setMsg(null);
+    try { await TransportRepository.salvarFolgaChegada(m); setMsg({ ok: true, t: 'Salvo.' }); onMudou?.(); }
+    catch (err: any) { setMinutos(anterior); setMsg({ ok: false, t: err.message }); }
+  };
+  return (
+    <section aria-label="Chegada à escola" className="bg-slate-900 border border-amber-400/30 rounded-2xl p-4 space-y-2">
+      <h3 className="text-xs font-bold text-amber-300">Chegada à escola</h3>
+      <p className="text-[11px] text-slate-400">Com quantos minutos antes da entrada a van deve chegar à escola. Vale para a conta de "quando sair" e para os horários previstos. Não muda o horário combinado com as famílias. Padrão: {lim.padrao} min.</p>
+      <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Minutos de antecedência">
+        {opcoes.map((m) => (
+          <button key={m} type="button" role="radio" aria-checked={minutos === m} onClick={() => escolher(m)}
+            className={`px-3 py-2 min-h-[44px] rounded-xl border text-xs font-bold cursor-pointer ${minutos === m ? 'bg-amber-400 text-slate-950 border-amber-400' : 'bg-slate-950 text-slate-300 border-slate-800'}`}>{m} min</button>
+        ))}
+      </div>
+      {msg && <p role="status" className={`text-[11px] ${msg.ok ? 'text-emerald-300' : 'text-rose-300'}`}>{msg.t}</p>}
+    </section>
+  );
+};
