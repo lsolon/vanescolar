@@ -4098,7 +4098,7 @@ async function startServer() {
   const PRE_MAX_ALUNOS_POR_ENVIO = 6; // irmãos no mesmo pedido
   const PRE_MAX_PENDENTES = 60;   // aguardando aprovação, por motorista
   /** Versão dos Termos de Uso e da Política de Privacidade (public/termos.html e public/privacidade.html). Troque junto com os textos. */
-  const VERSAO_TEXTOS_LEGAIS = 'termos-1.2/privacidade-1.3';
+  const VERSAO_TEXTOS_LEGAIS = 'termos-1.3/privacidade-1.3';
   const PARENTESCOS = ['Mãe', 'Pai', 'Avó / Avô', 'Tutor(a) legal', 'Outro responsável legal'];
   /** CPF com dígitos verificadores (só números; rejeita 111.111.111-11 e parecidos). */
   const cpfValido = (v: unknown): string | null => {
