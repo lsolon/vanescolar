@@ -134,6 +134,8 @@ interface UserRecord {
   passwordHash: string;
   role: 'motorista' | 'responsavel';
   emailVerified: boolean;
+  /** Conta criada pela ficha de adesão: só entra no app depois que o motorista aprovar o cadastro (confirmar a vaga). */
+  aguardaAprovacaoMotorista?: boolean;
   totpEnabled?: boolean;
   totpSecret?: string;
   prefs?: { estilo: 'A' | 'B' | 'C'; avisoMin: number };
@@ -1578,6 +1580,7 @@ async function startServer() {
   });
 
   // LOGIN DO RESPONSÁVEL (E-MAIL OU GOOGLE VIA ID TOKEN)
+  const MSG_AGUARDANDO_MOTORISTA = 'Seu cadastro está aguardando a aprovação do motorista. Assim que ele confirmar a vaga, você poderá entrar com este e-mail e esta senha.';
   app.post('/api/auth/login-email', rateLimiter(10, 60000), async (req: Request, res: Response) => {
     const { email, password, idToken } = req.body;
     const verified = idToken ? await verifyFirebaseIdToken(idToken) : null;
@@ -1598,6 +1601,11 @@ async function startServer() {
         return res.status(401).json({ error: 'E-mail ou senha incorretos.' });
       }
       upgradePasswordHash(user, password);
+    }
+    // Ficha de adesão: o cadastro do responsável também precisa ser aceito pelo motorista antes de qualquer acesso.
+    if (user.aguardaAprovacaoMotorista) {
+      auditLog('LOGIN_AGUARDANDO_MOTORISTA', user.email, 'Tentativa de entrada com cadastro ainda não aprovado pelo motorista');
+      return res.status(403).json({ codigo: 'AGUARDANDO_MOTORISTA', error: MSG_AGUARDANDO_MOTORISTA });
     }
 
     const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase()) && (!!verified || user.emailVerified === true);
@@ -1632,6 +1640,10 @@ async function startServer() {
       usersDB.push(user);
     }
 
+    if (user.aguardaAprovacaoMotorista) {
+      auditLog('LOGIN_AGUARDANDO_MOTORISTA', user.email, 'Tentativa de entrada via Google com cadastro ainda não aprovado pelo motorista');
+      return res.status(403).json({ codigo: 'AGUARDANDO_MOTORISTA', error: MSG_AGUARDANDO_MOTORISTA });
+    }
     const isAdmin = ADMIN_EMAILS.includes(user.email.toLowerCase());
     const role = isAdmin ? 'admin' : user.role;
     const token = signToken({ role, userId: user.id, email: user.email, studentId: user.studentId, emailVerified: true });
@@ -3416,6 +3428,7 @@ async function startServer() {
     // Ficha de adesão: o acesso que a família criou passa a enxergar o aluno só agora, com a vaga aprovada.
     if (parada.usuario_pre_id != null) {
       const dono = usersDB.find((u) => u.id === parada.usuario_pre_id && u.role === 'responsavel');
+      if (dono) delete dono.aguardaAprovacaoMotorista; // o motorista aceitou o cadastro: a conta passa a poder entrar
       if (dono && !parada.vinculado_usuario_id) {
         parada.vinculado_usuario_id = dono.id;
         parada.codigo_expirado = true; // o código de convite não é mais necessário
@@ -4254,6 +4267,7 @@ async function startServer() {
         passwordHash: hashPassword(resp.senha),
         role: 'responsavel',
         emailVerified: false,
+        aguardaAprovacaoMotorista: true,
         criadoEm: agora,
         phone: tel,
         whatsapp: tel,

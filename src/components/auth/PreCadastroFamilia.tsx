@@ -216,7 +216,7 @@ export const PreCadastroFamilia: React.FC<{ token: string }> = ({ token }) => {
   if (estado === 'enviado') return moldura(
     <div className="bg-emerald-500/10 border border-emerald-400/40 rounded-2xl p-6 text-center space-y-3 mt-10">
       <h1 className="text-xl font-black text-emerald-300">Adesão enviada!</h1>
-      <p className="text-sm text-slate-200">{qtdEnviada > 1 ? `Recebemos os ${qtdEnviada} alunos. ` : ''}O motorista vai conferir os dados e confirmar a vaga. Quando isso acontecer, você entra no aplicativo com o e-mail e a senha que acabou de criar.</p>
+      <p className="text-sm text-slate-200">{qtdEnviada > 1 ? `Recebemos os ${qtdEnviada} alunos. ` : ''}O motorista vai conferir o seu cadastro e o do aluno. Enquanto ele não aprovar, o seu acesso ao aplicativo fica bloqueado. Depois da aprovação, você entra com o e-mail e a senha que acabou de criar.</p>
       <p className="text-xs text-slate-400">Você já pode fechar esta página.</p>
     </div>
   );
