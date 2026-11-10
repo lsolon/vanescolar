@@ -29,6 +29,7 @@ import { InstalarApp } from '../shared/InstalarApp';
 import { LancarAbastecimento } from './Financeiro';
 import { HistoricoViagens } from './HistoricoViagens';
 import { ModulosAjustes } from './ModulosAjustes';
+import { SecaoRecolhivel } from './SecaoRecolhivel';
 import { useModulos } from '../../hooks/useModulos';
 import { Mensagens, useNaoLidasMotorista } from './Mensagens';
 import { TransportRepository, subscribeToDatabaseChanges, NOME_TURNO } from '../../services/api';
@@ -1130,8 +1131,11 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
         {aba === 'ajustes' && (
           <>
-        <ModulosAjustes lista={modulos.lista} onAlterar={modulos.alterar} />
-        <section className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3" aria-label="Segurança">
+        <SecaoRecolhivel titulo="Módulos" descricao="Ligue só o que você usa">
+<ModulosAjustes lista={modulos.lista} onAlterar={modulos.alterar} />
+</SecaoRecolhivel>
+        <SecaoRecolhivel titulo="Segurança" descricao="Verificação em 2 etapas e Kill-Switch">
+<section className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3" aria-label="Segurança">
           <h3 className="text-sm font-bold text-slate-100">Segurança</h3>
           <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] font-semibold bg-emerald-950/60 border border-emerald-500/30 px-2.5 py-1.5 rounded-lg">
             <ShieldCheck className="w-3.5 h-3.5" />
@@ -1172,7 +1176,9 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           </div>
           <p className="text-[11px] text-slate-400">Kill-Switch bloqueia a sessão e apaga os dados da tela se o aparelho for perdido ou roubado.</p>
         </section>
-        <section className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3" aria-label="Opções do diário">
+</SecaoRecolhivel>
+        <SecaoRecolhivel titulo="Opções do diário" descricao="Endereços dinâmicos e modo de exibição da rota">
+<section className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3" aria-label="Opções do diário">
           <h3 className="text-sm font-bold text-slate-100">Opções do diário</h3>
           <p className="text-[11px] text-slate-400">Endereços completos ficam sempre mascarados na tela (LGPD de menores).</p>
             <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
@@ -1220,15 +1226,16 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
               </div>
             </div>
         </section>
-        <InstalarApp />
-        <CodigoMotorista nome={motorista?.nome} />
-        <IndicarMotorista nome={motorista?.nome} />
-        <BairroDoMotorista inicial={motorista?.bairro} nome={motorista?.nome} onSalvo={carregarDadosZeroCache} />
-        <ViagensDoMotorista versao={paradas.length} onMudou={carregarDadosZeroCache} />
-        <HorariosPorEscola versao={paradas.length} onMudou={carregarDadosZeroCache} />
-        <EscolasDoMotorista versao={paradas.length} />
-        <RotasIdaVolta sentidoAtivo={sentidoRota} versao={paradas.length} onAplicado={carregarDadosZeroCache} />
-        <MeuIdAcesso />
+</SecaoRecolhivel>
+        <SecaoRecolhivel titulo="Instalar o app" descricao="Colocar o VanEscolar na tela do celular"><InstalarApp /></SecaoRecolhivel>
+        <SecaoRecolhivel titulo="Código do motorista" descricao="Código para as famílias acharem você"><CodigoMotorista nome={motorista?.nome} /></SecaoRecolhivel>
+        <SecaoRecolhivel titulo="Indicar um colega" descricao="Convite para outro motorista"><IndicarMotorista nome={motorista?.nome} /></SecaoRecolhivel>
+        <SecaoRecolhivel titulo="Bairro de atuação" descricao="Onde você trabalha"><BairroDoMotorista inicial={motorista?.bairro} nome={motorista?.nome} onSalvo={carregarDadosZeroCache} /></SecaoRecolhivel>
+        <SecaoRecolhivel titulo="Viagens" descricao="Nomes e turnos das suas viagens"><ViagensDoMotorista versao={paradas.length} onMudou={carregarDadosZeroCache} /></SecaoRecolhivel>
+        <SecaoRecolhivel titulo="Horários das escolas" descricao="Entrada e saída, por turno"><HorariosPorEscola versao={paradas.length} onMudou={carregarDadosZeroCache} /></SecaoRecolhivel>
+        <SecaoRecolhivel titulo="Local das escolas" descricao="Ponto de cada escola no mapa"><EscolasDoMotorista versao={paradas.length} /></SecaoRecolhivel>
+        <SecaoRecolhivel titulo="Rotas de ida e volta" descricao="Ordem das paradas em cada sentido"><RotasIdaVolta sentidoAtivo={sentidoRota} versao={paradas.length} onAplicado={carregarDadosZeroCache} /></SecaoRecolhivel>
+        <SecaoRecolhivel titulo="ID de acesso" descricao="Seu identificador no app"><MeuIdAcesso /></SecaoRecolhivel>
 
           </>
         )}
