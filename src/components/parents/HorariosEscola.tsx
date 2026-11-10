@@ -4,16 +4,14 @@ import { CampoHora } from '../shared/CampoHora';
 import type { ProximidadeVan } from '../../services/api';
 import { sentidoPorHorario, minutosAgoraBrasil } from '../../services/sentidoAuto';
 
-const FOLGA_CHEGADA_MIN = 15; // mesma folga do servidor: a van chega à escola 15 min antes da entrada
-const hhmm = (m: number) => { const x = ((Math.round(m) % 1440) + 1440) % 1440; return `${String(Math.floor(x / 60)).padStart(2, '0')}:${String(x % 60).padStart(2, '0')}`; };
-const chegarAte = (entrada?: string) => { const m = /^(\d{1,2}):(\d{2})$/.exec(String(entrada ?? '')); return m ? hhmm(Number(m[1]) * 60 + Number(m[2]) - FOLGA_CHEGADA_MIN) : null; };
-
 interface Props {
   alunoId: number | string;
   entrada?: string;
   saida?: string;
   horaIda?: string | null;
   horaVolta?: string | null;
+  /** horário limite de chegada à escola, calculado no servidor com a antecedência do motorista */
+  chegarEscolaAte?: string | null;
   /** horários definidos pelo motorista para a escola e o turno: o responsável não altera */
   fixoPeloMotorista?: boolean;
   /** situação da van calculada no servidor (sem coordenadas) */
@@ -22,7 +20,7 @@ interface Props {
 }
 
 /** O responsável informa a entrada e a saída da escola; a van calcula os horários de ida e de volta. */
-export const HorariosEscola: React.FC<Props> = ({ alunoId, entrada, saida, horaIda, horaVolta, fixoPeloMotorista, prox, onSalvo }) => {
+export const HorariosEscola: React.FC<Props> = ({ alunoId, entrada, saida, horaIda, horaVolta, chegarEscolaAte, fixoPeloMotorista, prox, onSalvo }) => {
   const informado = !!(entrada && saida);
   const [editando, setEditando] = useState(!informado);
   const [e, setE] = useState(entrada || '');
@@ -79,7 +77,7 @@ export const HorariosEscola: React.FC<Props> = ({ alunoId, entrada, saida, horaI
             const linhas: { rot: string; val: string; dest?: boolean; sub?: string }[] = [];
             if (ida) {
               linhas.push({ rot: 'Entrada na escola', val: entrada || '--:--' });
-              linhas.push({ rot: 'Horário para chegar na escola', val: prox?.chegarEscolaAte || chegarAte(entrada) || '--:--' });
+              linhas.push({ rot: 'Horário para chegar na escola', val: prox?.chegarEscolaAte || chegarEscolaAte || '--:--' });
               if (aBordo && prox?.destino === 'escola') linhas.push({ rot: 'Tempo para chegada na escola', val: prox.minutos != null ? `${prox.minutos} min` : '–', dest: true, sub: 'Tempo real da van até a escola' });
               else if (antes) {
                 linhas.push({ rot: 'Horário combinado no seu ponto', val: prox?.horarioPrevisto || horaIda || '--:--' });

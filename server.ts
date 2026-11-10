@@ -160,6 +160,8 @@ interface UserRecord {
   veiculoPlaca?: string;
   /** Motorista: bairro/região que ele atende (aparece no cabeçalho: "Van do João • Freguesia"). Dado público e opcional. */
   bairro?: string;
+  /** Motorista: com quantos minutos de antecedência a van chega à escola (10 a 30; padrão 15). */
+  folgaChegadaMin?: number;
   /** Motorista: módulos (mensalidades, financeiro...) que ele ligou ou desligou. Ausente = padrões de modulos.ts */
   modulos?: Record<string, boolean>;
   /** Motorista: chave Pix e nome/cidade do recebedor, usados só pelo módulo "pagamento-pix". A chave nunca vai para o log. */
@@ -801,7 +803,7 @@ function computeProximity(driverId: number, studentId: number | undefined, aviso
   if (!r || !studentId) return r;
   const mine: any = serverState.paradas.find((p: any) => donoDaParada(p) === driverId && p.id_aluno === studentId);
   const entrada = lerHorario(mine?.escola_entrada);
-  return { ...r, sentido: sentidoDaViagem(getTrip(driverId)), ...(entrada ? { chegarEscolaAte: deMin(paraMin(entrada) - FOLGA_CHEGADA_MIN) } : {}) };
+  return { ...r, sentido: sentidoDaViagem(getTrip(driverId)), ...(entrada ? { chegarEscolaAte: deMin(paraMin(entrada) - folgaChegadaDe(driverId)) } : {}) };
 }
 /** Proximidade resumida de TODOS os filhos do responsável (um por filho, mesmo de motoristas diferentes), sem coordenadas. */
 function proximidadesDosFilhos(user: { userId?: number; studentId?: number }, avisoMin: number): { id_aluno: number; proximidade: Omit<Proximidade, 'posicao'> | null }[] {
@@ -982,7 +984,13 @@ function motoristaPorCodigoIndicacao(codigo: unknown): UserRecord | undefined {
 }
 
 // ---- Horários da escola (informados pelo responsável) e horários previstos da van ----
-const FOLGA_CHEGADA_MIN = 15;   // a van chega à escola esta folga antes da entrada
+const FOLGA_CHEGADA_PADRAO_MIN = 15;  // padrão: a van chega à escola 15 min antes da entrada
+const FOLGA_CHEGADA_MIN_MIN = 10, FOLGA_CHEGADA_MAX_MIN = 30; // limites que o motorista pode escolher
+/** Antecedência de chegada à escola definida pelo motorista (sempre entre 10 e 30; sem valor, 15). */
+function folgaChegadaDe(driverId: number): number {
+  const v = Number(usersDB.find((u) => u.id === driverId)?.folgaChegadaMin);
+  return Number.isInteger(v) && v >= FOLGA_CHEGADA_MIN_MIN && v <= FOLGA_CHEGADA_MAX_MIN ? v : FOLGA_CHEGADA_PADRAO_MIN;
+}
 const TRAJETO_ESCOLA_MIN = 10;  // do último embarque até a escola
 const MARGEM_SAIDA_MIN = 5;      // folga extra na conta de "quando sair" (trânsito, abrir o portão)
 const APOS_SAIDA_MIN = 10;      // da saída da escola até o primeiro desembarque
@@ -1009,7 +1017,7 @@ function horariosDaParada(p: any): { hora_ida: string | null; hora_volta: string
   };
   const gi = posNo('IDA'), gv = posNo('VOLTA');
   const ida = p.hora_ida_manual
-    ?? (p.escola_entrada ? deMin(paraMin(p.escola_entrada) - FOLGA_CHEGADA_MIN - TRAJETO_ESCOLA_MIN - Math.max(0, gi.n - 1 - gi.idx) * MIN_POR_PARADA) : null);
+    ?? (p.escola_entrada ? deMin(paraMin(p.escola_entrada) - folgaChegadaDe(dono) - TRAJETO_ESCOLA_MIN - Math.max(0, gi.n - 1 - gi.idx) * MIN_POR_PARADA) : null);
   const volta = p.hora_volta_manual
     ?? (p.escola_saida ? deMin(paraMin(p.escola_saida) + APOS_SAIDA_MIN + gv.idx * MIN_POR_PARADA) : null);
   return { hora_ida: ida, hora_volta: volta };
@@ -1017,7 +1025,8 @@ function horariosDaParada(p: any): { hora_ida: string | null; hora_volta: string
 
 function comHorarios(p: any) {
   const h = horariosDaParada(p);
-  return { ...p, ...h, hora_prevista: h.hora_ida ?? 'A definir' };
+  const entrada = lerHorario(p.escola_entrada);
+  return { ...p, ...h, hora_prevista: h.hora_ida ?? 'A definir', chegar_escola_ate: entrada ? deMin(paraMin(entrada) - folgaChegadaDe(donoDaParada(p))) : null };
 }
 
 /** Valida um par latitude/longitude; devolve null se inválido. Arredonda a ~1 m. */
@@ -1035,7 +1044,7 @@ function lerLocal(lat: unknown, lng: unknown): { latitude: number; longitude: nu
 const CAMPOS_PARADA_RESPONSAVEL = [
   'id', 'id_aluno', 'nome_aluno', 'nome_sanitizado', 'status_embarque', 'vinculo',
   'escola_destino', 'escola_entrada', 'escola_saida', 'turno', 'horario_da_escola',
-  'hora_ida', 'hora_volta', 'hora_prevista', 'hora_ida_manual', 'hora_volta_manual',
+  'hora_ida', 'hora_volta', 'hora_prevista', 'chegar_escola_ate', 'hora_ida_manual', 'hora_volta_manual',
   'hora_embarque', 'hora_desembarque', 'motivo_ausencia', 'ausencia_trecho'
 ];
 function paradaParaResponsavel(p: any) {
@@ -2034,6 +2043,27 @@ async function startServer() {
     persistence.scheduleSave();
     auditLog('BAIRRO_MOTORISTA_ALTERADO', rec.email, 'Bairro do cabeçalho atualizado');
     res.json({ bairro: rec.bairro ?? '' });
+  });
+
+  app.get('/api/motorista/folga-chegada', authenticate, requireDriver, (req: Request, res: Response) => {
+    const driverId = driverIdFor(((req as any).user as SessionPayload)) as number;
+    res.json({ minutos: folgaChegadaDe(driverId), minimo: FOLGA_CHEGADA_MIN_MIN, maximo: FOLGA_CHEGADA_MAX_MIN, padrao: FOLGA_CHEGADA_PADRAO_MIN });
+  });
+  // Antecedência de chegada à escola (10 a 30 min). Só muda a conta de chegada e de "quando sair"; não altera os horários combinados com as famílias.
+  app.put('/api/motorista/folga-chegada', authenticate, requireDriver, rateLimiter(20, 60000), (req: Request, res: Response) => {
+    const user = (req as any).user as SessionPayload;
+    const driverId = driverIdFor(user) as number;
+    const rec = usersDB.find((u) => u.id === user.userId) ?? usersDB.find((u) => u.id === driverId);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const v = req.body?.minutos;
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < FOLGA_CHEGADA_MIN_MIN || v > FOLGA_CHEGADA_MAX_MIN) {
+      return res.status(400).json({ error: `Escolha de ${FOLGA_CHEGADA_MIN_MIN} a ${FOLGA_CHEGADA_MAX_MIN} minutos.` });
+    }
+    rec.folgaChegadaMin = v;
+    persistence.scheduleSave();
+    auditLog('FOLGA_CHEGADA_ALTERADA', rec.email, `Antecedência de chegada à escola: ${v} min`);
+    broadcast('HORARIOS_ATUALIZADOS', {}, driverId);
+    res.json({ sucesso: true, minutos: v });
   });
 
   // Público (sem login): o link ?m=MOT-… abre o app com o nome do motorista. Só primeiro nome e bairro; resposta igual para código inexistente.
@@ -3349,7 +3379,7 @@ async function startServer() {
       if (!calc) return res.status(502).json({ error: 'O serviço de rotas não respondeu. Tente de novo em instantes.' });
       base = calc.ordem; fator = calc.fatorRuas;
     }
-    const limite = sentido === 'IDA' ? paraMin(entrada as string) - FOLGA_CHEGADA_MIN : paraMin(saida as string) + APOS_SAIDA_MIN;
+    const limite = sentido === 'IDA' ? paraMin(entrada as string) - folgaChegadaDe(driverId) : paraMin(saida as string) + APOS_SAIDA_MIN;
     const r = RR.encaixarAlunos(sentido, plano, D, limite, base);
     const ids = r.ordem.map((i) => alunos[i].id as number);
     const horarios: Record<number, number> = {};
@@ -3360,8 +3390,8 @@ async function startServer() {
     res.json({
       sucesso: true, sentido, modo,
       limite: deMin(limite),
-      // Nos dois sentidos a van chega à escola FOLGA_CHEGADA_MIN antes (entrada na ida, saída na volta).
-      chegarEscolaAte: deMin(paraMin((sentido === 'IDA' ? entrada : saida) as string) - FOLGA_CHEGADA_MIN),
+      // Nos dois sentidos a van chega à escola a folga do motorista antes (entrada na ida, saída na volta).
+      chegarEscolaAte: deMin(paraMin((sentido === 'IDA' ? entrada : saida) as string) - folgaChegadaDe(driverId)),
       paradas: r.ordem.map((i) => ({ id: alunos[i].id, nome: plano[i].nome, horario: deMin(r.horarios[i]), fixo: plano[i].ancoraMin !== null })),
       avisos: r.avisos.map((a) => a.texto)
     });
@@ -4128,8 +4158,8 @@ async function startServer() {
     if (km > DISTANCIA_MAX_KM) return res.status(409).json({ error: 'Sua posição está muito longe do ponto. Confira o GPS.' });
     const minutos = minutosPorKm(km, 0, 0, fatorRuasDe(driverId, sentido));
     const horarios = horariosDaParada(primeira);
-    // Volta: a van deve estar na escola FOLGA_CHEGADA_MIN antes da saída. Ida: no ponto do primeiro aluno no horário combinado.
-    const alvo = sentido === 'IDA' ? horarios.hora_ida : (lerHorario(primeira.escola_saida) ? deMin(paraMin(primeira.escola_saida) - FOLGA_CHEGADA_MIN) : null);
+    // Volta: a van deve estar na escola a folga do motorista antes da saída. Ida: no ponto do primeiro aluno no horário combinado.
+    const alvo = sentido === 'IDA' ? horarios.hora_ida : (lerHorario(primeira.escola_saida) ? deMin(paraMin(primeira.escola_saida) - folgaChegadaDe(driverId)) : null);
     const agora = agoraMinutosSP();
     const base = { sentido, destino: nomeDestino, distanciaKm: Math.round(km * 10) / 10, minutosAteLa: minutos, margemMin: MARGEM_SAIDA_MIN, agora: deMin(agora) };
     if (!alvo) return res.json({ ...base, horarioAlvo: null, sairAs: null, situacao: 'sem_horario' });

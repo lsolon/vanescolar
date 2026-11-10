@@ -154,6 +154,8 @@ export interface ParadaViagem {
   /** Horários previstos da van (ida e volta) e horário da escola informado pelo responsável */
   hora_ida?: string | null;
   hora_volta?: string | null;
+  /** Horário limite para a van chegar à escola (entrada menos a antecedência do motorista) */
+  chegar_escola_ate?: string | null;
   escola_entrada?: string;
   escola_saida?: string;
   /** Turno do aluno e se os horários vieram da escola/turno definidos pelo motorista */
@@ -195,6 +197,8 @@ export interface ParadaMotoristaSanitizada {
   hora_prevista: string;
   hora_ida?: string | null;
   hora_volta?: string | null;
+  /** Horário limite para a van chegar à escola (entrada menos a antecedência do motorista) */
+  chegar_escola_ate?: string | null;
   escola_entrada?: string;
   escola_saida?: string;
   turno?: 'MANHA' | 'TARDE' | 'NOITE';

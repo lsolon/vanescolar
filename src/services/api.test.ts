@@ -1005,6 +1005,16 @@ test('Card de horários: minutos reais até o ponto antes do embarque e até a e
   const antes = (await jsonReq('GET', '/api/proximidade', resp)).data.proximidade;
   assert.equal(antes.sentido, 'IDA');
   assert.equal(antes.chegarEscolaAte, '11:45');
+  // Antecedência definida pelo motorista: só de 10 a 30 min; muda a chegada à escola, não o horário combinado.
+  assert.equal((await jsonReq('GET', '/api/motorista/folga-chegada', mot)).data.minutos, 15, 'padrão 15 min');
+  assert.equal((await jsonReq('PUT', '/api/motorista/folga-chegada', mot, { minutos: 5 })).status, 400, 'abaixo de 10 recusado');
+  assert.equal((await jsonReq('PUT', '/api/motorista/folga-chegada', mot, { minutos: 45 })).status, 400, 'acima de 30 recusado');
+  assert.equal((await jsonReq('PUT', '/api/motorista/folga-chegada', mot, { minutos: '20' })).status, 400, 'só número inteiro');
+  assert.equal((await jsonReq('PUT', '/api/motorista/folga-chegada', mot, { minutos: 20 })).status, 200);
+  assert.equal((await jsonReq('GET', '/api/motorista/folga-chegada', mot)).data.minutos, 20);
+  assert.equal((await jsonReq('GET', '/api/proximidade', resp)).data.proximidade.chegarEscolaAte, '11:40', 'chegada à escola usa a folga do motorista');
+  assert.equal((await jsonReq('PUT', '/api/motorista/folga-chegada', resp, { minutos: 20 })).status, 403, 'responsável não altera');
+  await jsonReq('PUT', '/api/motorista/folga-chegada', mot, { minutos: 15 });
   assert.ok(typeof antes.minutosAtePonto === 'number' && antes.minutosAtePonto >= 1, 'tempo real até o ponto antes do embarque');
   await jsonReq('POST', `/api/paradas/${A.novaParada.id}/status`, mot, { status: 'EMBARCOU' });
   await jsonReq('POST', '/api/gps', mot, { latitude: -22.90, longitude: -43.20, speedKmH: 30, accuracyMeters: 8 });
