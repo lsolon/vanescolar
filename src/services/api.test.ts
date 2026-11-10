@@ -2864,16 +2864,18 @@ test('Ficha de adesão: valida CPF, nascimento, saúde e senha; cria o acesso; a
   assert.ok(!brutoMot.includes('52998224725') && !brutoMot.includes('Rua das Flores'), 'CPF e endereço do responsável não vão ao motorista');
   assert.ok(!brutoMot.includes('usuario_pre_id'));
 
-  // a família entra com o e-mail e a senha criados, mas ainda não enxerga o aluno (vaga não aprovada)
+  // o cadastro do responsável também precisa da aprovação do motorista: antes disso, o acesso fica bloqueado
+  const bloqueado = await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'senhaSegura123!' });
+  assert.equal(bloqueado.status, 403, JSON.stringify(bloqueado.data));
+  assert.equal(bloqueado.data.codigo, 'AGUARDANDO_MOTORISTA'); assert.match(bloqueado.data.error, /aprovação do motorista/);
+  assert.ok(!bloqueado.data.token);
+  assert.equal((await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'senhaErrada999!' })).status, 401, 'senha errada continua 401, sem revelar o estado da conta');
+
+  // aprovação: libera o acesso e liga a conta ao aluno
+  assert.equal((await jsonReq('POST', `/api/paradas/${bento.id}/confirmar`, mot, {})).status, 200);
   const login = await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'senhaSegura123!' });
   assert.equal(login.status, 200, JSON.stringify(login.data));
   const fam: string = login.data.token;
-  const antes = await jsonReq('GET', '/api/estado', fam);
-  assert.equal((antes.data.filhos ?? []).length, 0, 'sem filho antes da aprovação');
-  assert.ok(!JSON.stringify(antes.data).includes('Bento'));
-
-  // aprovação: liga a conta ao aluno
-  assert.equal((await jsonReq('POST', `/api/paradas/${bento.id}/confirmar`, mot, {})).status, 200);
   const depois = await jsonReq('GET', '/api/estado', fam);
   assert.equal(depois.data.filhos.length, 1); assert.equal(depois.data.filhos[0].nome_aluno, 'Bento Adesão');
   const brutoFam = JSON.stringify(depois.data);

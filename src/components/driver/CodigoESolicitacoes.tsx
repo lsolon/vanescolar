@@ -156,6 +156,7 @@ export const SolicitacoesPendentes: React.FC<{ pendentes: ParadaMotoristaSanitiz
                   {p.adesao.emergencia && <li>Emergência: {p.adesao.emergencia.nome}</li>}
                   {p.adesao.autorizados && p.adesao.autorizados.length > 0 && <li>Autorizados a receber: {p.adesao.autorizados.map((a) => a.nome).join(', ')}</li>}
                   {p.adesao.saude && <li className="text-amber-200">Saúde: {p.adesao.saude}</li>}
+                  <li className="text-sky-200">Ao confirmar, o cadastro e o acesso do responsável também são liberados.</li>
                 </ul>
               )}
             </div>
