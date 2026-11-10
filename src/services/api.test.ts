@@ -2896,3 +2896,95 @@ test('Ficha de adesão: valida CPF, nascimento, saúde e senha; cria o acesso; a
   // o mesmo e-mail pode tentar de novo depois da recusa
   assert.equal((await jsonReq('POST', url, undefined, ficha({ email: email2 }, { nomeAluno: 'Caco Recusado', autorizados: [], saude: '' }))).status, 200);
 });
+
+test('Indicação entre motoristas: código IND-, link público, origem (link ou convite), painel de cadastros e acessos, benefício e privacidade', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const sufixo = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const cadastrar = async (nome: string, extra: any = {}, convite: any = {}) => {
+    const conv = await jsonReq('POST', '/api/admin/convites-motorista', adm, { nota: nome, ...convite });
+    if (conv.status !== 200) return { conv, reg: null, email: '' };
+    const email = `ind_${nome.toLowerCase()}_${sufixo}@teste.com`;
+    const reg = await jsonReq('POST', '/api/auth/register-motorista', undefined, {
+      fullName: `${nome} Indicação`, email, password: 'senhaSegura123!', phone: '21999990000',
+      vehicleModel: 'Van', vehiclePlate: 'AAA-0000', invitationCode: conv.data.invitation.code, lgpdConsent: true, ...extra
+    });
+    return { conv, reg, email };
+  };
+
+  // Quem indica recebe um código IND- (diferente do MOT-) e uma contagem sem nomes
+  const a = await cadastrar('Alice');
+  const tokenA: string = a.reg!.data.token;
+  const info0 = await jsonReq('GET', '/api/motorista/indicacao', tokenA);
+  assert.equal(info0.status, 200);
+  assert.match(info0.data.codigo, /^IND-[0-9A-F]{6}$/);
+  assert.deepEqual([info0.data.indicados, info0.data.ativos], [0, 0]);
+  const codigoA: string = info0.data.codigo;
+  assert.equal((await jsonReq('GET', '/api/motorista/indicacao', tokenA)).data.codigo, codigoA, 'o código não muda a cada consulta');
+
+  // Link público: só o primeiro nome; código inexistente ou fora do formato dá o mesmo 404
+  const pub = await jsonReq('GET', `/api/indicacao/${codigoA}`);
+  assert.equal(pub.status, 200); assert.deepEqual(Object.keys(pub.data), ['motorista']); assert.equal(pub.data.motorista, 'Alice');
+  assert.equal((await jsonReq('GET', '/api/indicacao/IND-000000')).status, 404);
+  assert.equal((await jsonReq('GET', '/api/indicacao/qualquer-coisa')).status, 404);
+
+  // Cadastro por link (?ind=): fica registrado; código inválido é ignorado sem impedir o cadastro
+  const b = await cadastrar('Bruno', { indicacaoCodigo: codigoA });
+  assert.ok(b.reg!.data?.token);
+  const lixo = await cadastrar('Lixo', { indicacaoCodigo: 'IND-ZZZZZZ' });
+  assert.ok(lixo.reg!.data?.token, 'código de indicação inválido não bloqueia o cadastro');
+
+  // Convite com indicador escolhido pelo admin: vale mesmo sem link; convite com indicador inexistente é recusado
+  const idA = ((await jsonReq('GET', '/api/admin/cadastros', adm)).data.cadastros as any[]).find((c) => c.email === a.email).id;
+  const c = await cadastrar('Carla', {}, { indicadoPorId: idA });
+  assert.ok(c.reg!.data?.token);
+  assert.equal((await cadastrar('Dora', {}, { indicadoPorId: 999999 })).conv.status, 400);
+
+  // Painel de cadastros: data, acessos, quem indicou; contas de teste e admins ficam de fora
+  await jsonReq('POST', '/api/auth/login-motorista', undefined, { email: b.email, password: 'senhaSegura123!' });
+  await jsonReq('POST', '/api/auth/login-motorista', undefined, { email: b.email, password: 'senhaSegura123!' });
+  const cad = await jsonReq('GET', '/api/admin/cadastros', adm);
+  assert.equal(cad.status, 200);
+  const lista = cad.data.cadastros as any[];
+  const regB = lista.find((x) => x.email === b.email);
+  assert.equal(regB.papel, 'motorista'); assert.equal(regB.indicadoPor.nome, 'Alice Indicação'); assert.ok(regB.criadoEm);
+  assert.ok(regB.ultimoAcesso && regB.acessos >= 2, 'logins contam acessos e guardam o último');
+  assert.equal(lista.find((x) => x.email === c.email).indicadoPor.nome, 'Alice Indicação');
+  assert.equal(lista.find((x) => x.email === lixo.email).indicadoPor, null);
+  assert.ok(!lista.some((x) => /@teste\.local$/.test(x.email)) && !lista.some((x) => x.email === 'leandrosolon@gmail.com'));
+  assert.ok(!JSON.stringify(cad.data).includes('passwordHash') && !JSON.stringify(cad.data).includes('senhaSegura'));
+  assert.ok(cad.data.resumo.indicados >= 2 && cad.data.resumo.novos7dias >= 4);
+
+  // Painel de indicações: Alice com 2 indicados; "ativo" só depois do primeiro aluno; benefício marcado e desmarcado
+  const tokenB = (await jsonReq('POST', '/api/auth/login-motorista', undefined, { email: b.email, password: 'senhaSegura123!' })).data.token;
+  let ind = ((await jsonReq('GET', '/api/admin/indicacoes', adm)).data.indicadores as any[]).find((i) => i.id === idA);
+  assert.equal(ind.total, 2); assert.equal(ind.ativos, 0);
+  assert.deepEqual(new Set(ind.indicados.map((i: any) => i.origem)), new Set(['link', 'convite']));
+  assert.equal((await jsonReq('POST', '/api/paradas/nova', tokenB, { nomeAluno: 'Aluno do Bruno', endereco: 'Rua B, 2', pontoReferencia: '', escola: 'Escola B', nomeResponsavel: 'Resp B', telefoneResponsavel: '21988887777' })).status, 200);
+  ind = ((await jsonReq('GET', '/api/admin/indicacoes', adm)).data.indicadores as any[]).find((i) => i.id === idA);
+  assert.equal(ind.ativos, 1);
+  const idB = ind.indicados.find((i: any) => i.origem === 'link').id;
+  assert.equal((await jsonReq('POST', `/api/admin/indicacoes/${idB}/beneficio`, adm, { concedido: true })).status, 200);
+  ind = ((await jsonReq('GET', '/api/admin/indicacoes', adm)).data.indicadores as any[]).find((i) => i.id === idA);
+  assert.equal(ind.beneficiosConcedidos, 1);
+  await jsonReq('POST', `/api/admin/indicacoes/${idB}/beneficio`, adm, { concedido: false });
+  assert.equal((((await jsonReq('GET', '/api/admin/indicacoes', adm)).data.indicadores as any[]).find((i) => i.id === idA)).beneficiosConcedidos, 0);
+  assert.equal((await jsonReq('POST', `/api/admin/indicacoes/${idA}/beneficio`, adm, { concedido: true })).status, 404, 'só quem foi indicado tem benefício');
+
+  // Privacidade: quem indicou vê só contagens (nunca nome ou e-mail dos indicados)
+  const infoA = await jsonReq('GET', '/api/motorista/indicacao', tokenA);
+  assert.deepEqual([infoA.data.indicados, infoA.data.ativos], [2, 1]);
+  assert.ok(!JSON.stringify(infoA.data).includes('Bruno') && !JSON.stringify(infoA.data).includes('@teste.com'));
+
+  // Só o admin vê os painéis; responsável não usa a indicação de motorista
+  for (const rota of ['/api/admin/cadastros', '/api/admin/indicacoes']) {
+    assert.equal((await jsonReq('GET', rota)).status, 401);
+    assert.equal((await jsonReq('GET', rota, tokenA)).status, 403);
+  }
+  const resp = await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Resp Indicação', email: `resp_ind_${sufixo}@teste.com`, password: 'senhaSegura123!', lgpdConsent: true });
+  assert.equal((await jsonReq('GET', '/api/motorista/indicacao', resp.data.token)).status, 403);
+
+  // Google Analytics: a configuração pública só traz o ID de medição (ou vazio)
+  const cfg = await jsonReq('GET', '/api/config-publica');
+  assert.equal(cfg.status, 200); assert.deepEqual(Object.keys(cfg.data), ['gaId']);
+  assert.match(cfg.data.gaId, /^(|G-[A-Z0-9]{6,14})$/);
+});

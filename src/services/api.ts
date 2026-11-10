@@ -788,6 +788,8 @@ export const TransportRepository = {
     vehiclePlate: string;
     invitationCode: string;
     lgpdConsent: boolean;
+    /** Código IND-… do link de indicação (guardado no aparelho). Opcional. */
+    indicacaoCodigo?: string;
   }) {
     await sleep();
     
@@ -852,13 +854,57 @@ export const TransportRepository = {
     }
   },
 
-  async gerarConviteMotorista(nota?: string) {
+  async gerarConviteMotorista(nota?: string, indicadoPorId?: number) {
     const res = await fetch(`${getBaseUrl()}/api/admin/convites-motorista`, {
       method: 'POST',
       headers: getAuthHeaders(true),
-      body: JSON.stringify({ nota })
+      body: JSON.stringify({ nota, ...(indicadoPorId ? { indicadoPorId } : {}) })
     });
     return handleAdminResponse(res);
+  },
+
+  /** Admin: quem se cadastrou, quando, último acesso, número de acessos e quem indicou. */
+  async listarCadastrosAdmin() {
+    const res = await fetch(`${getBaseUrl()}/api/admin/cadastros`, { headers: getAuthHeaders(true) });
+    return handleAdminResponse(res);
+  },
+
+  /** Admin: motoristas que indicaram outros, com os indicados e o benefício concedido. */
+  async listarIndicacoesAdmin() {
+    const res = await fetch(`${getBaseUrl()}/api/admin/indicacoes`, { headers: getAuthHeaders(true) });
+    return handleAdminResponse(res);
+  },
+
+  async marcarBeneficioIndicacao(idIndicado: number, concedido: boolean) {
+    const res = await fetch(`${getBaseUrl()}/api/admin/indicacoes/${idIndicado}/beneficio`, {
+      method: 'POST',
+      headers: getAuthHeaders(true),
+      body: JSON.stringify({ concedido })
+    });
+    return handleAdminResponse(res);
+  },
+
+  /** Motorista: código IND-… e contagem de indicados (sem dados deles). */
+  async obterIndicacaoMotorista(): Promise<{ codigo: string; indicados: number; ativos: number }> {
+    const res = await fetch(`${getBaseUrl()}/api/motorista/indicacao`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível obter o código de indicação.');
+    return d;
+  },
+
+  /** Público: primeiro nome de quem indicou (link ?ind=IND-…). */
+  async indicacaoPublica(codigo: string): Promise<string> {
+    const res = await fetch(`${getBaseUrl()}/api/indicacao/${encodeURIComponent(codigo)}`);
+    if (!res.ok) throw new Error('Indicação não encontrada.');
+    return ((await res.json()).motorista as string) || '';
+  },
+
+  /** Público: ID de medição do Google Analytics ('' = desligado). */
+  async configPublica(): Promise<{ gaId: string }> {
+    const res = await fetch(`${getBaseUrl()}/api/config-publica`);
+    if (!res.ok) return { gaId: '' };
+    const d = await res.json().catch(() => ({}));
+    return { gaId: typeof d.gaId === 'string' ? d.gaId : '' };
   },
 
   async listarConvitesMotorista() {

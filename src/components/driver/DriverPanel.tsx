@@ -75,7 +75,7 @@ import { LiveMap } from '../shared/LiveMap';
 import { SeletorLocal, LocalMarcado } from '../shared/SeletorLocal';
 import { MeuIdAcesso } from '../shared/MeuIdAcesso';
 import { CampoHora } from '../shared/CampoHora';
-import { CodigoMotorista, BairroDoMotorista, SolicitacoesPendentes } from './CodigoESolicitacoes';
+import { CodigoMotorista, BairroDoMotorista, SolicitacoesPendentes, IndicarMotorista } from './CodigoESolicitacoes';
 import { salvarVan, rotuloDaVan } from '../../services/vanPersonalizada';
 import { QuandoSair } from './QuandoSair';
 import { NovoAlunoMotorista, ConviteFamilia, ConvidarFamilias, ImportarAlunos } from './NovoAluno';
@@ -1222,6 +1222,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         </section>
         <InstalarApp />
         <CodigoMotorista nome={motorista?.nome} />
+        <IndicarMotorista nome={motorista?.nome} />
         <BairroDoMotorista inicial={motorista?.bairro} nome={motorista?.nome} onSalvo={carregarDadosZeroCache} />
         <ViagensDoMotorista versao={paradas.length} onMudou={carregarDadosZeroCache} />
         <HorariosPorEscola versao={paradas.length} onMudou={carregarDadosZeroCache} />

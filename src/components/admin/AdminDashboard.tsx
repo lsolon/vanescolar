@@ -15,7 +15,9 @@ import {
   Plus,
   Trash2,
   RefreshCcw,
-  Loader2
+  Loader2,
+  UserPlus,
+  Gift
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -23,11 +25,15 @@ interface AdminDashboardProps {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
-  const [activeTab, setActiveTab] = useState<'METRICS' | 'DRIVERS' | 'INVITES' | 'PARENTS' | 'SETTINGS'>('METRICS');
+  const [activeTab, setActiveTab] = useState<'METRICS' | 'CADASTROS' | 'INDICACOES' | 'DRIVERS' | 'INVITES' | 'PARENTS' | 'SETTINGS'>('METRICS');
   const [metrics, setMetrics] = useState<any>(null);
   const [drivers, setDrivers] = useState<any[]>([]);
   const [invites, setInvites] = useState<any[]>([]);
   const [parents, setParents] = useState<any[]>([]);
+  const [cadastros, setCadastros] = useState<{ resumo: any; lista: any[] } | null>(null);
+  const [filtroPapel, setFiltroPapel] = useState<'TODOS' | 'motorista' | 'responsavel'>('TODOS');
+  const [indicadores, setIndicadores] = useState<any[]>([]);
+  const [convitePorId, setConvitePorId] = useState<string>('');
   const [adminEmails, setAdminEmails] = useState<string[]>([]);
   const [newAdminEmail, setNewAdminEmail] = useState('');
   const [loading, setLoading] = useState(false);
@@ -67,12 +73,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
       if (activeTab === 'METRICS') {
         const data = await TransportRepository.getAdminMetrics();
         setMetrics(data.metrics);
+      } else if (activeTab === 'CADASTROS') {
+        const data = await TransportRepository.listarCadastrosAdmin();
+        setCadastros({ resumo: data.resumo, lista: data.cadastros || [] });
+      } else if (activeTab === 'INDICACOES') {
+        const data = await TransportRepository.listarIndicacoesAdmin();
+        setIndicadores(data.indicadores || []);
       } else if (activeTab === 'DRIVERS') {
         const data = await TransportRepository.listarMotoristasAdmin();
         setDrivers(data.motoristas || []);
       } else if (activeTab === 'INVITES') {
         const data = await TransportRepository.listarConvitesMotorista();
         setInvites(data.convites || []);
+        const mot = await TransportRepository.listarMotoristasAdmin();
+        setDrivers(mot.motoristas || []);
       } else if (activeTab === 'PARENTS') {
         const data = await TransportRepository.listarResponsaveisAdmin();
         setParents(data.responsaveis || []);
@@ -134,8 +148,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
 
   const handleGenerateInvite = async () => {
     try {
-      await TransportRepository.gerarConviteMotorista(invitationNota);
+      await TransportRepository.gerarConviteMotorista(invitationNota, convitePorId ? Number(convitePorId) : undefined);
       setInvitationNota('');
+      setConvitePorId('');
       loadData();
     } catch (err) {
       alert('Erro ao gerar convite');
@@ -331,6 +346,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
             Visão Geral
           </button>
           <button
+            onClick={() => setActiveTab('CADASTROS')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-bold transition-all ${activeTab === 'CADASTROS' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-900'}`}
+          >
+            <UserPlus className="w-5 h-5" />
+            Cadastros e acessos
+          </button>
+          <button
+            onClick={() => setActiveTab('INDICACOES')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-bold transition-all ${activeTab === 'INDICACOES' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-900'}`}
+          >
+            <Gift className="w-5 h-5" />
+            Indicações
+          </button>
+          <button
             onClick={() => setActiveTab('DRIVERS')}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-bold transition-all ${activeTab === 'DRIVERS' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-900'}`}
           >
@@ -403,6 +432,108 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
           )}
 
           {/* TAB: DRIVERS */}
+          {/* TAB: CADASTROS E ACESSOS */}
+          {activeTab === 'CADASTROS' && cadastros && (
+            <div className="space-y-6">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                <h2 className="text-xl font-bold text-white">Cadastros e acessos</h2>
+                <div className="flex gap-2" role="group" aria-label="Filtrar por perfil">
+                  {([['TODOS', 'Todos'], ['motorista', 'Motoristas'], ['responsavel', 'Responsáveis']] as const).map(([v, r]) => (
+                    <button key={v} type="button" onClick={() => setFiltroPapel(v)} className={`px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer ${filtroPapel === v ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-300'}`}>{r}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                {[
+                  ['Motoristas', cadastros.resumo.motoristas],
+                  ['Responsáveis', cadastros.resumo.responsaveis],
+                  ['Novos em 7 dias', cadastros.resumo.novos7dias],
+                  ['Novos em 30 dias', cadastros.resumo.novos30dias],
+                  ['Acessaram em 7 dias', cadastros.resumo.ativos7dias],
+                  ['Nunca acessaram', cadastros.resumo.nuncaAcessaram],
+                  ['Vieram por indicação', cadastros.resumo.indicados]
+                ].map(([r, n]) => (
+                  <div key={String(r)} className="p-4 rounded-2xl bg-slate-950 border border-slate-800">
+                    <p className="text-2xl font-black text-white">{n as number}</p>
+                    <p className="text-[11px] text-slate-400 font-bold">{r}</p>
+                  </div>
+                ))}
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="text-slate-500 font-bold">
+                    <tr>
+                      <th className="pb-4 pr-4">Nome</th>
+                      <th className="pb-4 pr-4">Perfil</th>
+                      <th className="pb-4 pr-4">Cadastro</th>
+                      <th className="pb-4 pr-4">Último acesso</th>
+                      <th className="pb-4 pr-4">Acessos</th>
+                      <th className="pb-4 pr-4">Alunos</th>
+                      <th className="pb-4">Indicado por</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800">
+                    {cadastros.lista.filter((c) => filtroPapel === 'TODOS' || c.papel === filtroPapel).map((c) => (
+                      <tr key={c.id} className="text-slate-300">
+                        <td className="py-3 pr-4"><span className="font-semibold text-white">{c.nome}</span><br /><span className="text-[11px] text-slate-500">{c.email}</span></td>
+                        <td className="py-3 pr-4 text-xs">{c.papel === 'motorista' ? 'Motorista' : 'Responsável'}</td>
+                        <td className="py-3 pr-4 text-xs">{c.criadoEm ? new Date(c.criadoEm).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—'}</td>
+                        <td className="py-3 pr-4 text-xs">{c.ultimoAcesso ? new Date(c.ultimoAcesso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : <span className="text-amber-400">nunca</span>}</td>
+                        <td className="py-3 pr-4 text-xs">{c.acessos}</td>
+                        <td className="py-3 pr-4 text-xs">{c.alunos}</td>
+                        <td className="py-3 text-xs">{c.indicadoPor ? c.indicadoPor.nome : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {cadastros.lista.length === 0 && <p className="text-sm text-slate-500 py-6">Nenhum cadastro ainda.</p>}
+              </div>
+              <p className="text-[11px] text-slate-500">"Acessos" conta logins feitos pelo app (contas antigas começam a contar a partir desta versão). Quem só visitou o site sem criar conta aparece no Google Analytics.</p>
+            </div>
+          )}
+
+          {/* TAB: INDICAÇÕES */}
+          {activeTab === 'INDICACOES' && (
+            <div className="space-y-6">
+              <h2 className="text-xl font-bold text-white">Indicações entre motoristas</h2>
+              <p className="text-xs text-slate-400">"Ativo" quer dizer que o motorista indicado já cadastrou pelo menos um aluno. Marque "Benefício dado" quando entregar o benefício de cada indicação.</p>
+              {indicadores.length === 0 && <p className="text-sm text-slate-500">Nenhuma indicação registrada ainda.</p>}
+              {indicadores.map((ind) => (
+                <div key={ind.id} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="font-bold text-white">{ind.nome}</p>
+                      <p className="text-[11px] text-slate-500">{ind.email}{ind.codigo ? ` · ${ind.codigo}` : ''}</p>
+                    </div>
+                    <p className="text-xs text-slate-300">Indicou <b>{ind.total}</b> · ativos <b>{ind.ativos}</b> · benefícios dados <b>{ind.beneficiosConcedidos}</b></p>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="text-slate-500 font-bold"><tr><th className="pb-2 pr-3">Indicado</th><th className="pb-2 pr-3">Cadastro</th><th className="pb-2 pr-3">Origem</th><th className="pb-2 pr-3">Alunos</th><th className="pb-2 pr-3">Situação</th><th className="pb-2">Benefício</th></tr></thead>
+                      <tbody className="divide-y divide-slate-800">
+                        {ind.indicados.map((i: any) => (
+                          <tr key={i.id} className="text-slate-300">
+                            <td className="py-2 pr-3"><span className="text-white font-semibold">{i.nome}</span><br /><span className="text-[10px] text-slate-500">{i.email}</span></td>
+                            <td className="py-2 pr-3">{i.criadoEm ? new Date(i.criadoEm).toLocaleDateString('pt-BR') : '—'}</td>
+                            <td className="py-2 pr-3">{i.origem === 'link' ? 'Link' : i.origem === 'convite' ? 'Convite do admin' : '—'}</td>
+                            <td className="py-2 pr-3">{i.alunos}</td>
+                            <td className="py-2 pr-3"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${i.ativo ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>{i.ativo ? 'ATIVO' : 'SEM ALUNOS'}</span></td>
+                            <td className="py-2">
+                              <label className="inline-flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" checked={!!i.beneficioEm} onChange={async (e) => { try { await TransportRepository.marcarBeneficioIndicacao(i.id, e.target.checked); loadData(); } catch { alert('Falha ao salvar o benefício'); } }} />
+                                <span className="text-[11px]">{i.beneficioEm ? `Dado em ${new Date(i.beneficioEm).toLocaleDateString('pt-BR')}` : 'Benefício dado'}</span>
+                              </label>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {activeTab === 'DRIVERS' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between mb-6">
@@ -485,6 +616,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
                     placeholder="Nota para o convite..."
                     className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
                   />
+                  <select
+                    value={convitePorId}
+                    onChange={(e) => setConvitePorId(e.target.value)}
+                    aria-label="Indicado por"
+                    className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 max-w-[11rem]"
+                  >
+                    <option value="">Sem indicação</option>
+                    {drivers.map((d) => <option key={d.id} value={d.id}>Indicado por {d.fullName}</option>)}
+                  </select>
                   <button
                     onClick={handleGenerateInvite}
                     className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-500 text-white text-xs font-bold hover:bg-indigo-400 transition-all shadow-lg shadow-indigo-500/20"
@@ -509,7 +649,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
                         </button>
                       )}
                     </div>
-                    <p className="text-xs text-slate-300 mb-4">{inv.nota || 'Sem observações'}</p>
+                    <p className="text-xs text-slate-300 mb-2">{inv.nota || 'Sem observações'}</p>
+                    {inv.indicadoPorId && <p className="text-[10px] text-emerald-400 mb-2">Indicado por: {drivers.find((d) => d.id === inv.indicadoPorId)?.fullName || `motorista #${inv.indicadoPorId}`}</p>}
+                    <div className="mb-2" />
                     <div className="flex items-center justify-between text-[10px] text-slate-500">
                       <span>Criado em: {new Date(inv.createdAt).toLocaleDateString()}</span>
                       <span className={`font-bold ${inv.used ? 'text-emerald-500' : inv.revoked ? 'text-rose-500' : 'text-amber-500'}`}>

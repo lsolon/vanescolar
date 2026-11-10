@@ -9,6 +9,9 @@
 import React, { useState, useEffect } from 'react';
 import { TransportRepository } from '../../services/api';
 import { useVanPersonalizada, rotuloDaVan } from '../../services/vanPersonalizada';
+import { useIndicacao, codigoIndicacaoDaUrl } from '../../services/indicacao';
+import { iniciarAnalytics, registrarTela, registrarEvento } from '../../services/analytics';
+import { AvisoAnalytics } from './AvisoAnalytics';
 import {
   Bus,
   Users,
@@ -52,7 +55,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   const van = useVanPersonalizada();
   const rotuloVan = rotuloDaVan(van);
 
-  const [activePortal, setActivePortal] = useState<'SELECT' | 'DRIVER' | 'PARENT' | 'REGISTER' | 'FORGOT' | 'DRIVER_REGISTER' | 'DRIVER_FORGOT' | 'ADMIN_INVITES'>('SELECT');
+  // Link de indicação (?ind=IND-…): guarda o código no aparelho e já abre o cadastro de motorista.
+  const indic = useIndicacao();
+  const [activePortal, setActivePortal] = useState<'SELECT' | 'DRIVER' | 'PARENT' | 'REGISTER' | 'FORGOT' | 'DRIVER_REGISTER' | 'DRIVER_FORGOT' | 'ADMIN_INVITES'>(() => codigoIndicacaoDaUrl() ? 'DRIVER_REGISTER' : 'SELECT');
+
+  // Google Analytics: só com aceite, só nestas telas públicas, com nome de tela fixo (a URL real nunca é enviada).
+  useEffect(() => { void iniciarAnalytics(); }, []);
+  useEffect(() => { registrarTela(({ SELECT: 'inicio', DRIVER: 'login-motorista', PARENT: 'login-responsavel', REGISTER: 'cadastro-responsavel', FORGOT: 'esqueci-senha', DRIVER_REGISTER: 'cadastro-motorista', DRIVER_FORGOT: 'esqueci-senha-motorista', ADMIN_INVITES: 'convites' } as const)[activePortal]); }, [activePortal]);
+  useEffect(() => { if (indic.codigo) registrarEvento('indicacao_aberta'); }, [indic.codigo]);
 
   // Modo de teste (servidor com MODO_TESTE_SEM_LOGIN=true)
   const [modoTeste, setModoTeste] = useState(false);
@@ -203,8 +213,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         vehicleModel: drvVehicleModel,
         vehiclePlate: drvVehiclePlate,
         invitationCode: drvInvitationCode.trim(),
-        lgpdConsent: drvLgpdConsent
+        lgpdConsent: drvLgpdConsent,
+        ...(indic.codigo ? { indicacaoCodigo: indic.codigo } : {})
       });
+      registrarEvento('cadastro_motorista', { papel: 'motorista', com_indicacao: !!indic.codigo });
       onLoginDriver();
     } catch (err: any) {
       setErroDrvReg(err.message || 'Erro no cadastro do motorista.');
@@ -323,6 +335,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         password: regPassword,
         lgpdConsent
       });
+      registrarEvento('cadastro_responsavel', { papel: 'responsavel' });
       setSucessoReg('Cadastro realizado com sucesso! Verifique seu e-mail para validação.');
       setIsEmailVerified(false);
       setActivePortal('PARENT');
@@ -588,6 +601,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <div>
                 <h2 className="text-lg font-bold text-white">Cadastro de Motorista</h2>
                 <p className="text-xs text-slate-400">Exige Código de Convite emitido por Admin</p>
+                {indic.nome && <p className="text-xs text-amber-300 font-bold mt-1">Você foi indicado por {indic.nome}.</p>}
               </div>
             </div>
 
@@ -1239,6 +1253,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </button>
         </div>
       </div>
+      <AvisoAnalytics />
     </main>
   );
 };
