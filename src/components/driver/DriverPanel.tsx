@@ -29,7 +29,8 @@ import { InstalarApp } from '../shared/InstalarApp';
 import { LancarAbastecimento } from './Financeiro';
 import { HistoricoViagens } from './HistoricoViagens';
 import { ModulosAjustes } from './ModulosAjustes';
-import { SecaoRecolhivel } from './SecaoRecolhivel';
+import { SecaoRecolhivel, SetasOrdem, BarraReordenar } from './SecaoRecolhivel';
+import { useOrdemMenu } from '../../hooks/useOrdemMenu';
 import { useModulos } from '../../hooks/useModulos';
 import { Mensagens, useNaoLidasMotorista } from './Mensagens';
 import { TransportRepository, subscribeToDatabaseChanges, NOME_TURNO } from '../../services/api';
@@ -117,6 +118,9 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
   const [carregando, setCarregando] = useState<boolean>(true);
   const [processandoAcaoId, setProcessandoAcaoId] = useState<number | null>(null);
   const [reordenando, setReordenando] = useState(false);
+  const [editandoOrdem, setEditandoOrdem] = useState(false);
+  const ordemAjustes = useOrdemMenu('ajustes');
+  const ordemMais = useOrdemMenu('mais');
   const [filtroStatus, setFiltroStatus] = useState<string>('TODOS');
   const [mensagemSucesso, setMensagemSucesso] = useState<string | null>(null);
   const [mostrarMapa, setMostrarMapa] = useState<boolean>(true);
@@ -134,6 +138,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
   // Modal de Cadastro de Novo Aluno pelo Motorista
   const [aba, setAba] = useState<AbaMotorista>('diario');
+  useEffect(() => { setEditandoOrdem(false); }, [aba]);
   const guia = useGuiaPrimeiroAcesso('motorista');
   const modulos = useModulos();
   const [verPendentes, setVerPendentes] = useState(false);
@@ -676,24 +681,36 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
         {aba === 'mais' && (
           <section aria-label="Mais opções" className="space-y-2">
-            <h2 className="text-sm font-bold text-slate-200">Mais</h2>
-            {([
-              ['cadastro', 'Cadastrar alunos', 'Convidar famílias, novo aluno e importar lista', UserPlus],
-              ['gestao', 'Gestão', 'Mensalidades, financeiro e controle do negócio', Wallet],
-              ['abastecimento', 'Lançar abastecimento', 'Registrar rápido, direto no posto', Fuel],
-              ['historico', 'Histórico de viagens', 'Cada trecho de ida e volta: horários, alunos e km', History],
-              ['ajustes', 'Rotas e ajustes', 'Horários das escolas, rotas de ida e volta, código', Settings]
-            ] as const).filter(([k]) => (k !== 'gestao' || (!!onAbrirGestao && (modulos.ativo('mensalidades') || modulos.ativo('financeiro') || modulos.ativo('manutencao', false) || modulos.ativo('consumo', false)))) && (k !== 'abastecimento' || modulos.ativo('financeiro'))).map(([k, titulo, desc, Icone]) => (
-              <button key={k} type="button" onClick={() => (k === 'gestao' ? onAbrirGestao?.() : setAba(k))} className="w-full flex items-center gap-3 px-4 py-3 min-h-[60px] rounded-2xl bg-slate-900 border border-slate-800 text-left cursor-pointer active:scale-[0.99]">
-                <Icone className="w-5 h-5 text-amber-300 shrink-0" />
-                <span className="flex-1 min-w-0">
-                  <span className="block text-sm font-bold text-slate-100">{titulo}</span>
-                  <span className="block text-[11px] text-slate-400">{desc}</span>
-                </span>
-                {k === 'cadastro' && pendentes.length > 0 && <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-rose-500 text-white text-[11px] font-black flex items-center justify-center">{pendentes.length}</span>}
-                <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />
-              </button>
-            ))}
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-bold text-slate-200">Mais</h2>
+              <BarraReordenar editando={editandoOrdem} onAlternar={() => setEditandoOrdem(v => !v)} personalizada={ordemMais.personalizada} onRestaurar={ordemMais.restaurar} />
+            </div>
+            {(() => {
+              const itens = ([
+                ['cadastro', 'Cadastrar alunos', 'Convidar famílias, novo aluno e importar lista', UserPlus],
+                ['gestao', 'Gestão', 'Mensalidades, financeiro e controle do negócio', Wallet],
+                ['abastecimento', 'Lançar abastecimento', 'Registrar rápido, direto no posto', Fuel],
+                ['historico', 'Histórico de viagens', 'Cada trecho de ida e volta: horários, alunos e km', History],
+                ['ajustes', 'Rotas e ajustes', 'Horários das escolas, rotas de ida e volta, código', Settings]
+              ] as const).filter(([k]) => (k !== 'gestao' || (!!onAbrirGestao && (modulos.ativo('mensalidades') || modulos.ativo('financeiro') || modulos.ativo('manutencao', false) || modulos.ativo('consumo', false)))) && (k !== 'abastecimento' || modulos.ativo('financeiro')))
+                .map(([k, titulo, desc, Icone]) => ({ id: k, titulo, desc, Icone }));
+              const ordenados = ordemMais.ordenar(itens);
+              const ids = ordenados.map(x => x.id);
+              return ordenados.map(({ id: k, titulo, desc, Icone }, i) => (
+                <div key={k} className="flex items-center gap-2">
+                  <button type="button" disabled={editandoOrdem} onClick={() => (k === 'gestao' ? onAbrirGestao?.() : setAba(k))} className="flex-1 min-w-0 flex items-center gap-3 px-4 py-3 min-h-[60px] rounded-2xl bg-slate-900 border border-slate-800 text-left cursor-pointer active:scale-[0.99] disabled:cursor-default disabled:active:scale-100">
+                    <Icone className="w-5 h-5 text-amber-300 shrink-0" />
+                    <span className="flex-1 min-w-0">
+                      <span className="block text-sm font-bold text-slate-100">{titulo}</span>
+                      <span className="block text-[11px] text-slate-400">{desc}</span>
+                    </span>
+                    {k === 'cadastro' && pendentes.length > 0 && <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-rose-500 text-white text-[11px] font-black flex items-center justify-center">{pendentes.length}</span>}
+                    {!editandoOrdem && <ChevronRight className="w-4 h-4 text-slate-500 shrink-0" />}
+                  </button>
+                  {editandoOrdem && <SetasOrdem nome={titulo} primeira={i === 0} ultima={i === ids.length - 1} onSubir={() => ordemMais.mover(ids, k, -1)} onDescer={() => ordemMais.mover(ids, k, 1)} />}
+                </div>
+              ));
+            })()}
             <button type="button" onClick={guia.abrir} className="w-full flex items-center gap-3 px-4 py-3 min-h-[60px] rounded-2xl bg-slate-900 border border-slate-800 text-left cursor-pointer active:scale-[0.99]">
               <HelpCircle className="w-5 h-5 text-amber-300 shrink-0" />
               <span className="flex-1 min-w-0">
@@ -1131,10 +1148,13 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
 
         {aba === 'ajustes' && (
           <>
-        <SecaoRecolhivel titulo="Módulos" descricao="Ligue só o que você usa">
+        <BarraReordenar editando={editandoOrdem} onAlternar={() => setEditandoOrdem(v => !v)} personalizada={ordemAjustes.personalizada} onRestaurar={ordemAjustes.restaurar} />
+        {(() => {
+          const itens = [
+    { id: 'modulos', titulo: 'Módulos', descricao: 'Ligue só o que você usa', conteudo: (<>
 <ModulosAjustes lista={modulos.lista} onAlterar={modulos.alterar} />
-</SecaoRecolhivel>
-        <SecaoRecolhivel titulo="Segurança" descricao="Verificação em 2 etapas e Kill-Switch">
+</>) },
+    { id: 'seguranca', titulo: 'Segurança', descricao: 'Verificação em 2 etapas e Kill-Switch', conteudo: (<>
 <section className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3" aria-label="Segurança">
           <h3 className="text-sm font-bold text-slate-100">Segurança</h3>
           <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] font-semibold bg-emerald-950/60 border border-emerald-500/30 px-2.5 py-1.5 rounded-lg">
@@ -1176,8 +1196,8 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           </div>
           <p className="text-[11px] text-slate-400">Kill-Switch bloqueia a sessão e apaga os dados da tela se o aparelho for perdido ou roubado.</p>
         </section>
-</SecaoRecolhivel>
-        <SecaoRecolhivel titulo="Opções do diário" descricao="Endereços dinâmicos e modo de exibição da rota">
+</>) },
+    { id: 'diario', titulo: 'Opções do diário', descricao: 'Endereços dinâmicos e modo de exibição da rota', conteudo: (<>
 <section className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3" aria-label="Opções do diário">
           <h3 className="text-sm font-bold text-slate-100">Opções do diário</h3>
           <p className="text-[11px] text-slate-400">Endereços completos ficam sempre mascarados na tela (LGPD de menores).</p>
@@ -1226,17 +1246,30 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
               </div>
             </div>
         </section>
-</SecaoRecolhivel>
-        <SecaoRecolhivel titulo="Instalar o app" descricao="Colocar o VanEscolar na tela do celular"><InstalarApp /></SecaoRecolhivel>
-        <SecaoRecolhivel titulo="Código do motorista" descricao="Código para as famílias acharem você"><CodigoMotorista nome={motorista?.nome} /></SecaoRecolhivel>
-        <SecaoRecolhivel titulo="Indicar um colega" descricao="Convite para outro motorista"><IndicarMotorista nome={motorista?.nome} /></SecaoRecolhivel>
-        <SecaoRecolhivel titulo="Bairro de atuação" descricao="Onde você trabalha"><BairroDoMotorista inicial={motorista?.bairro} nome={motorista?.nome} onSalvo={carregarDadosZeroCache} /></SecaoRecolhivel>
-        <SecaoRecolhivel titulo="Viagens" descricao="Nomes e turnos das suas viagens"><ViagensDoMotorista versao={paradas.length} onMudou={carregarDadosZeroCache} /></SecaoRecolhivel>
-        <SecaoRecolhivel titulo="Horários das escolas" descricao="Entrada e saída, por turno"><HorariosPorEscola versao={paradas.length} onMudou={carregarDadosZeroCache} /></SecaoRecolhivel>
-        <SecaoRecolhivel titulo="Local das escolas" descricao="Ponto de cada escola no mapa"><EscolasDoMotorista versao={paradas.length} /></SecaoRecolhivel>
-        <SecaoRecolhivel titulo="Rotas de ida e volta" descricao="Ordem das paradas em cada sentido"><RotasIdaVolta sentidoAtivo={sentidoRota} versao={paradas.length} onAplicado={carregarDadosZeroCache} /></SecaoRecolhivel>
-        <SecaoRecolhivel titulo="ID de acesso" descricao="Seu identificador no app"><MeuIdAcesso /></SecaoRecolhivel>
-
+</>) },
+    { id: 'instalar', titulo: 'Instalar o app', descricao: 'Colocar o VanEscolar na tela do celular', conteudo: (<><InstalarApp /></>) },
+    { id: 'codigo', titulo: 'Código do motorista', descricao: 'Código para as famílias acharem você', conteudo: (<><CodigoMotorista nome={motorista?.nome} /></>) },
+    { id: 'indicar', titulo: 'Indicar um colega', descricao: 'Convite para outro motorista', conteudo: (<><IndicarMotorista nome={motorista?.nome} /></>) },
+    { id: 'bairro', titulo: 'Bairro de atuação', descricao: 'Onde você trabalha', conteudo: (<><BairroDoMotorista inicial={motorista?.bairro} nome={motorista?.nome} onSalvo={carregarDadosZeroCache} /></>) },
+    { id: 'viagens', titulo: 'Viagens', descricao: 'Nomes e turnos das suas viagens', conteudo: (<><ViagensDoMotorista versao={paradas.length} onMudou={carregarDadosZeroCache} /></>) },
+    { id: 'horarios', titulo: 'Horários das escolas', descricao: 'Entrada e saída, por turno', conteudo: (<><HorariosPorEscola versao={paradas.length} onMudou={carregarDadosZeroCache} /></>) },
+    { id: 'locais', titulo: 'Local das escolas', descricao: 'Ponto de cada escola no mapa', conteudo: (<><EscolasDoMotorista versao={paradas.length} /></>) },
+    { id: 'rotas', titulo: 'Rotas de ida e volta', descricao: 'Ordem das paradas em cada sentido', conteudo: (<><RotasIdaVolta sentidoAtivo={sentidoRota} versao={paradas.length} onAplicado={carregarDadosZeroCache} /></>) },
+    { id: 'idacesso', titulo: 'ID de acesso', descricao: 'Seu identificador no app', conteudo: (<><MeuIdAcesso /></>) },
+          ];
+          const ordenados = ordemAjustes.ordenar(itens);
+          const ids = ordenados.map(x => x.id);
+          return ordenados.map((it, i) => (
+            <SecaoRecolhivel
+              key={it.id}
+              titulo={it.titulo}
+              descricao={it.descricao}
+              acoes={editandoOrdem ? <SetasOrdem nome={it.titulo} primeira={i === 0} ultima={i === ids.length - 1} onSubir={() => ordemAjustes.mover(ids, it.id, -1)} onDescer={() => ordemAjustes.mover(ids, it.id, 1)} /> : undefined}
+            >
+              {it.conteudo}
+            </SecaoRecolhivel>
+          ));
+        })()}
           </>
         )}
       </main>
