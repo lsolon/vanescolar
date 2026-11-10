@@ -429,8 +429,14 @@ export const NOME_TURNO: Record<Turno, string> = { MANHA: 'Manhã', TARDE: 'Tard
 export interface Viagem { id: string; nome: string; turno: Turno; escola: string; alunos: number }
 export interface ResumoViagens { viagens: Viagem[]; semViagem: number }
 export interface LinhaImportacao { n: number; aluno: string; escola: string; turno: string; viagem?: string; responsavel: string; telefone: string; status: 'ok' | 'erro' | 'duplicado'; erro?: string }
+export interface ParadaPrevistaRota { id: number; nome: string; familia: number | null; previsto: string; combinado: string | null; atrasoMin: number | null; afetado: boolean; porEscola: boolean }
+export interface PrevisaoRota {
+  aproximado: boolean; afetados: number; atrasoMaxMin: number; toleranciaMin: number;
+  escola: { nome: string; chegada: string; limite: string | null; atrasoMin: number | null } | null;
+  paradas: ParadaPrevistaRota[];
+}
 export interface QuandoSair {
-  sentido: 'IDA' | 'VOLTA'; destino: string; distanciaKm: number; minutosAteLa: number; margemMin: number; agora: string;
+  sentido: 'IDA' | 'VOLTA'; destino: string; distanciaKm: number; minutosAteLa: number; margemMin: number; folgaChegadaMin: number; agora: string; rota: PrevisaoRota;
   horarioAlvo: string | null; sairAs: string | null; faltamMin?: number; situacao: 'ha_tempo' | 'saia_agora' | 'atrasado' | 'sem_horario';
 }
 export interface ResultadoImportacao {
