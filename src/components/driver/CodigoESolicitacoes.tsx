@@ -123,6 +123,15 @@ export const SolicitacoesPendentes: React.FC<{ pendentes: ParadaMotoristaSanitiz
               <strong>{p.nome_completo_para_chamada || p.nome_aluno_sanitizado}</strong>
               <div className="text-slate-400">{p.endereco_mascarado}</div>
               <div className="text-slate-500">{p.escola_nome ? `${p.escola_nome} · ` : ''}{p.turno ? `${p.turno === 'MANHA' ? 'manhã' : p.turno === 'NOITE' ? 'noite' : 'tarde'} · ` : ''}entra {p.escola_entrada || '--:--'}, sai {p.escola_saida || '--:--'}</div>
+              {p.adesao && (
+                <ul className="mt-1.5 space-y-0.5 text-[11px] text-slate-300">
+                  <li>Responsável: {p.adesao.responsavelNome}{p.adesao.parentesco ? ` (${p.adesao.parentesco})` : ''}{p.adesao.maiorIdade ? ' · aluno maior de idade' : ''}</li>
+                  {p.adesao.serie && <li>Série: {p.adesao.serie}</li>}
+                  {p.adesao.emergencia && <li>Emergência: {p.adesao.emergencia.nome}</li>}
+                  {p.adesao.autorizados && p.adesao.autorizados.length > 0 && <li>Autorizados a receber: {p.adesao.autorizados.map((a) => a.nome).join(', ')}</li>}
+                  {p.adesao.saude && <li className="text-amber-200">Saúde: {p.adesao.saude}</li>}
+                </ul>
+              )}
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <label className="text-[11px] text-slate-300 flex items-center gap-1.5">

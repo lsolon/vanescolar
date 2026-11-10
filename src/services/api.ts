@@ -1260,6 +1260,10 @@ export const TransportRepository = {
             viagem_nomeada_id: p.viagem_nomeada_id,
             horario_da_escola: p.horario_da_escola,
             vinculo: p.vinculo ?? 'CONFIRMADO',
+            ...(p.origem === 'ADESAO' ? { adesao: {
+              parentesco: p.responsavel_parentesco, serie: p.aluno_serie, nascimento: p.aluno_nascimento, maiorIdade: p.aluno_maior_idade,
+              saude: p.saude, autorizados: p.autorizados_buscar, emergencia: p.contato_emergencia, responsavelNome: p.responsavel_nome
+            } } : {}),
             escola_nome: p.escola_destino,
             hora_embarque: p.hora_embarque,
             hora_desembarque: p.hora_desembarque,

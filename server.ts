@@ -1034,6 +1034,7 @@ function getFilteredStateForUser(user: SessionPayload, pref?: number) {
         ordem_ida: rIda.get(p.id) ?? ordemNo(p, 'IDA'),
         ordem_volta: rVolta.get(p.id) ?? ordemNo(p, 'VOLTA'),
         endereco_real: undefined,
+        responsavel_cpf: undefined, responsavel_endereco: undefined, usuario_pre_id: undefined,
         responsavel_telefone: undefined,
         responsavel_telefone_mascarado: p.responsavel_telefone ? `(${p.responsavel_telefone.slice(0,2)}) 9****-${p.responsavel_telefone.slice(-4)}` : undefined
       }));
@@ -1041,6 +1042,7 @@ function getFilteredStateForUser(user: SessionPayload, pref?: number) {
     cloned.paradas = cloned.paradas.map((p: any) => ({
       ...p,
       endereco_real: p.endereco_real,
+      responsavel_cpf: undefined, responsavel_endereco: undefined, usuario_pre_id: undefined,
       responsavel_telefone: p.responsavel_telefone,
       responsavel_telefone_mascarado: p.responsavel_telefone ? `(${p.responsavel_telefone.slice(0,2)}) 9****-${p.responsavel_telefone.slice(-4)}` : undefined
     }));
@@ -3218,6 +3220,16 @@ async function startServer() {
     confirmadas.forEach((p: any) => { if ((p.ordem_sequencia ?? 0) >= pos) p.ordem_sequencia = (p.ordem_sequencia ?? 0) + 1; });
     parada.vinculo = 'CONFIRMADO';
     parada.ordem_sequencia = pos;
+    // Ficha de adesão: o acesso que a família criou passa a enxergar o aluno só agora, com a vaga aprovada.
+    if (parada.usuario_pre_id != null) {
+      const dono = usersDB.find((u) => u.id === parada.usuario_pre_id && u.role === 'responsavel');
+      if (dono && !parada.vinculado_usuario_id) {
+        parada.vinculado_usuario_id = dono.id;
+        parada.codigo_expirado = true; // o código de convite não é mais necessário
+        if (dono.studentId == null) dono.studentId = parada.id_aluno;
+      }
+      delete parada.usuario_pre_id;
+    }
     reordenar(user.userId);
     delete parada.ordem_volta; // entra no fim da volta (quando a volta já tem ordem própria)
     reordenarVolta(user.userId);
@@ -3815,6 +3827,28 @@ async function startServer() {
   const PRE_MAX_ENVIOS = 30;      // por link
   const PRE_MAX_ALUNOS_POR_ENVIO = 6; // irmãos no mesmo pedido
   const PRE_MAX_PENDENTES = 60;   // aguardando aprovação, por motorista
+  const PARENTESCOS = ['Mãe', 'Pai', 'Avó / Avô', 'Tutor(a) legal', 'Outro responsável legal'];
+  /** CPF com dígitos verificadores (só números; rejeita 111.111.111-11 e parecidos). */
+  const cpfValido = (v: unknown): string | null => {
+    const d = String(v ?? '').replace(/\D/g, '');
+    if (d.length !== 11 || /^(\d)\1{10}$/.test(d)) return null;
+    const dig = (n: number) => { let soma = 0; for (let i = 0; i < n; i++) soma += Number(d[i]) * (n + 1 - i); const r = (soma * 10) % 11; return r === 10 ? 0 : r; };
+    return dig(9) === Number(d[9]) && dig(10) === Number(d[10]) ? d : null;
+  };
+  /** dd/mm/aaaa (ou aaaa-mm-dd) → { iso, idade } ou null se a data não existir, for futura ou tiver mais de 100 anos. */
+  const lerNascimento = (v: unknown): { iso: string; idade: number } | null => {
+    const t = String(v ?? '').trim();
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(t) ?? /^(\d{4})-(\d{2})-(\d{2})$/.exec(t);
+    if (!m) return null;
+    const [dia, mes, ano] = t.includes('/') ? [Number(m[1]), Number(m[2]), Number(m[3])] : [Number(m[3]), Number(m[2]), Number(m[1])];
+    const dt = new Date(Date.UTC(ano, mes - 1, dia));
+    if (dt.getUTCFullYear() !== ano || dt.getUTCMonth() !== mes - 1 || dt.getUTCDate() !== dia) return null;
+    const hoje = new Date();
+    let idade = hoje.getUTCFullYear() - ano;
+    if (hoje.getUTCMonth() + 1 < mes || (hoje.getUTCMonth() + 1 === mes && hoje.getUTCDate() < dia)) idade--;
+    if (dt.getTime() > hoje.getTime() || idade > 100) return null;
+    return { iso: `${ano}-${String(mes).padStart(2, '0')}-${String(dia).padStart(2, '0')}`, idade };
+  };
   const tokenValido = (t: unknown) => typeof t === 'string' && /^[A-Za-z0-9_-]{20,40}$/.test(t);
   const motoristaDoLink = (token: unknown) => {
     if (!tokenValido(token)) return null;
@@ -3931,7 +3965,9 @@ async function startServer() {
     if (lista.length < 1 || lista.length > PRE_MAX_ALUNOS_POR_ENVIO) return res.status(400).json({ error: `Envie de 1 a ${PRE_MAX_ALUNOS_POR_ENVIO} alunos por vez.` });
     const nomeResp = texto(b.nomeResponsavel, 80), tel = telefoneBR(b.telefoneResponsavel);
     // Valida tudo antes de criar qualquer um: ou entram todos, ou nenhum.
-    const alunos: { nomeAluno: string; escola: string; turno: Turno; endereco: string; ref: string }[] = [];
+    type AlunoPre = { nascimento: string; maior: boolean; serie: string; autorizados: { nome: string; telefone: string }[]; saude: string };
+    const adesao = b.adesao === true;
+    const alunos: ({ nomeAluno: string; escola: string; turno: Turno; endereco: string; ref: string } & Partial<AlunoPre>)[] = [];
     for (let i = 0; i < lista.length; i++) {
       const x = lista[i] || {};
       const quem = lista.length > 1 ? `Aluno ${i + 1}: ` : '';
@@ -3940,10 +3976,47 @@ async function startServer() {
       if (escola.length < 2) return res.status(400).json({ error: `${quem}Informe a escola.` });
       if (!turno) return res.status(400).json({ error: `${quem}Escolha o turno: manhã, tarde ou noite.` });
       if (endereco.length < 3) return res.status(400).json({ error: `${quem}Informe o endereço de embarque.` });
-      alunos.push({ nomeAluno, escola, turno, endereco, ref: texto(x.pontoReferencia, 120) });
+      const extra: Partial<AlunoPre> = {};
+      if (adesao) {
+        const nasc = lerNascimento(x.dataNascimento);
+        if (!nasc) return res.status(400).json({ error: `${quem}Informe a data de nascimento do aluno (dd/mm/aaaa).` });
+        const serie = texto(x.serie, 40);
+        if (serie.length < 1) return res.status(400).json({ error: `${quem}Informe a série ou o ano.` });
+        const autorizados: { nome: string; telefone: string }[] = [];
+        for (const au of (Array.isArray(x.autorizados) ? x.autorizados : []).slice(0, 2)) {
+          const nomeAu = texto(au?.nome, 80), telAu = telefoneBR(au?.telefone);
+          if (!nomeAu && !String(au?.telefone ?? '').trim()) continue; // linha em branco
+          if (nomeAu.length < 2 || !telAu) return res.status(400).json({ error: `${quem}Pessoa autorizada: informe o nome e o telefone com DDD, ou deixe em branco.` });
+          autorizados.push({ nome: nomeAu, telefone: telAu });
+        }
+        const saudeTxt = texto(x.saude, 300);
+        if (saudeTxt && b.aceiteSaude !== true) return res.status(400).json({ error: `${quem}Para guardar as informações de saúde, marque o consentimento específico. Ou apague o campo de saúde.` });
+        Object.assign(extra, { nascimento: nasc.iso, maior: nasc.idade >= 18, serie, autorizados, ...(saudeTxt ? { saude: saudeTxt } : {}) });
+      }
+      alunos.push({ nomeAluno, escola, turno, endereco, ref: texto(x.pontoReferencia, 120), ...extra });
     }
     if (nomeResp.length < 2) return res.status(400).json({ error: 'Informe o seu nome.' });
     if (!tel) return res.status(400).json({ error: 'Informe o seu WhatsApp com DDD.' });
+    // Adesão completa (formulário novo): dados do responsável, contato de emergência e criação do acesso.
+    let resp: { cpf: string; parentesco: string; endereco: string; emergNome: string; emergTel: string; financeiro: boolean; email: string; senha: string } | null = null;
+    if (adesao) {
+      const cpf = cpfValido(b.cpf);
+      if (!cpf) return res.status(400).json({ error: 'CPF inválido. Confira os 11 números.' });
+      const parentesco = texto(b.parentesco, 40);
+      if (!PARENTESCOS.includes(parentesco)) return res.status(400).json({ error: 'Escolha o parentesco com o aluno.' });
+      const endResp = texto(b.enderecoResponsavel, 200);
+      if (endResp.length < 8) return res.status(400).json({ error: 'Informe o seu endereço completo (para o contrato).' });
+      const emergNome = texto(b.contatoEmergenciaNome, 80), emergTel = telefoneBR(b.contatoEmergenciaTelefone);
+      if (emergNome.length < 2 || !emergTel) return res.status(400).json({ error: 'Informe o nome e o telefone com DDD de um contato de emergência.' });
+      const email = texto(b.email, 120).toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return res.status(400).json({ error: 'Informe um e-mail válido. Ele será o seu usuário.' });
+      const senha = String(b.senha ?? '');
+      if (senha.length < 10) return res.status(400).json({ error: 'A senha deve ter no mínimo 10 caracteres.' });
+      if (senha.length > 128) return res.status(400).json({ error: 'A senha é longa demais.' });
+      if (senha !== String(b.senhaRepetida ?? '')) return res.status(400).json({ error: 'As senhas não são iguais.' });
+      if (b.declaracaoResponsavel !== true) return res.status(400).json({ error: 'Confirme que você é o responsável legal e que as informações são verdadeiras.' });
+      resp = { cpf, parentesco, endereco: endResp, emergNome, emergTel, financeiro: b.responsavelFinanceiro !== false, email, senha };
+    }
     if (b.aceiteLgpd !== true) return res.status(400).json({ error: 'Para continuar, aceite o uso dos dados para o transporte escolar.' });
     if (rec.regrasServico && b.aceiteRegras !== true) return res.status(400).json({ error: 'Para continuar, aceite as regras do transporte.' });
 
@@ -3958,6 +4031,26 @@ async function startServer() {
       return res.status(429).json({ error: 'O motorista tem muitos pedidos para conferir. Tente de novo mais tarde.' });
     }
     const agora = new Date().toISOString();
+    // Cria o acesso do responsável (ainda sem aluno ligado: o vínculo só vale quando o motorista aprova a vaga).
+    let usuarioPreId: number | null = null;
+    if (resp) {
+      const emailJaExiste = usersDB.some((u) => u.email.toLowerCase() === resp!.email) || ADMIN_EMAILS.includes(resp.email);
+      if (emailJaExiste) return res.status(400).json({ error: 'Não foi possível completar o cadastro com este e-mail. Use outro e-mail.' });
+      const novoUser: UserRecord = {
+        id: 200 + usersDB.length + 1,
+        fullName: nomeResp,
+        email: resp.email,
+        passwordHash: hashPassword(resp.senha),
+        role: 'responsavel',
+        emailVerified: false,
+        phone: tel,
+        whatsapp: tel,
+        lgpdConsent: { accepted: true, timestamp: agora, version: 'v1.1-adesao-art14' }
+      } as UserRecord;
+      usersDB.push(novoUser);
+      usuarioPreId = novoUser.id;
+      auditLog('USUARIO_CADASTRADO', novoUser.email, 'Responsável cadastrado pela ficha de adesão (aguardando aprovação do motorista)');
+    }
     for (const al of novos) {
       const novoId = paradas.reduce((m: number, p: any) => Math.max(m, p.id % 1000, (p.id_aluno ?? 0) - 210), 0) + 1;
       const nova: any = {
@@ -3983,7 +4076,23 @@ async function startServer() {
         codigo_vinculo: `VAN-${crypto.randomBytes(3).toString('hex').toUpperCase()}`,
         vinculado_usuario_id: null,
         aceite_lgpd_em: agora,
-        ...(rec.regrasServico ? { aceite_regras_em: agora, aceite_regras_texto: rec.regrasServico } : {})
+        ...(rec.regrasServico ? { aceite_regras_em: agora, aceite_regras_texto: rec.regrasServico } : {}),
+        ...(resp ? {
+          origem: 'ADESAO',
+          usuario_pre_id: usuarioPreId,
+          responsavel_cpf: resp.cpf,
+          responsavel_parentesco: resp.parentesco,
+          responsavel_endereco: resp.endereco,
+          responsavel_financeiro: resp.financeiro,
+          contato_emergencia: { nome: resp.emergNome, telefone: resp.emergTel },
+          aceite_declaracao_em: agora,
+          avisos_whatsapp: b.avisosWhatsapp === true,
+          aluno_nascimento: al.nascimento,
+          aluno_maior_idade: al.maior === true,
+          aluno_serie: al.serie,
+          autorizados_buscar: al.autorizados ?? [],
+          ...(al.saude ? { saude: al.saude, aceite_saude_em: agora } : {})
+        } : {})
       };
       herdarHorarioDaEscola(nova);
       paradas.push(nova);
@@ -4000,8 +4109,17 @@ async function startServer() {
     const driverId = driverIdFor(user) as number;
     const p: any = serverState.paradas.find((x: any) => x.id === parseInt(req.params.id, 10));
     if (!p || donoDaParada(p) !== driverId) return res.status(404).json({ error: 'Aluno não encontrado.' });
-    if (!p.codigo_vinculo || p.vinculado_usuario_id || p.codigo_expirado) return res.json({ disponivel: false });
     const tel = telefoneBR(p.responsavel_telefone);
+    // Ficha de adesão: a família já tem usuário e senha; o aviso é só "vaga confirmada, entre com o seu e-mail". Sem código, sem senha.
+    if (p.origem === 'ADESAO' && p.vinculado_usuario_id) {
+      return res.json({
+        disponivel: true,
+        mensagem: `Olá, ${primeiroNome(p.responsavel_nome) || 'tudo bem'}! Aqui é ${primeiroNome(perfilMotorista(driverId)?.nome ?? '') || 'o motorista'} do transporte escolar. ` +
+          `A vaga de ${primeiroNome(p.nome_aluno)} está confirmada.\n\nPara acompanhar pelo celular, abra ${linkDaVan(driverId)} e entre com o e-mail e a senha que você criou na ficha de adesão.\n\nQualquer dúvida, é só me chamar.`,
+        ...(tel ? { whatsapp: `55${tel}` } : {})
+      });
+    }
+    if (!p.codigo_vinculo || p.vinculado_usuario_id || p.codigo_expirado) return res.json({ disponivel: false });
     res.json({
       disponivel: true,
       codigoVinculo: p.codigo_vinculo,
