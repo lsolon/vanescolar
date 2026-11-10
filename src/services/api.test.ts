@@ -2549,6 +2549,40 @@ test('Quando sair: funciona antes de iniciar a rota mesmo com os alunos ENTREGUE
   assert.equal((await jsonReq('POST', url, mot, { ...pos, sentido: 'IDA' })).status, 200, 'ausência só da volta não afeta a ida');
 });
 
+test('Quando sair: previsão da rota inteira avisa quem atrasa, sem mudar o horário combinado', async () => {
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const mot = await novoMotorista(adm, 'RotaInteira');
+  const url = '/api/motorista/quando-sair';
+  const novo = async (nome: string, lat: number) => (await jsonReq('POST', '/api/motorista/alunos', mot, { nomeAluno: nome, escola: 'Escola RI', turno: 'MANHA', nomeResponsavel: 'Resp', telefoneResponsavel: '21933332222', endereco: 'Rua Z, 3', latitude: lat, longitude: -43.20, autorizacaoResponsavel: true })).data;
+  const A = await novo('Ana Atrasada', -22.90), B = await novo('Beto Folgado', -22.88);
+  await jsonReq('PUT', '/api/motorista/escolas', mot, { nome: 'Escola RI', latitude: -22.85, longitude: -43.20 });
+  await jsonReq('POST', '/api/rotas/ordem', mot, { ids: [A.paradaId, B.paradaId], sentido: 'IDA' });
+  // horário de agora em Brasília: A combinou 30 min atrás (já vai chegar atrasada); B combinou só daqui a 10 h (a van espera).
+  const hhmm = (min: number) => { const x = ((min % 1440) + 1440) % 1440; return `${String(Math.floor(x / 60)).padStart(2, '0')}:${String(x % 60).padStart(2, '0')}`; };
+  const partes = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date());
+  const agora = (Number(partes.find((x) => x.type === 'hour')!.value) % 24) * 60 + Number(partes.find((x) => x.type === 'minute')!.value);
+  assert.equal((await jsonReq('PUT', `/api/paradas/${A.paradaId}/horarios`, mot, { horaIda: hhmm(agora - 30) })).status, 200);
+  assert.equal((await jsonReq('PUT', `/api/paradas/${B.paradaId}/horarios`, mot, { horaIda: hhmm(agora + 600) })).status, 200);
+  const r = await jsonReq('POST', url, mot, { latitude: -22.95, longitude: -43.20, sentido: 'IDA' });
+  assert.equal(r.status, 200);
+  const rota = r.data.rota;
+  assert.equal(rota.paradas.length, 2, 'a rota inteira, não só a primeira parada');
+  assert.deepEqual(rota.paradas.map((p: any) => p.nome), ['Ana A.', 'Beto F.']);
+  assert.equal(rota.paradas[0].afetado, true, 'quem já combinou há 30 min e ainda não foi buscada está afetada');
+  assert.ok(rota.paradas[0].atrasoMin >= 30);
+  assert.equal(rota.paradas[1].afetado, false, 'quem combinou bem mais tarde não é afetado');
+  assert.equal(rota.paradas[0].familia, null, 'sem responsável vinculado no app');
+  assert.ok(rota.escola && /^\d\d:\d\d$/.test(rota.escola.chegada), 'chegada à escola prevista');
+  assert.equal(rota.afetados, 1);
+  assert.equal(rota.toleranciaMin, 5);
+  assert.ok(!JSON.stringify(rota).includes('latitude'), 'sem coordenadas na previsão');
+  // nada mudou nos horários combinados
+  const depois = await jsonReq('PUT', `/api/paradas/${A.paradaId}/horarios`, mot, {});
+  assert.equal(depois.status, 200);
+  const r2 = await jsonReq('POST', url, mot, { latitude: -22.95, longitude: -43.20, sentido: 'IDA' });
+  assert.equal(r2.data.rota.paradas[0].combinado, hhmm(agora - 30), 'horário combinado continua o mesmo');
+});
+
 test('Histórico de viagens: um registro por trecho, só nome abreviado, isolado por motorista e apagável', async () => {
   const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
   const mot = await novoMotorista(adm, 'HistoricoA');

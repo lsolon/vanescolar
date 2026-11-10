@@ -24,6 +24,7 @@ import * as G from './mensagens';
 import * as HV from './historico';
 import * as CON from './consumo';
 import * as RR from './src/services/rotaRuas';
+import { preverRota } from './src/services/atrasoRota';
 import { hashPassword, verifyPassword, upgradePasswordHash } from './senhas';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -4161,7 +4162,35 @@ async function startServer() {
     // Volta: a van deve estar na escola a folga do motorista antes da saída. Ida: no ponto do primeiro aluno no horário combinado.
     const alvo = sentido === 'IDA' ? horarios.hora_ida : (lerHorario(primeira.escola_saida) ? deMin(paraMin(primeira.escola_saida) - folgaChegadaDe(driverId)) : null);
     const agora = agoraMinutosSP();
-    const base = { sentido, destino: nomeDestino, distanciaKm: Math.round(km * 10) / 10, minutosAteLa: minutos, margemMin: MARGEM_SAIDA_MIN, agora: deMin(agora) };
+    // Rota inteira: da posição atual por todas as paradas até a escola. Só previsão; nenhum horário combinado é alterado.
+    const fator = fatorRuasDe(driverId, sentido);
+    const ultima: any = fila[fila.length - 1];
+    const escolaRef: any = sentido === 'IDA' ? ultima : primeira;
+    const folga = folgaChegadaDe(driverId);
+    const rotaCalc = preverRota({
+      sentido, agoraMin: agora, origem,
+      paradas: fila.map((p: any) => {
+        const h = horariosDaParada(p);
+        const entradaP = lerHorario(p.escola_entrada);
+        return {
+          id: p.id, nome: String(p.nome_sanitizado || p.nome_aluno || 'Aluno'),
+          familia: typeof p.vinculado_usuario_id === 'number' ? p.vinculado_usuario_id : null,
+          local: temLocalP(p) ? { latitude: p.latitude, longitude: p.longitude } : null,
+          combinadoMin: lerHorario(sentido === 'IDA' ? h.hora_ida : h.hora_volta) ? paraMin((sentido === 'IDA' ? h.hora_ida : h.hora_volta) as string) : null,
+          limiteEscolaMin: sentido === 'IDA' && entradaP && chaveEscola(p.escola_destino) === chaveEscola(escolaRef.escola_destino) ? paraMin(entradaP) - folga : null
+        };
+      }),
+      escola: localDaEscola(driverId, escolaRef.escola_destino),
+      saidaEscolaMin: sentido === 'VOLTA' && lerHorario(primeira.escola_saida) ? paraMin(primeira.escola_saida) : null,
+      trecho: (a, b) => minutosPorKm(haversineKm(a, b), 0, 0, fator),
+      minPorParada: MIN_POR_PARADA, trechoPadraoMin: 5
+    });
+    const rota = {
+      aproximado: rotaCalc.aproximado, afetados: rotaCalc.afetados, atrasoMaxMin: rotaCalc.atrasoMaxMin, toleranciaMin: 5,
+      escola: rotaCalc.escola ? { nome: String(escolaRef.escola_destino || 'escola'), chegada: deMin(rotaCalc.escola.chegadaMin), limite: rotaCalc.escola.limiteMin == null ? null : deMin(rotaCalc.escola.limiteMin), atrasoMin: rotaCalc.escola.atrasoMin } : null,
+      paradas: rotaCalc.paradas.map((p) => ({ id: p.id, nome: p.nome, familia: p.familia, previsto: deMin(p.previstoMin), combinado: p.combinadoMin == null ? null : deMin(p.combinadoMin), atrasoMin: p.atrasoMin, afetado: p.afetado, porEscola: p.porEscola }))
+    };
+    const base = { sentido, destino: nomeDestino, distanciaKm: Math.round(km * 10) / 10, minutosAteLa: minutos, margemMin: MARGEM_SAIDA_MIN, folgaChegadaMin: folga, agora: deMin(agora), rota };
     if (!alvo) return res.json({ ...base, horarioAlvo: null, sairAs: null, situacao: 'sem_horario' });
     const sairMin = paraMin(alvo) - minutos - MARGEM_SAIDA_MIN;
     // Diferença circular (-12h..+12h) para não quebrar perto da meia-noite.
