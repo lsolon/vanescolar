@@ -16,6 +16,7 @@ import { GestaoPanel } from './components/gestao/GestaoPanel';
 import { TransportRepository, subscribeToDatabaseChanges } from './services/api';
 import { AuthService } from './services/auth';
 import { CODIGO_VERSAO } from './versao';
+import { AssinaturaGlobal } from './components/assinatura/Assinatura';
 import { useVanPersonalizada, rotuloDaVan } from './services/vanPersonalizada';
 import {
   Bus,
@@ -166,6 +167,7 @@ export default function App() {
       >
         {CODIGO_VERSAO}
       </div>
+      <AssinaturaGlobal />
       {/* ==================================================================== */}
       {/* 1. SELEÇÃO DE AMBIENTE: LANDING PAGE COM PORTAIS DE LOGIN SEPARADOS */}
       {/* ==================================================================== */}

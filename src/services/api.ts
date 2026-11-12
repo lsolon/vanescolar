@@ -590,6 +590,31 @@ function mascararTelefone(tel: string): string {
   return tel;
 }
 
+// ---- Assinatura (teste grátis de 30 dias e cobrança pelo Mercado Pago) ----
+export interface PlanoAssinatura { chave: 'ate10' | 'ate20' | 'ate30' | 'ilimitado'; nome: string; ate: number | null; valor: number }
+export interface EstadoAssinaturaMotorista {
+  estado: 'ISENTA' | 'TESTE' | 'ATIVA' | 'BLOQUEADA';
+  diasRestantes: number | null;
+  testeFim: string | null;
+  bloqueadaDesde: string | null;
+  excluirApos: string | null;
+  aguardandoPagamento: boolean;
+  bloqueioAtivo: boolean;
+  alunos: number;
+  planos: PlanoAssinatura[];
+  planoSugerido?: { chave: string; nome: string; valor: number };
+  planoContratado?: { chave: string; nome: string; valor: number } | null;
+  statusMercadoPago?: 'pending' | 'authorized' | 'paused' | 'cancelled' | null;
+  precisaSubirPlano?: boolean;
+  cobrancaDisponivel: boolean;
+  diasAteExclusao?: number;
+}
+export interface AssinaturaAdminLinha {
+  id: number; nome: string; email: string; alunos: number; estado: EstadoAssinaturaMotorista['estado'];
+  diasRestantes: number | null; testeFim: string | null; bloqueadaDesde: string | null; excluirApos: string | null; podeExcluir: boolean;
+  isento: boolean; isentoPorConfig: boolean; diasExtras: number; plano: { chave: string; valor: number; status: string } | null;
+}
+
 export type StatusMensalidade = 'PAGO' | 'EM_ABERTO' | 'ATRASADO' | 'SEM_VALOR';
 export interface LinhaMensalidadeMotorista {
   id_aluno: number; aluno: string; responsavel_nome: string; whatsapp: string;
@@ -1007,6 +1032,47 @@ export const TransportRepository = {
 
   async getAdminMetrics() {
     const res = await fetch(`${getBaseUrl()}/api/admin/metrics`, { headers: getAuthHeaders(true) });
+    return handleAdminResponse(res);
+  },
+
+  // ---- Assinatura ----
+  async obterAssinatura(): Promise<EstadoAssinaturaMotorista> {
+    const res = await fetch(`${getBaseUrl()}/api/assinatura`, { headers: getAuthHeaders() });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível carregar a assinatura.');
+    return d as EstadoAssinaturaMotorista;
+  },
+  /** Cria a assinatura no Mercado Pago e devolve o endereço do checkout (o app leva o motorista até lá). */
+  async iniciarAssinatura(): Promise<{ url: string; plano: { chave: string; nome: string; valor: number } }> {
+    const res = await fetch(`${getBaseUrl()}/api/assinatura/iniciar`, { method: 'POST', headers: getAuthHeaders(), body: '{}' });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível iniciar a assinatura.');
+    return d;
+  },
+  async sincronizarAssinatura(): Promise<EstadoAssinaturaMotorista> {
+    const res = await fetch(`${getBaseUrl()}/api/assinatura/sincronizar`, { method: 'POST', headers: getAuthHeaders(), body: '{}' });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível conferir a assinatura.');
+    return d as EstadoAssinaturaMotorista;
+  },
+  async cancelarAssinatura(): Promise<EstadoAssinaturaMotorista> {
+    const res = await fetch(`${getBaseUrl()}/api/assinatura/cancelar`, { method: 'POST', headers: getAuthHeaders(), body: '{}' });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível cancelar a assinatura.');
+    return d as EstadoAssinaturaMotorista;
+  },
+  async ajustarAssinatura(): Promise<EstadoAssinaturaMotorista> {
+    const res = await fetch(`${getBaseUrl()}/api/assinatura/ajustar`, { method: 'POST', headers: getAuthHeaders(), body: '{}' });
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(d.error || 'Não foi possível ajustar o plano.');
+    return d as EstadoAssinaturaMotorista;
+  },
+  async listarAssinaturasAdmin(): Promise<{ bloqueioAtivo: boolean; cobrancaDisponivel: boolean; webhookComSegredo: boolean; motoristas: AssinaturaAdminLinha[] }> {
+    const res = await fetch(`${getBaseUrl()}/api/admin/assinaturas`, { headers: getAuthHeaders(true) });
+    return handleAdminResponse(res);
+  },
+  async ajustarAssinaturaAdmin(id: number, corpo: { isento?: boolean; diasExtras?: number }) {
+    const res = await fetch(`${getBaseUrl()}/api/admin/assinaturas/${id}`, { method: 'POST', headers: getAuthHeaders(true), body: JSON.stringify(corpo) });
     return handleAdminResponse(res);
   },
 

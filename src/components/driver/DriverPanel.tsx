@@ -29,6 +29,7 @@ import { InstalarApp } from '../shared/InstalarApp';
 import { LancarAbastecimento } from './Financeiro';
 import { HistoricoViagens } from './HistoricoViagens';
 import { ModulosAjustes } from './ModulosAjustes';
+import { FaixaTeste, PainelAssinatura } from '../assinatura/Assinatura';
 import { SecaoRecolhivel, SetasOrdem, BarraReordenar } from './SecaoRecolhivel';
 import { useOrdemMenu } from '../../hooks/useOrdemMenu';
 import { useModulos } from '../../hooks/useModulos';
@@ -659,6 +660,7 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           <span className="rounded-lg bg-slate-950/70 border border-slate-800 py-1"><span className="text-rose-400">Ausentes </span><strong className="text-rose-400">{ausentes}</strong></span>
         </div>
       </header>
+      <div className="px-4 pt-3 empty:hidden"><FaixaTeste /></div>
 
       {/* CONTEÚDO PRINCIPAL COM ZERO-CACHE */}
       <main className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -1151,6 +1153,9 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
         <BarraReordenar editando={editandoOrdem} onAlternar={() => setEditandoOrdem(v => !v)} personalizada={ordemAjustes.personalizada} onRestaurar={ordemAjustes.restaurar} />
         {(() => {
           const itens = [
+    { id: 'assinatura', titulo: 'Assinatura', descricao: 'Teste grátis, planos e pagamento', conteudo: (<>
+<section className="bg-slate-900 border border-slate-800 rounded-2xl p-4" aria-label="Assinatura"><PainelAssinatura /></section>
+</>) },
     { id: 'modulos', titulo: 'Módulos', descricao: 'Ligue só o que você usa', conteudo: (<>
 <ModulosAjustes lista={modulos.lista} onAlterar={modulos.alterar} />
 </>) },

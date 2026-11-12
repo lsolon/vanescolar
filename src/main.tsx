@@ -3,6 +3,19 @@ import App from './App.tsx';
 import { PreCadastroFamilia } from './components/auth/PreCadastroFamilia';
 import './index.css';
 import { iniciarLogDeUso } from './services/logUso';
+import { EVENTO_BLOQUEIO } from './components/assinatura/Assinatura';
+
+// Assinatura vencida: o servidor responde 402 (com o código ASSINATURA_NECESSARIA ou VAN_SUSPENSA). Qualquer tela avisa a camada global.
+const fetchOriginal = window.fetch.bind(window);
+window.fetch = async (...args: Parameters<typeof fetch>) => {
+  const res = await fetchOriginal(...args);
+  if (res.status === 402) {
+    res.clone().json().then((d) => {
+      if (d?.codigo === 'ASSINATURA_NECESSARIA' || d?.codigo === 'VAN_SUSPENSA') window.dispatchEvent(new CustomEvent(EVENTO_BLOQUEIO, { detail: d }));
+    }).catch(() => {});
+  }
+  return res;
+};
 
 // Link de pré-cadastro enviado pelo motorista (?pre=CODIGO): página pública, sem login e sem carregar o painel.
 const tokenPre = new URLSearchParams(window.location.search).get('pre');

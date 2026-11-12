@@ -3073,3 +3073,189 @@ test('Ids de conta: recusar um pedido da ficha e criar outra conta nunca repete 
   assert.equal(contas.length, 3, 'A, C e D existem');
   assert.equal(new Set(contas.map((u: any) => u.id)).size, 3, 'ids diferentes');
 });
+
+// ---------------------------------------------------------------------------
+// ASSINATURA: teste grátis de 30 dias, bloqueio e cobrança pelo Mercado Pago
+// O fluxo completo com o Mercado Pago precisa do servidor de teste com MP_ACCESS_TOKEN, MP_WEBHOOK_SECRET e
+// MP_API_URL=http://localhost:3999 (um Mercado Pago de mentira sobe dentro do teste). Sem isso, essa parte é pulada com aviso.
+// ---------------------------------------------------------------------------
+import http from 'node:http';
+import crypto from 'node:crypto';
+
+async function adminToken() {
+  return (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token as string;
+}
+const idDoToken = (t: string) => JSON.parse(Buffer.from(t.split('.')[0], 'base64url').toString()).userId as number;
+
+test('Assinatura: motorista novo começa em teste de 30 dias e vê os planos', async () => {
+  const adm = await adminToken();
+  const mot = await novoMotorista(adm, 'AssNovo');
+  const r = await jsonReq('GET', '/api/assinatura', mot);
+  assert.equal(r.status, 200);
+  assert.equal(r.data.estado, 'TESTE');
+  assert.equal(r.data.diasRestantes, 30);
+  assert.deepEqual(r.data.planos.map((p: any) => p.valor), [99, 149, 199, 250]);
+  assert.equal(r.data.planoSugerido.valor, 99);
+  assert.equal(JSON.stringify(r.data).includes('access_token'), false);
+  // o painel continua funcionando dentro do teste
+  assert.equal((await jsonReq('GET', '/api/estado', mot)).status, 200);
+});
+
+test('Assinatura: teste vencido bloqueia o motorista (402), mas ele ainda entra, vê a assinatura e sai', async () => {
+  const adm = await adminToken();
+  const mot = await novoMotorista(adm, 'AssVenc');
+  const id = idDoToken(mot);
+  const antigo = new Date(Date.now() - 31 * 86400000).toISOString();
+  assert.equal((await jsonReq('POST', `/api/admin/assinaturas/${id}`, adm, { testeInicio: antigo })).status, 200);
+
+  const bloq = await jsonReq('GET', '/api/estado', mot);
+  assert.equal(bloq.status, 402);
+  assert.equal(bloq.data.codigo, 'ASSINATURA_NECESSARIA');
+  assert.equal((await jsonReq('GET', '/api/motorista/mensalidades', mot)).status, 402);
+  assert.equal((await jsonReq('POST', '/api/rotas/iniciar', mot, {})).status, 402);
+
+  // continua aberto: ver a situação, falar de assinatura, sair
+  const a = await jsonReq('GET', '/api/assinatura', mot);
+  assert.equal(a.status, 200);
+  assert.equal(a.data.estado, 'BLOQUEADA');
+  assert.equal(a.data.diasAteExclusao, 30);
+  assert.ok(Date.parse(a.data.excluirApos) > Date.now(), 'a data de exclusão está no futuro');
+
+  // o admin segue vendo tudo e pode dar dias extras
+  const lista = (await jsonReq('GET', '/api/admin/assinaturas', adm)).data.motoristas as any[];
+  assert.equal(lista.find((m) => m.id === id)?.estado, 'BLOQUEADA');
+  assert.equal((await jsonReq('POST', `/api/admin/assinaturas/${id}`, adm, { diasExtras: 10 })).status, 200);
+  assert.equal((await jsonReq('GET', '/api/estado', mot)).status, 200, 'dias extras liberam de novo');
+  // cortesia
+  assert.equal((await jsonReq('POST', `/api/admin/assinaturas/${id}`, adm, { testeInicio: antigo, diasExtras: 0, isento: true })).status, 200);
+  assert.equal((await jsonReq('GET', '/api/estado', mot)).status, 200);
+  assert.equal((await jsonReq('GET', '/api/assinatura', mot)).data.estado, 'ISENTA');
+  // validações do admin
+  assert.equal((await jsonReq('POST', `/api/admin/assinaturas/${id}`, adm, { diasExtras: 9999 })).status, 400);
+  assert.equal((await jsonReq('POST', `/api/admin/assinaturas/${id}`, adm, { testeInicio: 'ontem' })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/admin/assinaturas/999999', adm, { isento: true })).status, 404);
+  // só admin mexe
+  assert.equal((await jsonReq('POST', `/api/admin/assinaturas/${id}`, mot, { isento: true })).status, 403);
+  assert.equal((await jsonReq('GET', '/api/admin/assinaturas', mot)).status, 403);
+  // sair continua possível mesmo bloqueado
+  await jsonReq('POST', `/api/admin/assinaturas/${id}`, adm, { isento: false, testeInicio: antigo });
+  assert.equal((await jsonReq('GET', '/api/estado', mot)).status, 402);
+  assert.equal((await jsonReq('POST', '/api/auth/logout', mot, {})).status, 200);
+});
+
+test('Assinatura: família da van bloqueada recebe 402 neutro; a van liberada volta ao normal', async () => {
+  const adm = await adminToken();
+  const mot = await novoMotorista(adm, 'AssFam');
+  const id = idDoToken(mot);
+  const cod = (await jsonReq('GET', '/api/motorista/codigo', mot)).data.codigo as string;
+  const email = `fam_ass_${Date.now()}@teste.com`;
+  const reg = await jsonReq('POST', '/api/auth/register', undefined, { fullName: 'Resp Ass', email, password: 'senhaSegura123!', lgpdConsent: true });
+  assert.ok(reg.data?.token || reg.status === 200, JSON.stringify(reg.data));
+  await jsonReq('POST', `/api/admin/usuarios/${(await jsonReq('GET', '/api/admin/responsaveis', adm)).data.responsaveis.find((r: any) => r.email === email)?.id}/confirmar-email`, adm, {});
+  const login = await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'senhaSegura123!' });
+  const resp = login.data.token as string;
+  const filho = await jsonReq('POST', '/api/filhos', resp, { ...FILHO, nomeAluno: 'Filho Ass', codigoMotorista: cod });
+  assert.ok([200, 201].includes(filho.status), JSON.stringify(filho.data));
+  assert.equal((await jsonReq('GET', '/api/estado', resp)).status, 200);
+
+  await jsonReq('POST', `/api/admin/assinaturas/${id}`, adm, { testeInicio: new Date(Date.now() - 31 * 86400000).toISOString() });
+  const r = await jsonReq('GET', '/api/estado', resp);
+  assert.equal(r.status, 402);
+  assert.equal(r.data.codigo, 'VAN_SUSPENSA');
+  assert.equal(/assin|pag|R\$|teste/i.test(JSON.stringify(r.data)), false, 'a família não vê detalhes de cobrança do motorista');
+  assert.equal((await jsonReq('POST', '/api/auth/logout', resp, {})).status, 200, 'a família ainda consegue sair');
+
+  await jsonReq('POST', `/api/admin/assinaturas/${id}`, adm, { isento: true });
+  const login2 = await jsonReq('POST', '/api/auth/login-email', undefined, { email, password: 'senhaSegura123!' });
+  assert.equal((await jsonReq('GET', '/api/estado', login2.data.token)).status, 200);
+});
+
+test('Assinatura: webhook recusa quem não é o Mercado Pago e ignora avisos de outros assuntos', async () => {
+  const sem = await jsonReq('POST', '/api/webhooks/mercadopago?type=payment&data.id=123', undefined, { type: 'payment' });
+  // sem segredo configurado: aviso de pagamento é só reconhecido; com segredo, assinatura ausente é recusada
+  assert.ok([200, 401].includes(sem.status), `status ${sem.status}`);
+  const forjado = await fetch(`${BASE}/api/webhooks/mercadopago?type=subscription_preapproval&data.id=abcdefgh12`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-signature': `ts=${Date.now()},v1=${'0'.repeat(64)}`, 'x-request-id': 'r1' }, body: '{}'
+  });
+  assert.ok([401, 503, 200].includes(forjado.status));
+  const cfg = (await jsonReq('GET', '/api/admin/assinaturas', await adminToken())).data;
+  if (cfg.webhookComSegredo) assert.equal(forjado.status, 401, 'com segredo configurado, assinatura falsa é recusada');
+});
+
+test('Assinatura: fluxo completo com Mercado Pago de mentira (assinar, webhook, cancelar, ajustar)', async (t) => {
+  const adm = await adminToken();
+  const cfg = (await jsonReq('GET', '/api/admin/assinaturas', adm)).data;
+  const segredo = process.env.MP_WEBHOOK_SECRET || 'segredo-de-teste-mp';
+  if (!cfg.cobrancaDisponivel || !cfg.webhookComSegredo) { t.skip('servidor de teste sem MP_ACCESS_TOKEN/MP_WEBHOOK_SECRET: fluxo do Mercado Pago pulado'); return; }
+
+  // Mercado Pago de mentira: guarda as assinaturas criadas em memória
+  const subs = new Map<string, any>();
+  const pedidos: { m: string; u: string; auth?: string; corpo: any }[] = [];
+  const mp = http.createServer((req, res) => {
+    let b = ''; req.on('data', (c) => (b += c)); req.on('end', () => {
+      const corpo = b ? JSON.parse(b) : {}; pedidos.push({ m: req.method!, u: req.url!, auth: req.headers.authorization, corpo });
+      const send = (s: number, o: any) => { res.writeHead(s, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
+      if (req.method === 'POST' && req.url === '/preapproval') {
+        const id = crypto.randomBytes(8).toString('hex'); const s = { id, status: 'pending', external_reference: corpo.external_reference, auto_recurring: corpo.auto_recurring, init_point: `https://mp.exemplo/checkout?preapproval_id=${id}` };
+        subs.set(id, s); return send(201, s);
+      }
+      const m = /^\/preapproval\/([A-Za-z0-9]+)$/.exec(req.url || '');
+      if (m && subs.has(m[1])) {
+        const s = subs.get(m[1]);
+        if (req.method === 'PUT') { if (corpo.status) s.status = corpo.status; if (corpo.auto_recurring) s.auto_recurring = { ...s.auto_recurring, ...corpo.auto_recurring }; }
+        return send(200, s);
+      }
+      send(404, { message: 'not found' });
+    });
+  });
+  await new Promise<void>((r) => mp.listen(3999, r));
+  t.after(() => mp.close());
+
+  const mot = await novoMotorista(adm, 'AssMP');
+  const id = idDoToken(mot);
+  const ini = await jsonReq('POST', '/api/assinatura/iniciar', mot, {});
+  assert.equal(ini.status, 200, JSON.stringify(ini.data));
+  assert.match(ini.data.url, /^https:\/\/mp\.exemplo\/checkout/);
+  assert.equal(ini.data.plano.valor, 99);
+  const criado = pedidos.find((p) => p.m === 'POST')!;
+  assert.match(criado.auth || '', /^Bearer .+/);
+  assert.equal(criado.corpo.external_reference, `van-${id}`);
+  assert.equal(criado.corpo.auto_recurring.free_trial.frequency_type, 'days');
+  assert.ok(criado.corpo.auto_recurring.free_trial.frequency >= 29, 'cobra só depois do teste');
+  assert.equal(JSON.stringify(ini.data).includes('Bearer'), false);
+  assert.equal((await jsonReq('GET', '/api/assinatura', mot)).data.aguardandoPagamento, true);
+
+  // o motorista paga no site do Mercado Pago (aqui: o de mentira autoriza) e o aviso chega
+  const subId = [...subs.keys()][0];
+  subs.get(subId).status = 'authorized';
+  const ts = String(Math.floor(Date.now() / 1000)); const req = 'req-' + Date.now();
+  const v1 = crypto.createHmac('sha256', segredo).update(`id:${subId};request-id:${req};ts:${ts};`).digest('hex');
+  const aviso = (assin: string) => fetch(`${BASE}/api/webhooks/mercadopago?type=subscription_preapproval&data.id=${subId}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-signature': assin, 'x-request-id': req }, body: JSON.stringify({ type: 'subscription_preapproval', data: { id: subId } }) });
+  assert.equal((await aviso(`ts=${ts},v1=${'a'.repeat(64)}`)).status, 401, 'assinatura falsa é recusada');
+  assert.equal((await jsonReq('GET', '/api/assinatura', mot)).data.estado, 'TESTE', 'aviso falso não muda nada');
+  assert.equal((await aviso(`ts=${ts},v1=${v1}`)).status, 200);
+  const ativa = (await jsonReq('GET', '/api/assinatura', mot)).data;
+  assert.equal(ativa.estado, 'ATIVA');
+  assert.equal(ativa.planoContratado.valor, 99);
+
+  // venceria o teste, mas com assinatura ativa continua liberado
+  await jsonReq('POST', `/api/admin/assinaturas/${id}`, adm, { testeInicio: new Date(Date.now() - 40 * 86400000).toISOString() });
+  assert.equal((await jsonReq('GET', '/api/estado', mot)).status, 200);
+
+  // aviso de uma assinatura que não é a deste motorista não o afeta
+  const outra = crypto.randomBytes(8).toString('hex'); subs.set(outra, { id: outra, status: 'cancelled', external_reference: `van-${id}` });
+  const v1b = crypto.createHmac('sha256', segredo).update(`id:${outra};request-id:${req};ts:${ts};`).digest('hex');
+  await fetch(`${BASE}/api/webhooks/mercadopago?type=subscription_preapproval&data.id=${outra}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-signature': `ts=${ts},v1=${v1b}`, 'x-request-id': req }, body: '{}' });
+  assert.equal((await jsonReq('GET', '/api/estado', mot)).status, 200, 'assinatura antiga/estranha não bloqueia');
+
+  // já assina: não cria outra
+  assert.equal((await jsonReq('POST', '/api/assinatura/iniciar', mot, {})).status, 409);
+
+  // cancelar bloqueia (o teste já tinha acabado) e mostra a data de exclusão
+  const canc = await jsonReq('POST', '/api/assinatura/cancelar', mot, {});
+  assert.equal(canc.status, 200, JSON.stringify(canc.data));
+  assert.equal(canc.data.estado, 'BLOQUEADA');
+  assert.equal(subs.get(subId).status, 'cancelled');
+  assert.equal((await jsonReq('GET', '/api/estado', mot)).status, 402);
+  assert.equal((await jsonReq('POST', '/api/assinatura/cancelar', mot, {})).status, 409, 'nada mais a cancelar');
+});
