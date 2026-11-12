@@ -1526,6 +1526,10 @@ async function startServer() {
     res.json({ sucesso: true, token, role: user.role, emailVerified: true, studentId: user.studentId });
   });
 
+  /** O Mercado Pago recusa o pagador com e-mail de apelido ("nome+algo@..."), e o e-mail do motorista é o pagador da assinatura. */
+  const MSG_EMAIL_COM_MAIS = 'E-mail com o sinal "+" não é aceito para motorista. Use o e-mail principal, sem "+" (o mesmo que você usa no Mercado Pago).';
+  const emailTemMais = (e: unknown) => String(e ?? '').includes('+');
+
   app.post('/api/auth/register-motorista', rateLimiter(5, 60000), (req: Request, res: Response) => {
     const { fullName, email, password, phone, vehicleModel, vehiclePlate, invitationCode, lgpdConsent, firebaseUid } = req.body;
     const indicadorLink = motoristaPorCodigoIndicacao(req.body.indicacaoCodigo);
@@ -1540,6 +1544,8 @@ async function startServer() {
     if (!fullName || !email || !invitationCode || !lgpdConsent) {
       return res.status(400).json({ error: 'Todos os campos obrigatórios e o código de convite devem ser fornecidos.' });
     }
+
+    if (emailTemMais(email)) return res.status(400).json({ error: MSG_EMAIL_COM_MAIS });
 
     if (ADMIN_EMAILS.includes(String(email).trim().toLowerCase())) {
       return res.status(400).json({ error: 'Não foi possível completar o cadastro com este e-mail.' });
@@ -1823,6 +1829,7 @@ async function startServer() {
     if (!fullName || !email || !password) {
       return res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios.' });
     }
+    if (emailTemMais(email)) return res.status(400).json({ error: MSG_EMAIL_COM_MAIS });
     const existing = usersDB.find(u => u.email.toLowerCase() === email.trim().toLowerCase());
     if (existing) {
       return res.status(400).json({ error: 'E-mail de motorista já cadastrado.' });
