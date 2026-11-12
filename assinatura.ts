@@ -16,7 +16,7 @@ export const DIAS_TESTE = 30;
 export const DIAS_ATE_EXCLUSAO = 30;
 
 export interface PlanoDef {
-  chave: 'ate10' | 'ate20' | 'ate30' | 'ilimitado';
+  chave: 'ate10' | 'ate20' | 'ate30' | 'ate50';
   nome: string;
   /** Maior total de alunos cadastrados (manhã + tarde) que o plano cobre. null = sem limite. */
   ate: number | null;
@@ -29,17 +29,24 @@ export const PLANOS: readonly PlanoDef[] = [
   { chave: 'ate10', nome: 'Até 10 alunos', ate: 10, valor: 99 },
   { chave: 'ate20', nome: 'De 11 a 20 alunos', ate: 20, valor: 149 },
   { chave: 'ate30', nome: 'De 21 a 30 alunos', ate: 30, valor: 199 },
-  { chave: 'ilimitado', nome: 'Sem limite de alunos', ate: null, valor: 250 }
+  { chave: 'ate50', nome: 'De 31 a 50 alunos', ate: 50, valor: 250 }
 ];
 
-/** Plano que cobre esse total de alunos (o menor que serve). */
-export function planoPorAlunos(alunos: number): PlanoDef {
+/** Acima disso o valor é combinado com o suporte (o app não deixa assinar sozinho). */
+export const LIMITE_DOS_PLANOS = 50;
+/** Valor mostrado como "a partir de" para quem passa do limite (só texto: o valor final é combinado). */
+export const A_PARTIR_DE_ACIMA = 350;
+
+/** Plano que cobre esse total de alunos (o menor que serve). null = passa do limite de 50: valor combinado. */
+export function planoPorAlunos(alunos: number): PlanoDef | null {
   const n = Math.max(0, Math.floor(Number.isFinite(alunos) ? alunos : 0));
-  return PLANOS.find((p) => p.ate === null || n <= p.ate) ?? PLANOS[PLANOS.length - 1];
+  return PLANOS.find((p) => p.ate !== null && n <= p.ate) ?? null;
 }
 
 export function planoPorChave(chave: unknown): PlanoDef | undefined {
-  return PLANOS.find((p) => p.chave === chave);
+  // 'ilimitado' era o nome antigo do plano de R$ 250 (hoje até 50 alunos).
+  const k = chave === 'ilimitado' ? 'ate50' : chave;
+  return PLANOS.find((p) => p.chave === k);
 }
 
 /** Situação da assinatura no Mercado Pago. */
@@ -49,7 +56,7 @@ export interface AssinaturaMP {
   /** Id da assinatura (preapproval) no Mercado Pago. */
   id: string;
   status: StatusMP;
-  plano: PlanoDef['chave'];
+  plano: PlanoDef['chave'] | 'ilimitado';
   valor: number;
   /** Quando o status mudou para pausada/cancelada (marca o início do bloqueio e da contagem para exclusão). */
   encerradaEm?: string;

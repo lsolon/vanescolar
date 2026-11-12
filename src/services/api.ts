@@ -591,7 +591,7 @@ function mascararTelefone(tel: string): string {
 }
 
 // ---- Assinatura (teste grátis de 30 dias e cobrança pelo Mercado Pago) ----
-export interface PlanoAssinatura { chave: 'ate10' | 'ate20' | 'ate30' | 'ilimitado'; nome: string; ate: number | null; valor: number }
+export interface PlanoAssinatura { chave: 'ate10' | 'ate20' | 'ate30' | 'ate50'; nome: string; ate: number | null; valor: number }
 export interface EstadoAssinaturaMotorista {
   estado: 'ISENTA' | 'TESTE' | 'ATIVA' | 'BLOQUEADA';
   diasRestantes: number | null;
@@ -602,7 +602,10 @@ export interface EstadoAssinaturaMotorista {
   bloqueioAtivo: boolean;
   alunos: number;
   planos: PlanoAssinatura[];
-  planoSugerido?: { chave: string; nome: string; valor: number };
+  planoSugerido?: { chave: string; nome: string; valor: number } | null;
+  acimaDoLimite?: boolean;
+  limiteDosPlanos?: number;
+  aPartirDeAcima?: number;
   planoContratado?: { chave: string; nome: string; valor: number } | null;
   statusMercadoPago?: 'pending' | 'authorized' | 'paused' | 'cancelled' | null;
   precisaSubirPlano?: boolean;
