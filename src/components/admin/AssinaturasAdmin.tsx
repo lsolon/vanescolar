@@ -9,6 +9,15 @@ const COR: Record<string, string> = { TESTE: 'text-amber-300', ATIVA: 'text-emer
 export const AssinaturasAdmin: React.FC = () => {
   const [dados, setDados] = useState<{ bloqueioAtivo: boolean; cobrancaDisponivel: boolean; webhookComSegredo: boolean; motoristas: AssinaturaAdminLinha[] } | null>(null);
   const [erro, setErro] = useState<string | null>(null);
+  const [diagEmail, setDiagEmail] = useState('');
+  const [diag, setDiag] = useState<{ tipoDoToken: string; resultados: Array<{ nome: string; ok: boolean; detalhe: string }> } | null>(null);
+  const [diagCarregando, setDiagCarregando] = useState(false);
+  const rodarDiag = async () => {
+    setDiagCarregando(true); setDiag(null);
+    try { setDiag(await TransportRepository.diagnosticarMercadoPago(diagEmail.trim())); setErro(null); }
+    catch (e: any) { setErro(e?.message || 'Não foi possível testar.'); }
+    finally { setDiagCarregando(false); }
+  };
 
   const carregar = useCallback(async () => {
     try { setDados(await TransportRepository.listarAssinaturasAdmin()); setErro(null); }
@@ -37,6 +46,24 @@ export const AssinaturasAdmin: React.FC = () => {
           <li>Bloqueio ao fim do teste: <b className={dados.bloqueioAtivo ? 'text-emerald-300' : 'text-amber-300'}>{dados.bloqueioAtivo ? 'ligado' : 'desligado (ASSINATURA_BLOQUEIO=false)'}</b></li>
         </ul>
       )}
+      <details className="rounded-xl border border-slate-700 bg-slate-900/60 p-3">
+        <summary className="text-sm font-bold text-slate-200 cursor-pointer min-h-[44px] flex items-center">Testar o Mercado Pago</summary>
+        <div className="space-y-2 pt-2">
+          <p className="text-xs text-slate-400">Envia 5 pedidos de assinatura (do mais simples ao completo) e mostra qual o Mercado Pago recusa. Não cobra ninguém. Use um e-mail de pagador diferente do da sua conta de vendedor.</p>
+          <input type="email" value={diagEmail} onChange={(e) => setDiagEmail(e.target.value)} placeholder="e-mail do pagador" aria-label="E-mail do pagador" className="w-full min-h-[44px] rounded-xl bg-slate-950 border border-slate-700 px-3 text-sm text-white" />
+          <button type="button" onClick={rodarDiag} disabled={diagCarregando || !diagEmail.includes('@')} className="min-h-[44px] px-4 rounded-xl bg-amber-400 text-slate-950 text-sm font-black disabled:opacity-50">{diagCarregando ? 'Testando…' : 'Rodar teste'}</button>
+          {diag && (
+            <div className="space-y-1">
+              <p className="text-xs text-slate-300">Token: <b>{diag.tipoDoToken}</b></p>
+              <ul className="space-y-1">
+                {diag.resultados.map((r) => (
+                  <li key={r.nome} className={`text-xs ${r.ok ? 'text-emerald-300' : 'text-rose-300'}`}><b>{r.ok ? 'OK' : 'RECUSADO'}</b> · {r.nome}<br /><span className="text-slate-400">{r.detalhe}</span></li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </details>
       <p className="text-xs text-slate-500">Dados de motoristas bloqueados há mais de 30 dias aparecem como "pode excluir". Nenhuma exclusão é feita automaticamente.</p>
       <div className="overflow-x-auto">
         <table className="w-full text-left text-sm">

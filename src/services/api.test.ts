@@ -3253,6 +3253,15 @@ test('Assinatura: fluxo completo com Mercado Pago de mentira (assinar, webhook, 
   await fetch(`${BASE}/api/webhooks/mercadopago?type=subscription_preapproval&data.id=${outra}`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-signature': `ts=${ts},v1=${v1b}`, 'x-request-id': req }, body: '{}' });
   assert.equal((await jsonReq('GET', '/api/estado', mot)).status, 200, 'assinatura antiga/estranha não bloqueia');
 
+  // diagnóstico do Mercado Pago: só admin, e-mail válido, 5 pedidos do simples ao completo
+  assert.equal((await jsonReq('POST', '/api/admin/assinaturas-diagnostico', mot, { email: 'pagador@exemplo.com' })).status, 403);
+  assert.equal((await jsonReq('POST', '/api/admin/assinaturas-diagnostico', adm, { email: 'sem-arroba' })).status, 400);
+  const diag = await jsonReq('POST', '/api/admin/assinaturas-diagnostico', adm, { email: 'pagador@exemplo.com' });
+  assert.equal(diag.status, 200, JSON.stringify(diag.data));
+  assert.equal(diag.data.resultados.length, 5);
+  assert.ok(diag.data.resultados.every((r: any) => r.ok));
+  assert.equal(JSON.stringify(diag.data).includes('Bearer'), false);
+
   // já assina: não cria outra
   assert.equal((await jsonReq('POST', '/api/assinatura/iniciar', mot, {})).status, 409);
 
