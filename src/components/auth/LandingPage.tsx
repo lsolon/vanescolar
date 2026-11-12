@@ -182,6 +182,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     setLoadingDrvReg(true);
     setErroDrvReg(null);
 
+    if (drvEmail.includes('+')) {
+      setErroDrvReg('E-mail com o sinal "+" não é aceito para motorista. Use o e-mail principal, sem "+" (o mesmo que você usa no Mercado Pago).');
+      setLoadingDrvReg(false);
+      return;
+    }
     if (drvPassword.length < 10) {
       setErroDrvReg('A senha do motorista deve ter no mínimo 10 caracteres.');
       setLoadingDrvReg(false);

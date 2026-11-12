@@ -3278,3 +3278,17 @@ test('Assinatura: fluxo completo com Mercado Pago de mentira (assinar, webhook, 
   assert.equal((await jsonReq('GET', '/api/estado', mot)).status, 402);
   assert.equal((await jsonReq('POST', '/api/assinatura/cancelar', mot, {})).status, 409, 'nada mais a cancelar');
 });
+
+test('Motorista: e-mail com "+" é recusado no cadastro (o Mercado Pago não aceita apelido de e-mail como pagador)', async () => {
+  const adm = await adminToken();
+  const viaConvite = await jsonReq('POST', '/api/auth/register-motorista', undefined, {
+    fullName: 'Mais Plus', email: 'mais.plus+van@exemplo.com', password: 'senha-longa-123', invitationCode: 'CODIGO-QUALQUER-1', lgpdConsent: true
+  });
+  assert.equal(viaConvite.status, 400);
+  assert.match(String(viaConvite.data.error), /\+/);
+  const viaAdmin = await jsonReq('POST', '/api/admin/motoristas/criar', adm, { fullName: 'Mais Plus', email: 'mais.plus2+van@exemplo.com', password: 'senha-longa-123' });
+  assert.equal(viaAdmin.status, 400);
+  assert.match(String(viaAdmin.data.error), /\+/);
+  const lista = (await jsonReq('GET', '/api/admin/motoristas', adm)).data;
+  assert.equal(JSON.stringify(lista).includes('mais.plus'), false, 'nada foi criado');
+});
