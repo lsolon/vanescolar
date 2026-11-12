@@ -3215,11 +3215,16 @@ test('Assinatura: fluxo completo com Mercado Pago de mentira (assinar, webhook, 
   const id = idDoToken(mot);
   // plano inválido é recusado; escolher um plano maior que o necessário (com 0 alunos) é permitido
   assert.equal((await jsonReq('POST', '/api/assinatura/iniciar', mot, { plano: 'plano-que-nao-existe' })).status, 400);
-  const ini = await jsonReq('POST', '/api/assinatura/iniciar', mot, { plano: 'ate20' });
+  // e-mail do pagador: com "+" ou inválido é recusado antes de falar com o Mercado Pago
+  assert.equal((await jsonReq('POST', '/api/assinatura/iniciar', mot, { plano: 'ate20', emailPagador: 'alguem+x@gmail.com' })).status, 400);
+  assert.equal((await jsonReq('POST', '/api/assinatura/iniciar', mot, { plano: 'ate20', emailPagador: 'sem-arroba' })).status, 400);
+  assert.equal(pedidos.length, 0);
+  const ini = await jsonReq('POST', '/api/assinatura/iniciar', mot, { plano: 'ate20', emailPagador: 'Pagador@Exemplo.com' });
   assert.equal(ini.status, 200, JSON.stringify(ini.data));
   assert.match(ini.data.url, /^https:\/\/mp\.exemplo\/checkout/);
   assert.equal(ini.data.plano.valor, 149);
   const criado = pedidos.find((p) => p.m === 'POST')!;
+  assert.equal(criado.corpo.payer_email, 'pagador@exemplo.com');
   assert.match(criado.auth || '', /^Bearer .+/);
   assert.equal(criado.corpo.external_reference, `van-${id}`);
   const dias = (Date.parse(criado.corpo.auto_recurring.start_date) - Date.now()) / 86400000;
