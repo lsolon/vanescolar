@@ -3222,8 +3222,8 @@ test('Assinatura: fluxo completo com Mercado Pago de mentira (assinar, webhook, 
   const criado = pedidos.find((p) => p.m === 'POST')!;
   assert.match(criado.auth || '', /^Bearer .+/);
   assert.equal(criado.corpo.external_reference, `van-${id}`);
-  assert.equal(criado.corpo.auto_recurring.free_trial.frequency_type, 'days');
-  assert.ok(criado.corpo.auto_recurring.free_trial.frequency >= 29, 'cobra só depois do teste');
+  const dias = (Date.parse(criado.corpo.auto_recurring.start_date) - Date.now()) / 86400000;
+  assert.ok(dias >= 28.9 && dias <= 30.1, 'cobra só depois do teste');
   assert.equal(JSON.stringify(ini.data).includes('Bearer'), false);
   assert.equal((await jsonReq('GET', '/api/assinatura', mot)).data.aguardandoPagamento, true);
 

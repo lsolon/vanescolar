@@ -125,7 +125,7 @@ function falso(resp: { ok?: boolean; status?: number; corpo: any }) {
 
 test('criarAssinatura: corpo do pedido, teste grátis e endereço do checkout', async () => {
   const { f, chamadas } = falso({ corpo: { id: '2c93808472abcdef', status: 'pending', init_point: 'https://www.mercadopago.com.br/subscriptions/checkout?preapproval_id=2c93808472abcdef', external_reference: 'van-7', auto_recurring: { transaction_amount: 149 } } });
-  const r = await MP.criarAssinatura(f, 'APP_USR-segredo', { motivo: 'VanEscolar - 11 a 20 alunos', referencia: 'van-7', emailPagador: 'a@b.com', valor: 149, voltarPara: 'https://x.app/app?assinatura=retorno', diasGratis: 12, notificacao: 'https://x.app/api/webhooks/mercadopago' });
+  const r = await MP.criarAssinatura(f, 'APP_USR-segredo', { motivo: 'VanEscolar - 11 a 20 alunos', referencia: 'van-7', emailPagador: 'a@b.com', valor: 149, voltarPara: 'https://x.app/app?assinatura=retorno', diasGratis: 12, agoraMs: Date.UTC(2026, 10, 12), notificacao: 'https://x.app/api/webhooks/mercadopago' });
   assert.equal(r.initPoint?.startsWith('https://www.mercadopago.com.br/'), true);
   assert.equal(r.status, 'pending');
   const c = chamadas[0];
@@ -137,14 +137,15 @@ test('criarAssinatura: corpo do pedido, teste grátis e endereço do checkout', 
   assert.equal(corpo.external_reference, 'van-7');
   assert.equal(corpo.auto_recurring.transaction_amount, 149);
   assert.equal(corpo.auto_recurring.currency_id, 'BRL');
-  assert.deepEqual(corpo.auto_recurring.free_trial, { frequency: 12, frequency_type: 'days' });
+  assert.equal(corpo.auto_recurring.start_date, '2026-11-24T00:00:00.000Z');
+  assert.equal(corpo.auto_recurring.free_trial, undefined);
   assert.equal(corpo.card_token_id, undefined);
 });
 
 test('criarAssinatura: sem dias de teste não manda free_trial; sem endereço de checkout dá erro', async () => {
   const { f, chamadas } = falso({ corpo: { id: '2c93808472abcdef', init_point: 'https://mp/x' } });
   await MP.criarAssinatura(f, 't', { motivo: 'm', referencia: 'van-1', emailPagador: 'a@b.com', valor: 99, voltarPara: 'https://x' });
-  assert.equal(JSON.parse(chamadas[0].init.body).auto_recurring.free_trial, undefined);
+  assert.equal(JSON.parse(chamadas[0].init.body).auto_recurring.start_date, undefined);
   const sem = falso({ corpo: { id: '2c93808472abcdef' } });
   await assert.rejects(() => MP.criarAssinatura(sem.f, 't', { motivo: 'm', referencia: 'van-1', emailPagador: 'a@b.com', valor: 99, voltarPara: 'https://x' }), /endereço de pagamento/);
 });
