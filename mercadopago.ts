@@ -52,7 +52,11 @@ async function chamar(f: Fetch, token: string, metodo: string, caminho: string, 
   if (!res.ok) {
     // Não repassa o corpo do erro inteiro ao navegador: pode trazer dados internos. Fica só um resumo.
     const motivo = typeof d?.message === 'string' ? d.message.slice(0, 160) : '';
-    throw new ErroMP(`Mercado Pago recusou o pedido (${res.status})${motivo ? `: ${motivo}` : ''}`, res.status);
+    // O Mercado Pago costuma explicar o motivo real em `cause` (ex.: campo inválido). Só código e descrição curta.
+    const causas = Array.isArray(d?.cause)
+      ? d.cause.slice(0, 3).map((c: any) => [c?.code, typeof c?.description === 'string' ? c.description.slice(0, 120) : ''].filter(Boolean).join(' ')).filter(Boolean).join('; ')
+      : '';
+    throw new ErroMP(`Mercado Pago recusou o pedido (${res.status})${motivo ? `: ${motivo}` : ''}${causas ? ` [${causas}]` : ''}`, res.status);
   }
   return d;
 }
@@ -64,8 +68,10 @@ export interface NovaAssinatura {
   valor: number;
   /** Para onde o Mercado Pago devolve o motorista depois do checkout. */
   voltarPara: string;
-  /** Se o teste grátis ainda não acabou, o Mercado Pago só cobra depois dele. */
+  /** Se o teste grátis ainda não acabou, a primeira cobrança só acontece depois dele (início da cobrança no futuro). */
   diasGratis?: number;
+  /** Relógio (só para testes). */
+  agoraMs?: number;
   /** Endereço que recebe os avisos (webhook). */
   notificacao?: string;
 }
@@ -84,7 +90,8 @@ export async function criarAssinatura(f: Fetch, token: string, n: NovaAssinatura
       frequency_type: 'months',
       transaction_amount: n.valor,
       currency_id: 'BRL',
-      ...(dias > 0 ? { free_trial: { frequency: dias, frequency_type: 'days' } } : {})
+      // Assinatura sem plano: o teste grátis é a cobrança começar só depois dele (start_date no futuro).
+      ...(dias > 0 ? { start_date: new Date((n.agoraMs ?? Date.now()) + dias * 86400000).toISOString() } : {})
     },
     status: 'pending'
   });
