@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { TransportRepository } from '../../services/api';
 import { AuthService } from '../../services/auth';
+import { AssinaturasAdmin } from './AssinaturasAdmin';
 import { 
   Users, 
   Bus, 
@@ -25,7 +26,7 @@ interface AdminDashboardProps {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
-  const [activeTab, setActiveTab] = useState<'METRICS' | 'CADASTROS' | 'INDICACOES' | 'DRIVERS' | 'INVITES' | 'PARENTS' | 'SETTINGS'>('METRICS');
+  const [activeTab, setActiveTab] = useState<'METRICS' | 'CADASTROS' | 'INDICACOES' | 'DRIVERS' | 'INVITES' | 'PARENTS' | 'ASSINATURAS' | 'SETTINGS'>('METRICS');
   const [metrics, setMetrics] = useState<any>(null);
   const [drivers, setDrivers] = useState<any[]>([]);
   const [invites, setInvites] = useState<any[]>([]);
@@ -367,6 +368,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
             Motoristas
           </button>
           <button
+            onClick={() => setActiveTab('ASSINATURAS')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-bold transition-all ${activeTab === 'ASSINATURAS' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-900'}`}
+          >
+            <ShieldCheck className="w-5 h-5" />
+            Assinaturas
+          </button>
+          <button
             onClick={() => setActiveTab('INVITES')}
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-bold transition-all ${activeTab === 'INVITES' ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/20' : 'text-slate-400 hover:bg-slate-900'}`}
           >
@@ -665,6 +673,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
           )}
 
           {/* TAB: PARENTS */}
+          {activeTab === 'ASSINATURAS' && <AssinaturasAdmin />}
+
           {activeTab === 'PARENTS' && (
             <div className="space-y-4">
               <h2 className="text-xl font-bold text-white mb-6">Gestão de Responsáveis</h2>

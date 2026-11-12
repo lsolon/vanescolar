@@ -23,6 +23,8 @@ import webpush from 'web-push';
 import * as G from './mensagens';
 import * as HV from './historico';
 import * as CON from './consumo';
+import * as ASS from './assinatura';
+import * as MPG from './mercadopago';
 import * as RR from './src/services/rotaRuas';
 import { preverRota } from './src/services/atrasoRota';
 import { hashPassword, verifyPassword, upgradePasswordHash } from './senhas';
@@ -166,6 +168,8 @@ interface UserRecord {
   folgaChegadaMin?: number;
   /** Motorista: módulos (mensalidades, financeiro...) que ele ligou ou desligou. Ausente = padrões de modulos.ts */
   modulos?: Record<string, boolean>;
+  /** Motorista: teste grátis de 30 dias e assinatura no Mercado Pago (assinatura.ts). Sem dados de cartão. */
+  assinatura?: ASS.Assinatura;
   /** Motorista: chave Pix e nome/cidade do recebedor, usados só pelo módulo "pagamento-pix". A chave nunca vai para o log. */
   pix?: PIX.ConfigPix;
   /** Responsável: aparelhos que recebem avisos no celular (push). Só o necessário para enviar; apagados ao desligar ou quando o aparelho some. */
@@ -1312,7 +1316,7 @@ async function startServer() {
   app.use(async (req: Request, res: Response, next: NextFunction) => {
     const sensivel = req.path.startsWith('/api/auth/') || req.path.startsWith('/api/admin/') || req.path === '/api/vincular' || req.path.startsWith('/api/pre-cadastro/')
       || req.path.startsWith('/api/motorista/mensalidades') || req.path.startsWith('/api/mensalidades') || req.path.startsWith('/api/motorista/pix')
-      || req.path.startsWith('/api/motorista/financeiro')
+      || req.path.startsWith('/api/motorista/financeiro') || req.path.startsWith('/api/assinatura') || req.path.startsWith('/api/webhooks/')
       || req.path.startsWith('/api/motorista/mensagens') || req.path.startsWith('/api/conversa');
     if (persistence.kind === 'memory' || !sensivel) return next();
     try {
@@ -1366,6 +1370,50 @@ async function startServer() {
   app.use((req: Request, res: Response, next: NextFunction) => {
     if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
       res.on('finish', () => { if (res.statusCode < 400) persistence.scheduleSave(); });
+    }
+    next();
+  });
+
+  // ==========================================================================
+  // ASSINATURA: teste grátis de 30 dias e bloqueio (regras em assinatura.ts; cobrança em mercadopago.ts)
+  // O bloqueio vale para o motorista e, por consequência, para as famílias da van dele. Entrar no app e ver a
+  // tela de assinatura continuam funcionando. Variáveis: ASSINATURA_BLOQUEIO=false (só avisa, não bloqueia),
+  // ASSINATURA_ISENTOS=e-mails separados por vírgula (cortesia).
+  // ==========================================================================
+  const BLOQUEIO_ATIVO = process.env.ASSINATURA_BLOQUEIO !== 'false';
+  const ISENTOS_ASSINATURA = new Set(MOD.lerListaEmails(process.env.ASSINATURA_ISENTOS));
+  /** Carimba o início do teste de quem ainda não tem (contas que já existiam quando a cobrança entrou ganham 30 dias a partir daí). */
+  const assinaturaDoMotorista = (rec: UserRecord): ASS.Assinatura => {
+    const a = ASS.garantirTeste(rec.assinatura, Date.now());
+    if (a !== rec.assinatura) { rec.assinatura = a; persistence.scheduleSave(); }
+    return a;
+  };
+  const isentoPorConfig = (rec: UserRecord) => rec.email.endsWith('@teste.local') || ISENTOS_ASSINATURA.has(rec.email.toLowerCase());
+  const situacaoDoMotorista = (rec: UserRecord): ASS.SituacaoAssinatura => {
+    const a = assinaturaDoMotorista(rec);
+    return ASS.situacao(isentoPorConfig(rec) ? { ...a, isento: true } : a, Date.now());
+  };
+  const motoristaBloqueado = (id: number): boolean => {
+    const rec = usersDB.find((u) => u.id === id && u.role === 'motorista');
+    return !!rec && situacaoDoMotorista(rec).estado === 'BLOQUEADA';
+  };
+  /** Rotas que continuam abertas mesmo com a assinatura vencida (entrar, assinar, avisos públicos, administração). */
+  const ROTAS_ABERTAS_AO_BLOQUEIO = ['/auth', '/assinatura', '/webhooks', '/admin', '/health', '/config-publica', '/van', '/indicacao', '/pre-cadastro', '/log-uso', '/teste', '/events', '/conta', '/reset', '/push'];
+  app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+    // Aqui `req.path` já vem sem o "/api" (ex.: "/assinatura/iniciar").
+    if (!BLOQUEIO_ATIVO || ROTAS_ABERTAS_AO_BLOQUEIO.some((p) => req.path === p || req.path.startsWith(p + '/'))) return next();
+    const h = req.headers.authorization;
+    const token = h && h.startsWith('Bearer ') ? h.substring(7) : (req as any).cookies?.van_session;
+    const u = token ? verifyToken(token) : null;
+    if (!u || u.role === 'admin') return next();
+    if (u.role === 'motorista') {
+      if (!motoristaBloqueado(u.userId)) return next();
+      return res.status(402).json({ codigo: 'ASSINATURA_NECESSARIA', papel: 'motorista', error: 'O teste grátis terminou. Assine para voltar a usar o VanEscolar.' });
+    }
+    // Responsável: só fica sem acesso se TODAS as vans dos filhos estão suspensas.
+    const vans = [...motoristasDoResponsavel(u.userId, u.studentId)];
+    if (vans.length > 0 && vans.every((id) => motoristaBloqueado(id))) {
+      return res.status(402).json({ codigo: 'VAN_SUSPENSA', papel: 'responsavel', error: 'O acesso desta van ao VanEscolar está suspenso no momento. Fale com o motorista.' });
     }
     next();
   });
@@ -1523,6 +1571,7 @@ async function startServer() {
       role: 'motorista',
       emailVerified: true,
       criadoEm: new Date().toISOString(),
+      assinatura: ASS.garantirTeste(undefined, Date.now()),
       phone: phone || '(21) 98765-4321',
       veiculoModelo: vehicleModel || 'Renault Master Executiva',
       veiculoPlaca: vehiclePlate || 'RIO-2026',
@@ -1787,6 +1836,7 @@ async function startServer() {
       role: 'motorista',
       emailVerified: true,
       criadoEm: new Date().toISOString(),
+      assinatura: ASS.garantirTeste(undefined, Date.now()),
       phone: whatsapp || '(21) 98765-4321',
       whatsapp: whatsapp || '(21) 98765-4321',
       veiculoModelo: veiculoModelo || 'Renault Master Executiva',
@@ -2297,6 +2347,201 @@ async function startServer() {
     const user = (req as any).user as SessionPayload;
     return usersDB.find((u) => u.id === user.userId) ?? usersDB.find((u) => u.id === (driverIdFor(user) as number));
   };
+
+  // ==========================================================================
+  // ASSINATURA E COBRANÇA (Mercado Pago). O motorista cadastra o cartão no checkout do Mercado Pago, que cobra todo mês.
+  // Secrets necessários: MP_ACCESS_TOKEN (obrigatório para cobrar) e MP_WEBHOOK_SECRET (confere os avisos do Mercado Pago).
+  // O app nunca vê nem guarda dados de cartão: guarda só o id da assinatura, o status e o plano.
+  // ==========================================================================
+  const MP_TOKEN = () => String(process.env.MP_ACCESS_TOKEN || '').trim();
+  const MP_SEGREDO = () => String(process.env.MP_WEBHOOK_SECRET || '').trim();
+  /** Total de alunos cadastrados do motorista (manhã e tarde somados; vínculos recusados não contam). */
+  const totalDeAlunos = (motoristaId: number) => serverState.paradas.filter((p: any) => donoDaParada(p) === motoristaId && p.vinculo !== 'RECUSADO').length;
+  const fetchMP: MPG.Fetch = (url, init) => fetch(url, init as any) as any;
+  const respostaMP = (err: any, res: Response) => {
+    if (err instanceof MPG.ErroMP) {
+      console.error(`[Mercado Pago] ${err.message}`);
+      return res.status(err.status === 400 || err.status === 404 ? 400 : 502).json({ error: 'O Mercado Pago não conseguiu atender agora. Tente de novo em instantes.' });
+    }
+    console.error('[Mercado Pago] falha inesperada:', err?.message || err);
+    return res.status(502).json({ error: 'Não foi possível falar com o Mercado Pago agora. Tente de novo em instantes.' });
+  };
+
+  const estadoDaAssinatura = (rec: UserRecord) => {
+    const a = assinaturaDoMotorista(rec);
+    const s = situacaoDoMotorista(rec);
+    const alunos = totalDeAlunos(rec.id);
+    const sugerido = ASS.planoPorAlunos(alunos);
+    const contratado = ASS.planoPorChave(a.mp?.plano);
+    const mpAtivo = a.mp && (a.mp.status === 'authorized' || a.mp.status === 'pending') ? a.mp : null;
+    return {
+      ...s,
+      bloqueioAtivo: BLOQUEIO_ATIVO,
+      alunos,
+      planos: ASS.PLANOS,
+      planoSugerido: { chave: sugerido.chave, nome: sugerido.nome, valor: sugerido.valor },
+      planoContratado: contratado && mpAtivo ? { chave: contratado.chave, nome: contratado.nome, valor: a.mp!.valor } : null,
+      statusMercadoPago: a.mp?.status ?? null,
+      precisaSubirPlano: a.mp?.status === 'authorized' && ASS.precisaSubirPlano(a, alunos),
+      cobrancaDisponivel: !!MP_TOKEN(),
+      diasAteExclusao: ASS.DIAS_ATE_EXCLUSAO
+    };
+  };
+
+  app.get('/api/assinatura', authenticate, requireDriver, (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec || ((req as any).user as SessionPayload).role === 'admin') return res.json({ estado: 'ISENTA', diasRestantes: null, bloqueioAtivo: BLOQUEIO_ATIVO, cobrancaDisponivel: !!MP_TOKEN(), planos: ASS.PLANOS, alunos: 0 });
+    res.json(estadoDaAssinatura(rec));
+  });
+
+  /** Aplica no cadastro o que o Mercado Pago informa; só vale se a assinatura é a que este motorista abriu. */
+  const aplicarDoMP = (rec: UserRecord, r: MPG.AssinaturaMPResposta): boolean => {
+    const a = assinaturaDoMotorista(rec);
+    if (!a.mp || a.mp.id !== r.id || !r.status) return false;
+    if (ASS.motoristaDaReferencia(r.externalReference) !== rec.id) return false;
+    const antes = a.mp.status;
+    rec.assinatura = ASS.aplicarStatusMP(a, r.status, Date.now());
+    if (r.valor && rec.assinatura.mp) rec.assinatura.mp.valor = r.valor;
+    if (antes !== r.status) auditLog('ASSINATURA_STATUS', rec.email, `Assinatura #${rec.id}: ${antes} -> ${r.status}`);
+    return true;
+  };
+
+  app.post('/api/assinatura/iniciar', authenticate, requireDriver, rateLimiter(10, 60000), async (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec || ((req as any).user as SessionPayload).role === 'admin') return res.status(403).json({ error: 'Só o motorista assina.' });
+    if (!MP_TOKEN()) return res.status(503).json({ error: 'A cobrança ainda não está disponível. Fale com o suporte.' });
+    if (isentoPorConfig(rec) || assinaturaDoMotorista(rec).isento) return res.status(409).json({ error: 'Sua conta é cortesia: não precisa assinar.' });
+    const a = assinaturaDoMotorista(rec);
+    if (a.mp?.status === 'authorized') return res.status(409).json({ error: 'Você já tem uma assinatura ativa.' });
+    const plano = ASS.planoPorAlunos(totalDeAlunos(rec.id));
+    const s = ASS.situacao(a, Date.now());
+    try {
+      const r = await MPG.criarAssinatura(fetchMP, MP_TOKEN(), {
+        motivo: `VanEscolar - ${plano.nome}`,
+        referencia: ASS.referenciaDoMotorista(rec.id),
+        emailPagador: rec.email,
+        valor: plano.valor,
+        voltarPara: `${APP_URL_BASE}/app?assinatura=retorno`,
+        notificacao: `${APP_URL_BASE}/api/webhooks/mercadopago`,
+        // Ainda no teste: o Mercado Pago só cobra depois dos dias que sobram.
+        diasGratis: s.estado === 'TESTE' ? s.diasRestantes ?? 0 : 0
+      });
+      rec.assinatura = { ...a, mp: { id: r.id, status: r.status ?? 'pending', plano: plano.chave, valor: plano.valor, atualizadoEm: new Date().toISOString() } };
+      auditLog('ASSINATURA_INICIADA', rec.email, `Plano ${plano.chave} (R$ ${plano.valor})`);
+      res.json({ url: r.initPoint, plano: { chave: plano.chave, nome: plano.nome, valor: plano.valor } });
+    } catch (err: any) { respostaMP(err, res); }
+  });
+
+  /** Depois de voltar do checkout, o app confere no Mercado Pago em que pé está a assinatura. */
+  app.post('/api/assinatura/sincronizar', authenticate, requireDriver, rateLimiter(20, 60000), async (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const a = assinaturaDoMotorista(rec);
+    if (a.mp?.id && MP_TOKEN()) {
+      try { aplicarDoMP(rec, await MPG.buscarAssinatura(fetchMP, MP_TOKEN(), a.mp.id)); }
+      catch (err: any) { return respostaMP(err, res); }
+    }
+    res.json(estadoDaAssinatura(rec));
+  });
+
+  app.post('/api/assinatura/cancelar', authenticate, requireDriver, rateLimiter(5, 60000), async (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const a = assinaturaDoMotorista(rec);
+    if (!a.mp?.id || (a.mp.status !== 'authorized' && a.mp.status !== 'pending' && a.mp.status !== 'paused')) return res.status(409).json({ error: 'Não há assinatura para cancelar.' });
+    if (!MP_TOKEN()) return res.status(503).json({ error: 'A cobrança ainda não está disponível. Fale com o suporte.' });
+    try {
+      const r = await MPG.cancelarAssinatura(fetchMP, MP_TOKEN(), a.mp.id);
+      aplicarDoMP(rec, { ...r, status: 'cancelled', externalReference: r.externalReference ?? ASS.referenciaDoMotorista(rec.id) });
+      auditLog('ASSINATURA_CANCELADA', rec.email, `Assinatura cancelada pelo motorista #${rec.id}`);
+      res.json(estadoDaAssinatura(rec));
+    } catch (err: any) { respostaMP(err, res); }
+  });
+
+  /** Subiu de faixa de alunos: passa o valor da assinatura para o plano certo. */
+  app.post('/api/assinatura/ajustar', authenticate, requireDriver, rateLimiter(5, 60000), async (req: Request, res: Response) => {
+    const rec = contaDoMotorista(req);
+    if (!rec) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const a = assinaturaDoMotorista(rec);
+    if (a.mp?.status !== 'authorized' || !a.mp.id) return res.status(409).json({ error: 'Só dá para ajustar uma assinatura ativa.' });
+    if (!MP_TOKEN()) return res.status(503).json({ error: 'A cobrança ainda não está disponível. Fale com o suporte.' });
+    const plano = ASS.planoPorAlunos(totalDeAlunos(rec.id));
+    if (plano.valor === a.mp.valor && plano.chave === a.mp.plano) return res.json(estadoDaAssinatura(rec));
+    try {
+      const r = await MPG.mudarValor(fetchMP, MP_TOKEN(), a.mp.id, plano.valor);
+      rec.assinatura = { ...a, mp: { ...a.mp, plano: plano.chave, valor: plano.valor, atualizadoEm: new Date().toISOString() } };
+      if (r.status) aplicarDoMP(rec, { ...r, externalReference: r.externalReference ?? ASS.referenciaDoMotorista(rec.id) });
+      auditLog('ASSINATURA_AJUSTADA', rec.email, `Plano ${plano.chave} (R$ ${plano.valor})`);
+      res.json(estadoDaAssinatura(rec));
+    } catch (err: any) { respostaMP(err, res); }
+  });
+
+  // Aviso (webhook) do Mercado Pago. Nunca confiamos no corpo: só o id vale, e o estado real é buscado no Mercado Pago
+  // com o nosso token. A assinatura digital (MP_WEBHOOK_SECRET) filtra quem não é o Mercado Pago.
+  app.post('/api/webhooks/mercadopago', rateLimiter(120, 60000), async (req: Request, res: Response) => {
+    const dataId = String(req.query['data.id'] ?? req.body?.data?.id ?? '');
+    const tipo = String(req.query.type ?? req.query.topic ?? req.body?.type ?? req.body?.topic ?? '');
+    const segredo = MP_SEGREDO();
+    if (segredo) {
+      const ok = MPG.assinaturaDoAvisoValida({ segredo, xSignature: String(req.headers['x-signature'] ?? ''), xRequestId: String(req.headers['x-request-id'] ?? ''), dataId: String(req.query['data.id'] ?? ''), toleranciaMs: 15 * 60 * 1000 });
+      if (!ok) { auditLog('MP_WEBHOOK_RECUSADO', 'mercadopago', 'Assinatura digital inválida'); return res.status(401).json({ error: 'Assinatura inválida.' }); }
+    }
+    if (tipo !== 'subscription_preapproval') return res.sendStatus(200); // pagamentos avulsos e outros avisos: nada a fazer
+    if (!MP_TOKEN()) return res.sendStatus(503);
+    try {
+      const r = await MPG.buscarAssinatura(fetchMP, MP_TOKEN(), dataId);
+      const dono = ASS.motoristaDaReferencia(r.externalReference);
+      const rec = dono !== null ? usersDB.find((u) => u.id === dono && u.role === 'motorista') : undefined;
+      if (rec) aplicarDoMP(rec, r);
+      res.sendStatus(200);
+    } catch (err: any) {
+      if (err instanceof MPG.ErroMP && err.status === 400) return res.sendStatus(200); // id inválido: reenviar não resolve
+      console.error('[Mercado Pago] webhook:', err?.message || err);
+      res.sendStatus(500); // o Mercado Pago tenta de novo
+    }
+  });
+
+  // Administração: situação de cada motorista, cortesia e dias extras de teste.
+  app.get('/api/admin/assinaturas', authenticate, requireAdmin, (_req: Request, res: Response) => {
+    const agora = Date.now();
+    res.json({
+      bloqueioAtivo: BLOQUEIO_ATIVO,
+      cobrancaDisponivel: !!MP_TOKEN(),
+      webhookComSegredo: !!MP_SEGREDO(),
+      motoristas: usersDB.filter((u) => u.role === 'motorista' && !u.email.endsWith('@teste.local')).map((u) => {
+        const a = assinaturaDoMotorista(u);
+        const s = situacaoDoMotorista(u);
+        return {
+          id: u.id, nome: u.fullName, email: u.email, alunos: totalDeAlunos(u.id),
+          estado: s.estado, diasRestantes: s.diasRestantes, testeFim: s.testeFim, bloqueadaDesde: s.bloqueadaDesde, excluirApos: s.excluirApos,
+          podeExcluir: s.excluirApos !== null && Date.parse(s.excluirApos) <= agora,
+          isento: !!a.isento, isentoPorConfig: isentoPorConfig(u), diasExtras: a.diasExtras ?? 0,
+          plano: a.mp ? { chave: a.mp.plano, valor: a.mp.valor, status: a.mp.status } : null
+        };
+      })
+    });
+  });
+
+  app.post('/api/admin/assinaturas/:id', authenticate, requireAdmin, (req: Request, res: Response) => {
+    const rec = usersDB.find((u) => u.id === parseInt(req.params.id, 10) && u.role === 'motorista');
+    if (!rec) return res.status(404).json({ error: 'Motorista não encontrado.' });
+    const a = { ...assinaturaDoMotorista(rec) };
+    const b = req.body ?? {};
+    if (typeof b.isento === 'boolean') a.isento = b.isento || undefined;
+    if (b.diasExtras !== undefined) {
+      const d = Math.floor(Number(b.diasExtras));
+      if (!Number.isFinite(d) || d < 0 || d > 365) return res.status(400).json({ error: 'Dias extras: de 0 a 365.' });
+      a.diasExtras = d || undefined;
+    }
+    if (b.testeInicio !== undefined) {
+      const t = Date.parse(String(b.testeInicio));
+      if (!Number.isFinite(t) || t > Date.now() + 86400000) return res.status(400).json({ error: 'Data de início do teste inválida.' });
+      a.testeInicio = new Date(t).toISOString();
+    }
+    rec.assinatura = a;
+    auditLog('ASSINATURA_AJUSTE_ADMIN', ((req as any).user as SessionPayload).email, `Motorista ${rec.id}: ${JSON.stringify({ isento: !!a.isento, diasExtras: a.diasExtras ?? 0, testeInicio: a.testeInicio })}`);
+    res.json({ sucesso: true });
+  });
 
   // Módulos em teste (restritos) só existem para os e-mails liberados nas variáveis do servidor (ex.: PIX_BETA_EMAILS).
   const liberadosDe = (rec: { email?: string } | undefined) => MOD.liberadosPara(rec?.email, process.env);
