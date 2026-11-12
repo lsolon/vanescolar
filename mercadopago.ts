@@ -16,6 +16,14 @@ export const API_MP = 'https://api.mercadopago.com';
 /** Só os testes mudam isto (MP_API_URL) para apontar para um Mercado Pago de mentira. Em produção fica o endereço oficial. */
 const baseMP = () => String(process.env.MP_API_URL || API_MP).replace(/\/+$/, '');
 
+/**
+ * Integrator ID do Solon (desenvolvedor certificado Mercado Pago, Checkout Pro, 12/11/2026).
+ * Vai em todas as chamadas no cabeçalho `x-integrator-id`, para o Mercado Pago reconhecer a integração e dar os
+ * benefícios do Programa de Parcerias. Não é segredo (é um identificador público); para trocar, use o Secret MP_INTEGRATOR_ID.
+ */
+export const INTEGRATOR_ID_PADRAO = 'dev_97e1aa69deed11f193486203702d6ec2';
+export const integratorId = () => String(process.env.MP_INTEGRATOR_ID || INTEGRATOR_ID_PADRAO).trim();
+
 export type Fetch = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string }) => Promise<{ ok: boolean; status: number; json: () => Promise<any> }>;
 
 export class ErroMP extends Error {
@@ -45,7 +53,7 @@ function ler(d: any): AssinaturaMPResposta {
 async function chamar(f: Fetch, token: string, metodo: string, caminho: string, corpo?: unknown): Promise<any> {
   const res = await f(`${baseMP()}${caminho}`, {
     method: metodo,
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'x-integrator-id': integratorId() },
     ...(corpo !== undefined ? { body: JSON.stringify(corpo) } : {})
   });
   const d = await res.json().catch(() => ({}));

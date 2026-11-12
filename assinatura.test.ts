@@ -132,6 +132,8 @@ test('criarAssinatura: corpo do pedido, teste grátis e endereço do checkout', 
   assert.equal(c.url, 'https://api.mercadopago.com/preapproval');
   assert.equal(c.init.method, 'POST');
   assert.equal(c.init.headers.Authorization, 'Bearer APP_USR-segredo');
+  // Integrator ID do programa de parceiros vai em toda chamada ao Mercado Pago.
+  assert.equal(c.init.headers['x-integrator-id'], 'dev_97e1aa69deed11f193486203702d6ec2');
   const corpo = JSON.parse(c.init.body);
   assert.equal(corpo.status, 'pending');
   assert.equal(corpo.external_reference, 'van-7');
