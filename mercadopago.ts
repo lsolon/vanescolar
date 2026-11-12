@@ -145,3 +145,37 @@ export function assinaturaDoAvisoValida(p: { segredo: string; xSignature?: strin
   }
   return true;
 }
+
+/**
+ * Diagnóstico (só admin): manda ao Mercado Pago alguns pedidos de assinatura pendente, do mais simples ao completo,
+ * para descobrir qual campo é recusado. Não cobra ninguém (assinatura "pending" só existe até alguém pagar no checkout).
+ */
+export async function diagnosticarPedido(f: Fetch, token: string, emailPagador: string, appUrl: string, agoraMs = Date.now()): Promise<Array<{ nome: string; ok: boolean; detalhe: string }>> {
+  const base = (extra: Record<string, unknown> = {}, recorrencia: Record<string, unknown> = {}, backUrl = appUrl) => ({
+    reason: 'VanEscolar - diagnostico',
+    external_reference: 'van-diagnostico',
+    payer_email: emailPagador,
+    back_url: backUrl,
+    auto_recurring: { frequency: 1, frequency_type: 'months', transaction_amount: 99, currency_id: 'BRL', ...recorrencia },
+    status: 'pending',
+    ...extra
+  });
+  const inicio = new Date(agoraMs + 30 * 86400000).toISOString();
+  const pedidos: Array<[string, unknown]> = [
+    ['1. Mínimo (só o necessário)', base()],
+    ['2. + endereço de avisos (webhook)', base({ notification_url: `${appUrl}/api/webhooks/mercadopago` })],
+    ['3. + início da cobrança em 30 dias', base({}, { start_date: inicio })],
+    ['4. Endereço de retorno completo (/app?assinatura=retorno)', base({}, {}, `${appUrl}/app?assinatura=retorno`)],
+    ['5. Igual ao do app (tudo junto)', base({ notification_url: `${appUrl}/api/webhooks/mercadopago` }, { start_date: inicio }, `${appUrl}/app?assinatura=retorno`)]
+  ];
+  const saida: Array<{ nome: string; ok: boolean; detalhe: string }> = [];
+  for (const [nome, corpo] of pedidos) {
+    try {
+      const d = await chamar(f, token, 'POST', '/preapproval', corpo);
+      saida.push({ nome, ok: true, detalhe: d?.init_point ? 'aceito (criou o endereço de pagamento)' : 'aceito' });
+    } catch (e: any) {
+      saida.push({ nome, ok: false, detalhe: String(e?.message || e).slice(0, 300) });
+    }
+  }
+  return saida;
+}

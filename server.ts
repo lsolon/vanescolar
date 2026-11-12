@@ -2532,6 +2532,17 @@ async function startServer() {
     });
   });
 
+  // Diagnóstico do Mercado Pago (só admin): testa pedidos do mais simples ao completo e diz qual é recusado.
+  app.post('/api/admin/assinaturas-diagnostico', authenticate, requireAdmin, rateLimiter(5, 60000), async (req: Request, res: Response) => {
+    if (!MP_TOKEN()) return res.status(503).json({ error: 'Falta MP_ACCESS_TOKEN.' });
+    const email = String(req.body?.email || '').trim().toLowerCase().slice(0, 120);
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Informe um e-mail válido do pagador.' });
+    const token = MP_TOKEN();
+    const prefixo = token.startsWith('APP_USR-') ? 'produção (APP_USR-)' : token.startsWith('TEST-') ? 'teste (TEST-)' : 'formato desconhecido';
+    const resultados = await MPG.diagnosticarPedido(fetchMP, token, email, APP_URL_BASE);
+    res.json({ tipoDoToken: prefixo, resultados });
+  });
+
   app.post('/api/admin/assinaturas/:id', authenticate, requireAdmin, (req: Request, res: Response) => {
     const rec = usersDB.find((u) => u.id === parseInt(req.params.id, 10) && u.role === 'motorista');
     if (!rec) return res.status(404).json({ error: 'Motorista não encontrado.' });

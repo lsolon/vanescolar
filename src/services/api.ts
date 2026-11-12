@@ -1074,6 +1074,10 @@ export const TransportRepository = {
     const res = await fetch(`${getBaseUrl()}/api/admin/assinaturas`, { headers: getAuthHeaders(true) });
     return handleAdminResponse(res);
   },
+  async diagnosticarMercadoPago(email: string): Promise<{ tipoDoToken: string; resultados: Array<{ nome: string; ok: boolean; detalhe: string }> }> {
+    const res = await fetch(`${getBaseUrl()}/api/admin/assinaturas-diagnostico`, { method: 'POST', headers: getAuthHeaders(true), body: JSON.stringify({ email }) });
+    return handleAdminResponse(res);
+  },
   async ajustarAssinaturaAdmin(id: number, corpo: { isento?: boolean; diasExtras?: number }) {
     const res = await fetch(`${getBaseUrl()}/api/admin/assinaturas/${id}`, { method: 'POST', headers: getAuthHeaders(true), body: JSON.stringify(corpo) });
     return handleAdminResponse(res);
