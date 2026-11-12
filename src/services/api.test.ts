@@ -3213,10 +3213,12 @@ test('Assinatura: fluxo completo com Mercado Pago de mentira (assinar, webhook, 
 
   const mot = await novoMotorista(adm, 'AssMP');
   const id = idDoToken(mot);
-  const ini = await jsonReq('POST', '/api/assinatura/iniciar', mot, {});
+  // plano inválido é recusado; escolher um plano maior que o necessário (com 0 alunos) é permitido
+  assert.equal((await jsonReq('POST', '/api/assinatura/iniciar', mot, { plano: 'plano-que-nao-existe' })).status, 400);
+  const ini = await jsonReq('POST', '/api/assinatura/iniciar', mot, { plano: 'ate20' });
   assert.equal(ini.status, 200, JSON.stringify(ini.data));
   assert.match(ini.data.url, /^https:\/\/mp\.exemplo\/checkout/);
-  assert.equal(ini.data.plano.valor, 99);
+  assert.equal(ini.data.plano.valor, 149);
   const criado = pedidos.find((p) => p.m === 'POST')!;
   assert.match(criado.auth || '', /^Bearer .+/);
   assert.equal(criado.corpo.external_reference, `van-${id}`);
@@ -3236,7 +3238,10 @@ test('Assinatura: fluxo completo com Mercado Pago de mentira (assinar, webhook, 
   assert.equal((await aviso(`ts=${ts},v1=${v1}`)).status, 200);
   const ativa = (await jsonReq('GET', '/api/assinatura', mot)).data;
   assert.equal(ativa.estado, 'ATIVA');
-  assert.equal(ativa.planoContratado.valor, 99);
+  assert.equal(ativa.planoContratado.valor, 149);
+  assert.equal(ativa.precisaSubirPlano, false);
+  // quem escolheu um plano maior não é rebaixado ao ajustar
+  assert.equal((await jsonReq('POST', '/api/assinatura/ajustar', mot, {})).data.planoContratado.valor, 149);
 
   // venceria o teste, mas com assinatura ativa continua liberado
   await jsonReq('POST', `/api/admin/assinaturas/${id}`, adm, { testeInicio: new Date(Date.now() - 40 * 86400000).toISOString() });
