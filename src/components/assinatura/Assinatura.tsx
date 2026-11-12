@@ -79,9 +79,10 @@ export const PainelAssinatura: React.FC<{ aoMudar?: (e: EstadoAssinaturaMotorist
   if (!estado) return <p className="text-xs text-slate-400">Carregando…</p>;
 
   const sugerido = estado.planoSugerido?.chave;
-  const indiceMin = Math.max(0, estado.planos.findIndex((p) => p.chave === sugerido));
+  const acima = !!estado.acimaDoLimite; // passou do limite dos planos: valor combinado pelo WhatsApp
+  const indiceMin = acima ? estado.planos.length : Math.max(0, estado.planos.findIndex((p) => p.chave === sugerido));
   const podeEscolher = estado.estado !== 'ATIVA' && estado.estado !== 'ISENTA' && !estado.aguardandoPagamento;
-  const planoEscolhido = estado.planos.find((p) => p.chave === escolhido) ?? estado.planos[indiceMin];
+  const planoEscolhido = acima ? undefined : (estado.planos.find((p) => p.chave === escolhido) ?? estado.planos[indiceMin]);
   const bloqueada = estado.estado === 'BLOQUEADA';
   return (
     <div className="space-y-3" data-testid="painel-assinatura">
@@ -135,14 +136,21 @@ export const PainelAssinatura: React.FC<{ aoMudar?: (e: EstadoAssinaturaMotorist
                     type="button" role="radio" aria-checked={marcado} disabled={!podeEscolher || abaixo} onClick={() => setEscolhido(p.chave)}
                     className={`w-full flex items-center justify-between rounded-xl border px-3 py-2.5 min-h-[44px] text-sm text-left ${marcado ? 'border-amber-400 bg-amber-400/10 text-amber-100 font-bold' : 'border-slate-800 bg-slate-950/60 text-slate-300'} ${podeEscolher && !abaixo ? 'cursor-pointer' : 'cursor-default'} ${abaixo ? 'opacity-40' : ''}`}
                   >
-                    <span>{p.nome}{p.chave === sugerido ? ' · mínimo para você' : ''}</span>
+                    <span>{p.nome}{!acima && p.chave === sugerido ? ' · mínimo para você' : ''}</span>
                     <span>{reais(p.valor)}/mês</span>
                   </button>
                 </li>
               );
             })}
           </ul>
-          {estado.estado !== 'ATIVA' && !estado.aguardandoPagamento && (
+          {acima && (
+            <div role="note" className="rounded-xl border border-amber-400/40 bg-amber-400/10 p-3 space-y-2">
+              <p className="text-sm font-bold text-amber-100">Mais de {estado.limiteDosPlanos ?? 50} alunos · a partir de {reais(estado.aPartirDeAcima ?? 350)}/mês</p>
+              <p className="text-xs text-amber-100/90">Para o seu tamanho o valor é combinado. Fale com a gente pelo WhatsApp (21) 97268-2614.</p>
+              <a href="https://wa.me/5521972682614" target="_blank" rel="noopener noreferrer" className="inline-flex items-center min-h-[44px] px-4 rounded-xl bg-emerald-500 text-slate-950 text-sm font-black">Chamar no WhatsApp</a>
+            </div>
+          )}
+          {estado.estado !== 'ATIVA' && !estado.aguardandoPagamento && !acima && (
             estado.cobrancaDisponivel
               ? <button type="button" disabled={ocupado} onClick={assinar} className="w-full min-h-[48px] rounded-xl bg-amber-400 text-slate-950 text-sm font-black cursor-pointer disabled:opacity-60">{ocupado ? 'Abrindo o Mercado Pago…' : `Assinar com Mercado Pago · ${planoEscolhido ? reais(planoEscolhido.valor) : ''}/mês`}</button>
               : <p className="text-xs text-slate-400">A cobrança ainda não está liberada. Fale com o suporte: WhatsApp (21) 97268-2614.</p>

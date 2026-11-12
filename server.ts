@@ -2371,7 +2371,7 @@ async function startServer() {
     const a = assinaturaDoMotorista(rec);
     const s = situacaoDoMotorista(rec);
     const alunos = totalDeAlunos(rec.id);
-    const sugerido = ASS.planoPorAlunos(alunos);
+    const sugerido = ASS.planoPorAlunos(alunos); // null: passou de 50 alunos, valor combinado
     const contratado = ASS.planoPorChave(a.mp?.plano);
     const mpAtivo = a.mp && (a.mp.status === 'authorized' || a.mp.status === 'pending') ? a.mp : null;
     return {
@@ -2379,7 +2379,10 @@ async function startServer() {
       bloqueioAtivo: BLOQUEIO_ATIVO,
       alunos,
       planos: ASS.PLANOS,
-      planoSugerido: { chave: sugerido.chave, nome: sugerido.nome, valor: sugerido.valor },
+      planoSugerido: sugerido ? { chave: sugerido.chave, nome: sugerido.nome, valor: sugerido.valor } : null,
+      acimaDoLimite: !sugerido,
+      limiteDosPlanos: ASS.LIMITE_DOS_PLANOS,
+      aPartirDeAcima: ASS.A_PARTIR_DE_ACIMA,
       planoContratado: contratado && mpAtivo ? { chave: contratado.chave, nome: contratado.nome, valor: a.mp!.valor } : null,
       statusMercadoPago: a.mp?.status ?? null,
       precisaSubirPlano: a.mp?.status === 'authorized' && ASS.precisaSubirPlano(a, alunos),
@@ -2415,6 +2418,7 @@ async function startServer() {
     if (a.mp?.status === 'authorized') return res.status(409).json({ error: 'Você já tem uma assinatura ativa.' });
     // O motorista pode escolher um plano maior que o necessário (já prevendo mais alunos), nunca um menor que o total de hoje.
     const necessario = ASS.planoPorAlunos(totalDeAlunos(rec.id));
+    if (!necessario) return res.status(409).json({ error: `Com mais de ${ASS.LIMITE_DOS_PLANOS} alunos o valor é combinado. Fale com a gente pelo WhatsApp (21) 97268-2614.` });
     const pedido = req.body?.plano !== undefined ? ASS.planoPorChave(req.body.plano) : necessario;
     if (!pedido) return res.status(400).json({ error: 'Plano inválido.' });
     if (ASS.PLANOS.indexOf(pedido) < ASS.PLANOS.indexOf(necessario)) return res.status(400).json({ error: `Com ${totalDeAlunos(rec.id)} alunos, o plano mínimo é ${necessario.nome}.` });
@@ -2471,6 +2475,7 @@ async function startServer() {
     if (a.mp?.status !== 'authorized' || !a.mp.id) return res.status(409).json({ error: 'Só dá para ajustar uma assinatura ativa.' });
     if (!MP_TOKEN()) return res.status(503).json({ error: 'A cobrança ainda não está disponível. Fale com o suporte.' });
     const plano = ASS.planoPorAlunos(totalDeAlunos(rec.id));
+    if (!plano) return res.status(409).json({ error: `Com mais de ${ASS.LIMITE_DOS_PLANOS} alunos o valor é combinado. Fale com a gente pelo WhatsApp (21) 97268-2614.` });
     if (!ASS.precisaSubirPlano(a, totalDeAlunos(rec.id))) return res.json(estadoDaAssinatura(rec));
     try {
       const r = await MPG.mudarValor(fetchMP, MP_TOKEN(), a.mp.id, plano.valor);

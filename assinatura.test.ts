@@ -8,15 +8,18 @@ const DIA = 24 * 60 * 60 * 1000;
 const T0 = Date.parse('2026-11-12T12:00:00Z');
 
 test('planos: faixa pelo total de alunos (manhã + tarde somados)', () => {
-  assert.equal(A.planoPorAlunos(0).valor, 99);
-  assert.equal(A.planoPorAlunos(10).valor, 99);
-  assert.equal(A.planoPorAlunos(11).valor, 149);
-  assert.equal(A.planoPorAlunos(20).valor, 149);
-  assert.equal(A.planoPorAlunos(21).valor, 199);
-  assert.equal(A.planoPorAlunos(30).valor, 199);
-  assert.equal(A.planoPorAlunos(31).valor, 250);
-  assert.equal(A.planoPorAlunos(40).chave, 'ilimitado');
-  assert.equal(A.planoPorAlunos(NaN).valor, 99);
+  assert.equal(A.planoPorAlunos(0)?.valor, 99);
+  assert.equal(A.planoPorAlunos(10)?.valor, 99);
+  assert.equal(A.planoPorAlunos(11)?.valor, 149);
+  assert.equal(A.planoPorAlunos(20)?.valor, 149);
+  assert.equal(A.planoPorAlunos(21)?.valor, 199);
+  assert.equal(A.planoPorAlunos(30)?.valor, 199);
+  assert.equal(A.planoPorAlunos(31)?.valor, 250);
+  assert.equal(A.planoPorAlunos(40)?.chave, 'ate50');
+  assert.equal(A.planoPorAlunos(50)?.valor, 250);
+  assert.equal(A.planoPorAlunos(51), null, 'acima de 50 o valor é combinado');
+  assert.equal(A.planoPorAlunos(NaN)?.valor, 99);
+  assert.equal(A.planoPorChave('ilimitado')?.chave, 'ate50', 'nome antigo continua valendo');
 });
 
 test('teste de 30 dias: conta os dias e bloqueia no 31º', () => {
@@ -99,7 +102,9 @@ test('precisa subir de plano quando passa do limite contratado', () => {
   const a: A.Assinatura = { testeInicio: '', mp: { id: 'abc12345', status: 'authorized', plano: 'ate10', valor: 99, atualizadoEm: '' } };
   assert.equal(A.precisaSubirPlano(a, 10), false);
   assert.equal(A.precisaSubirPlano(a, 11), true);
-  assert.equal(A.precisaSubirPlano({ ...a, mp: { ...a.mp!, plano: 'ilimitado', valor: 250 } }, 80), false);
+  assert.equal(A.precisaSubirPlano({ ...a, mp: { ...a.mp!, plano: 'ate50', valor: 250 } }, 50), false);
+  assert.equal(A.precisaSubirPlano({ ...a, mp: { ...a.mp!, plano: 'ate50', valor: 250 } }, 51), true);
+  assert.equal(A.precisaSubirPlano({ ...a, mp: { ...a.mp!, plano: 'ilimitado', valor: 250 } }, 50), false);
   assert.equal(A.precisaSubirPlano(undefined, 80), false);
 });
 
