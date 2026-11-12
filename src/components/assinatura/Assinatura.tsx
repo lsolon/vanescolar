@@ -59,6 +59,7 @@ export const PainelAssinatura: React.FC<{ aoMudar?: (e: EstadoAssinaturaMotorist
   const [msg, setMsg] = useState<string | null>(null);
   const [confirmaCancelar, setConfirmaCancelar] = useState(false);
   const [escolhido, setEscolhido] = useState<string | null>(null);
+  const [emailMP, setEmailMP] = useState('');
 
   const atualizar = (e: EstadoAssinaturaMotorista) => { setEstado(e); aoMudar?.(e); };
 
@@ -68,7 +69,7 @@ export const PainelAssinatura: React.FC<{ aoMudar?: (e: EstadoAssinaturaMotorist
   };
 
   const assinar = () => executar(async () => {
-    const r = await TransportRepository.iniciarAssinatura(planoEscolhido?.chave);
+    const r = await TransportRepository.iniciarAssinatura(planoEscolhido?.chave, emailMP.trim() || undefined);
     window.location.assign(r.url); // checkout do Mercado Pago
   });
   const cancelar = () => executar(async () => { atualizar(await TransportRepository.cancelarAssinatura()); setConfirmaCancelar(false); });
@@ -152,7 +153,14 @@ export const PainelAssinatura: React.FC<{ aoMudar?: (e: EstadoAssinaturaMotorist
           )}
           {estado.estado !== 'ATIVA' && !estado.aguardandoPagamento && !acima && (
             estado.cobrancaDisponivel
-              ? <button type="button" disabled={ocupado} onClick={assinar} className="w-full min-h-[48px] rounded-xl bg-amber-400 text-slate-950 text-sm font-black cursor-pointer disabled:opacity-60">{ocupado ? 'Abrindo o Mercado Pago…' : `Assinar com Mercado Pago · ${planoEscolhido ? reais(planoEscolhido.valor) : ''}/mês`}</button>
+              ? <>
+                <label className="block text-xs text-slate-300 space-y-1">
+                  <span>E-mail da sua conta Mercado Pago (opcional)</span>
+                  <input type="email" value={emailMP} onChange={(e) => setEmailMP(e.target.value)} placeholder="o mesmo e-mail que você usa no Mercado Pago" className="w-full min-h-[44px] rounded-xl bg-slate-950 border border-slate-700 px-3 text-sm text-white" />
+                  <span className="block text-[11px] text-slate-500">Se o pagamento não abrir, informe aqui o e-mail da sua conta (sem o sinal "+").</span>
+                </label>
+                <button type="button" disabled={ocupado} onClick={assinar} className="w-full min-h-[48px] rounded-xl bg-amber-400 text-slate-950 text-sm font-black cursor-pointer disabled:opacity-60">{ocupado ? 'Abrindo o Mercado Pago…' : `Assinar com Mercado Pago · ${planoEscolhido ? reais(planoEscolhido.valor) : ''}/mês`}</button>
+              </>
               : <p className="text-xs text-slate-400">A cobrança ainda não está liberada. Fale com o suporte: WhatsApp (21) 97268-2614.</p>
           )}
           {estado.aguardandoPagamento && estado.estado !== 'ATIVA' && estado.cobrancaDisponivel && (

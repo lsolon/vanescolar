@@ -2358,9 +2358,10 @@ async function startServer() {
   /** Total de alunos cadastrados do motorista (manhã e tarde somados; vínculos recusados não contam). */
   const totalDeAlunos = (motoristaId: number) => serverState.paradas.filter((p: any) => donoDaParada(p) === motoristaId && p.vinculo !== 'RECUSADO').length;
   const fetchMP: MPG.Fetch = (url, init) => fetch(url, init as any) as any;
-  const respostaMP = (err: any, res: Response) => {
+  const respostaMP = (err: any, res: Response, msg400?: string) => {
     if (err instanceof MPG.ErroMP) {
       console.error(`[Mercado Pago] ${err.message}`);
+      if (msg400 && err.status === 400) return res.status(400).json({ error: msg400 });
       return res.status(err.status === 400 || err.status === 404 ? 400 : 502).json({ error: 'O Mercado Pago não conseguiu atender agora. Tente de novo em instantes.' });
     }
     console.error('[Mercado Pago] falha inesperada:', err?.message || err);
@@ -2423,12 +2424,17 @@ async function startServer() {
     if (!pedido) return res.status(400).json({ error: 'Plano inválido.' });
     if (ASS.PLANOS.indexOf(pedido) < ASS.PLANOS.indexOf(necessario)) return res.status(400).json({ error: `Com ${totalDeAlunos(rec.id)} alunos, o plano mínimo é ${necessario.nome}.` });
     const plano = pedido;
+    // O Mercado Pago valida o e-mail do pagador: apelidos com "+" ou o e-mail da conta vendedora são recusados.
+    // O motorista pode informar o e-mail da conta Mercado Pago dele; sem isso, usa o e-mail de login.
+    const informado = String(req.body?.emailPagador ?? '').trim().toLowerCase().slice(0, 120);
+    if (informado && !/^[^@\s+]+@[^@\s]+\.[^@\s]+$/.test(informado)) return res.status(400).json({ error: 'Informe um e-mail válido, sem o sinal "+".' });
+    const emailPagador = informado || rec.email;
     const s = ASS.situacao(a, Date.now());
     try {
       const r = await MPG.criarAssinatura(fetchMP, MP_TOKEN(), {
         motivo: `VanEscolar - ${plano.nome}`,
         referencia: ASS.referenciaDoMotorista(rec.id),
-        emailPagador: rec.email,
+        emailPagador,
         valor: plano.valor,
         voltarPara: `${APP_URL_BASE}/app?assinatura=retorno`,
         notificacao: `${APP_URL_BASE}/api/webhooks/mercadopago`,
@@ -2438,7 +2444,7 @@ async function startServer() {
       rec.assinatura = { ...a, mp: { id: r.id, status: r.status ?? 'pending', plano: plano.chave, valor: plano.valor, atualizadoEm: new Date().toISOString() } };
       auditLog('ASSINATURA_INICIADA', rec.email, `Plano ${plano.chave} (R$ ${plano.valor})`);
       res.json({ url: r.initPoint, plano: { chave: plano.chave, nome: plano.nome, valor: plano.valor } });
-    } catch (err: any) { respostaMP(err, res); }
+    } catch (err: any) { respostaMP(err, res, 'O Mercado Pago não aceitou esse e-mail. Informe o e-mail da sua conta Mercado Pago (sem o sinal "+" e diferente do e-mail de quem recebe).'); }
   });
 
   /** Depois de voltar do checkout, o app confere no Mercado Pago em que pé está a assinatura. */
