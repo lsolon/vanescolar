@@ -58,6 +58,7 @@ export const PainelAssinatura: React.FC<{ aoMudar?: (e: EstadoAssinaturaMotorist
   const [ocupado, setOcupado] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [confirmaCancelar, setConfirmaCancelar] = useState(false);
+  const [escolhido, setEscolhido] = useState<string | null>(null);
 
   const atualizar = (e: EstadoAssinaturaMotorista) => { setEstado(e); aoMudar?.(e); };
 
@@ -67,7 +68,7 @@ export const PainelAssinatura: React.FC<{ aoMudar?: (e: EstadoAssinaturaMotorist
   };
 
   const assinar = () => executar(async () => {
-    const r = await TransportRepository.iniciarAssinatura();
+    const r = await TransportRepository.iniciarAssinatura(planoEscolhido?.chave);
     window.location.assign(r.url); // checkout do Mercado Pago
   });
   const cancelar = () => executar(async () => { atualizar(await TransportRepository.cancelarAssinatura()); setConfirmaCancelar(false); });
@@ -78,6 +79,9 @@ export const PainelAssinatura: React.FC<{ aoMudar?: (e: EstadoAssinaturaMotorist
   if (!estado) return <p className="text-xs text-slate-400">Carregando…</p>;
 
   const sugerido = estado.planoSugerido?.chave;
+  const indiceMin = Math.max(0, estado.planos.findIndex((p) => p.chave === sugerido));
+  const podeEscolher = estado.estado !== 'ATIVA' && estado.estado !== 'ISENTA' && !estado.aguardandoPagamento;
+  const planoEscolhido = estado.planos.find((p) => p.chave === escolhido) ?? estado.planos[indiceMin];
   const bloqueada = estado.estado === 'BLOQUEADA';
   return (
     <div className="space-y-3" data-testid="painel-assinatura">
@@ -120,18 +124,27 @@ export const PainelAssinatura: React.FC<{ aoMudar?: (e: EstadoAssinaturaMotorist
 
       {estado.estado !== 'ISENTA' && (
         <>
-          <p className="text-[11px] text-slate-400">Valor mensal pelo total de alunos cadastrados (manhã e tarde somados). Você tem <b className="text-slate-200">{estado.alunos}</b>.</p>
-          <ul className="space-y-1.5">
-            {estado.planos.map((p) => (
-              <li key={p.chave} className={`flex items-center justify-between rounded-xl border px-3 py-2.5 text-sm ${p.chave === sugerido ? 'border-amber-400 bg-amber-400/10 text-amber-100 font-bold' : 'border-slate-800 bg-slate-950/60 text-slate-300'}`}>
-                <span>{p.nome}{p.chave === sugerido ? ' · o seu' : ''}</span>
-                <span>{reais(p.valor)}/mês</span>
-              </li>
-            ))}
+          <p className="text-[11px] text-slate-400">Valor mensal pelo total de alunos cadastrados (manhã e tarde somados). Você tem <b className="text-slate-200">{estado.alunos}</b>.{podeEscolher ? ' Toque no plano que quiser; pode escolher um maior que o mínimo, se for crescer.' : ''}</p>
+          <ul className="space-y-1.5" role="radiogroup" aria-label="Plano">
+            {estado.planos.map((p, i) => {
+              const abaixo = i < indiceMin;
+              const marcado = podeEscolher ? p.chave === planoEscolhido?.chave : p.chave === sugerido;
+              return (
+                <li key={p.chave}>
+                  <button
+                    type="button" role="radio" aria-checked={marcado} disabled={!podeEscolher || abaixo} onClick={() => setEscolhido(p.chave)}
+                    className={`w-full flex items-center justify-between rounded-xl border px-3 py-2.5 min-h-[44px] text-sm text-left ${marcado ? 'border-amber-400 bg-amber-400/10 text-amber-100 font-bold' : 'border-slate-800 bg-slate-950/60 text-slate-300'} ${podeEscolher && !abaixo ? 'cursor-pointer' : 'cursor-default'} ${abaixo ? 'opacity-40' : ''}`}
+                  >
+                    <span>{p.nome}{p.chave === sugerido ? ' · mínimo para você' : ''}</span>
+                    <span>{reais(p.valor)}/mês</span>
+                  </button>
+                </li>
+              );
+            })}
           </ul>
           {estado.estado !== 'ATIVA' && !estado.aguardandoPagamento && (
             estado.cobrancaDisponivel
-              ? <button type="button" disabled={ocupado} onClick={assinar} className="w-full min-h-[48px] rounded-xl bg-amber-400 text-slate-950 text-sm font-black cursor-pointer disabled:opacity-60">{ocupado ? 'Abrindo o Mercado Pago…' : `Assinar com Mercado Pago · ${estado.planoSugerido ? reais(estado.planoSugerido.valor) : ''}/mês`}</button>
+              ? <button type="button" disabled={ocupado} onClick={assinar} className="w-full min-h-[48px] rounded-xl bg-amber-400 text-slate-950 text-sm font-black cursor-pointer disabled:opacity-60">{ocupado ? 'Abrindo o Mercado Pago…' : `Assinar com Mercado Pago · ${planoEscolhido ? reais(planoEscolhido.valor) : ''}/mês`}</button>
               : <p className="text-xs text-slate-400">A cobrança ainda não está liberada. Fale com o suporte: WhatsApp (21) 97268-2614.</p>
           )}
           {estado.aguardandoPagamento && estado.estado !== 'ATIVA' && estado.cobrancaDisponivel && (

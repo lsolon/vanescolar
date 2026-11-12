@@ -1043,8 +1043,8 @@ export const TransportRepository = {
     return d as EstadoAssinaturaMotorista;
   },
   /** Cria a assinatura no Mercado Pago e devolve o endereço do checkout (o app leva o motorista até lá). */
-  async iniciarAssinatura(): Promise<{ url: string; plano: { chave: string; nome: string; valor: number } }> {
-    const res = await fetch(`${getBaseUrl()}/api/assinatura/iniciar`, { method: 'POST', headers: getAuthHeaders(), body: '{}' });
+  async iniciarAssinatura(plano?: string): Promise<{ url: string; plano: { chave: string; nome: string; valor: number } }> {
+    const res = await fetch(`${getBaseUrl()}/api/assinatura/iniciar`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(plano ? { plano } : {}) });
     const d = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(d.error || 'Não foi possível iniciar a assinatura.');
     return d;

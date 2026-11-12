@@ -2413,7 +2413,12 @@ async function startServer() {
     if (isentoPorConfig(rec) || assinaturaDoMotorista(rec).isento) return res.status(409).json({ error: 'Sua conta é cortesia: não precisa assinar.' });
     const a = assinaturaDoMotorista(rec);
     if (a.mp?.status === 'authorized') return res.status(409).json({ error: 'Você já tem uma assinatura ativa.' });
-    const plano = ASS.planoPorAlunos(totalDeAlunos(rec.id));
+    // O motorista pode escolher um plano maior que o necessário (já prevendo mais alunos), nunca um menor que o total de hoje.
+    const necessario = ASS.planoPorAlunos(totalDeAlunos(rec.id));
+    const pedido = req.body?.plano !== undefined ? ASS.planoPorChave(req.body.plano) : necessario;
+    if (!pedido) return res.status(400).json({ error: 'Plano inválido.' });
+    if (ASS.PLANOS.indexOf(pedido) < ASS.PLANOS.indexOf(necessario)) return res.status(400).json({ error: `Com ${totalDeAlunos(rec.id)} alunos, o plano mínimo é ${necessario.nome}.` });
+    const plano = pedido;
     const s = ASS.situacao(a, Date.now());
     try {
       const r = await MPG.criarAssinatura(fetchMP, MP_TOKEN(), {
@@ -2466,7 +2471,7 @@ async function startServer() {
     if (a.mp?.status !== 'authorized' || !a.mp.id) return res.status(409).json({ error: 'Só dá para ajustar uma assinatura ativa.' });
     if (!MP_TOKEN()) return res.status(503).json({ error: 'A cobrança ainda não está disponível. Fale com o suporte.' });
     const plano = ASS.planoPorAlunos(totalDeAlunos(rec.id));
-    if (plano.valor === a.mp.valor && plano.chave === a.mp.plano) return res.json(estadoDaAssinatura(rec));
+    if (!ASS.precisaSubirPlano(a, totalDeAlunos(rec.id))) return res.json(estadoDaAssinatura(rec));
     try {
       const r = await MPG.mudarValor(fetchMP, MP_TOKEN(), a.mp.id, plano.valor);
       rec.assinatura = { ...a, mp: { ...a.mp, plano: plano.chave, valor: plano.valor, atualizadoEm: new Date().toISOString() } };
