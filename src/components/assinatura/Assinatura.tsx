@@ -10,7 +10,9 @@ import { AuthService } from '../../services/auth';
  * O app nunca vê dados de cartão: o motorista paga no site do Mercado Pago.
  */
 
-export const EVENTO_BLOQUEIO = 'van-bloqueio';
+import { EVENTO_BLOQUEIO } from '../../services/http';
+
+export { EVENTO_BLOQUEIO };
 export const EVENTO_ABRIR = 'van-abrir-assinatura';
 
 const reais = (v: number) => `R$ ${v.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;

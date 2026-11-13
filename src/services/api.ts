@@ -19,6 +19,7 @@ import {
 } from '../types/database';
 
 import { AuthService } from './auth';
+import { fetchApp as fetch } from './http';
 
 const SIMULATED_LATENCY_MS = 120;
 const sleep = (ms: number = SIMULATED_LATENCY_MS) => new Promise((resolve) => setTimeout(resolve, ms));
