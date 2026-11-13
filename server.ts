@@ -90,6 +90,15 @@ async function verifyFirebaseIdToken(idToken: unknown): Promise<{ email: string 
 }
 
 const MODO_TESTE_SEM_LOGIN = process.env.MODO_TESTE_SEM_LOGIN === 'true';
+// Com CHAVE_MODO_TESTE definida, o modo de teste fica "trancado": só entra quem abre o link com ?teste=<chave>.
+// O público não vê o botão de teste e a rota /api/teste/entrar responde 404 sem a chave certa.
+const CHAVE_MODO_TESTE = () => String(process.env.CHAVE_MODO_TESTE || '').trim();
+const chaveTesteConfere = (informada: unknown): boolean => {
+  const esperada = CHAVE_MODO_TESTE();
+  if (!esperada || typeof informada !== 'string' || !informada) return false;
+  const h = (v: string) => crypto.createHash('sha256').update(v).digest();
+  return crypto.timingSafeEqual(h(informada), h(esperada));
+};
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'leandrosolon@gmail.com,admin@vanescolar.com.br')
   .split(',')
   .map((e) => e.trim().toLowerCase());
@@ -1420,7 +1429,7 @@ async function startServer() {
 
   // Saúde do servidor (não expõe dados): útil para conferir se a persistência está ativa.
   app.get('/api/health', (_req: Request, res: Response) => {
-    res.json({ ok: true, demoMode: DEMO_MODE, modoTeste: MODO_TESTE_SEM_LOGIN, logUso: LOG.ativo, persistence: persistence.kind, instancia: instanciaId, iniciadoEm, ...(persistence.reason ? { motivo: persistence.reason } : {}) });
+    res.json({ ok: true, demoMode: DEMO_MODE, modoTeste: MODO_TESTE_SEM_LOGIN && !CHAVE_MODO_TESTE(), testeComChave: MODO_TESTE_SEM_LOGIN && !!CHAVE_MODO_TESTE(), logUso: LOG.ativo, persistence: persistence.kind, instancia: instanciaId, iniciadoEm, ...(persistence.reason ? { motivo: persistence.reason } : {}) });
   });
 
   app.use((_req: Request, res: Response, next: NextFunction) => {
@@ -1517,6 +1526,7 @@ async function startServer() {
   };
   app.post('/api/teste/entrar', rateLimiter(30, 60000), (req: Request, res: Response) => {
     if (!MODO_TESTE_SEM_LOGIN) return res.status(404).json({ error: 'Não encontrado.' });
+    if (CHAVE_MODO_TESTE() && !chaveTesteConfere(req.body?.chave)) return res.status(404).json({ error: 'Não encontrado.' });
     const papel = req.body?.papel === 'motorista' ? 'motorista' : req.body?.papel === 'responsavel' ? 'responsavel' : null;
     if (!papel) return res.status(400).json({ error: 'Informe papel: motorista ou responsavel.' });
     const user = obterUsuarioTeste(papel, req.body?.nome, req.body?.sessao);
@@ -4319,6 +4329,8 @@ async function startServer() {
   app.post('/api/teste/exemplos', authenticate, rateLimiter(10, 60000), (req: Request, res: Response) => {
     if (!MODO_TESTE_SEM_LOGIN) return res.status(404).json({ error: 'Não encontrado.' });
     const user = (req as any).user as SessionPayload;
+    // Com a chave definida, só contas de teste recebem os exemplos (motorista real não ganha alunos fictícios).
+    if (CHAVE_MODO_TESTE() && !String((user as any).email || '').endsWith('@teste.local')) return res.status(404).json({ error: 'Não encontrado.' });
     if (user.role === 'motorista') {
       const driverId = driverIdFor(user) as number;
       if ((serverState.paradas as any[]).some((p) => donoDaParada(p) === driverId && p.vinculo !== 'RECUSADO')) {

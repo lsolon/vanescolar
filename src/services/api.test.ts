@@ -1960,6 +1960,25 @@ test('Guia do primeiro acesso: os exemplos só existem no modo de teste; no modo
   assert.notEqual(ex2.data.codigo, ex.data.codigo, 'cada responsável recebe um aluno de exemplo próprio');
 });
 
+test('Modo de teste com chave: sem a chave certa a entrada de teste não existe', async () => {
+  const h = (await jsonReq('GET', '/api/health')).data;
+  const chave = process.env.CHAVE_MODO_TESTE || '';
+  if (!h.testeComChave || !chave) {
+    assert.ok(!h.testeComChave, 'sem a chave no ambiente do teste, só vale conferir que o servidor aberto não anuncia chave');
+    return;
+  }
+  assert.equal(h.modoTeste, false, 'público não vê o botão de teste');
+  const sessao = 'c1b2c3d4e5f6a7b8';
+  assert.equal((await jsonReq('POST', '/api/teste/entrar', undefined, { papel: 'motorista', sessao })).status, 404, 'sem chave');
+  assert.equal((await jsonReq('POST', '/api/teste/entrar', undefined, { papel: 'motorista', sessao, chave: 'errada' })).status, 404, 'chave errada');
+  const ok = await jsonReq('POST', '/api/teste/entrar', undefined, { papel: 'motorista', sessao, chave });
+  assert.equal(ok.status, 200, JSON.stringify(ok.data));
+  assert.equal((await jsonReq('POST', '/api/teste/exemplos', ok.data.token, {})).status, 200, 'conta de teste recebe os exemplos');
+  const adm = (await jsonReq('POST', '/api/admin/auth', undefined, { email: 'leandrosolon@gmail.com', password: ADMIN_TEST_PASSWORD })).data.token;
+  const real = await novoMotorista(adm, 'ChaveReal');
+  assert.equal((await jsonReq('POST', '/api/teste/exemplos', real, {})).status, 404, 'motorista real não recebe alunos fictícios');
+});
+
 test('Modo de teste: cada sessão ganha conta própria e sem sessão volta à conta compartilhada', async () => {
   const modoTeste = !!(await jsonReq('GET', '/api/health')).data.modoTeste;
   if (!modoTeste) {
