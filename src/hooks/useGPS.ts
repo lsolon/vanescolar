@@ -33,6 +33,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { GPSCoordinate } from '../types/database';
 import { subscribeToDatabaseChanges, TransportRepository } from '../services/api';
+import { fetchApp } from '../services/http';
 import { isDemoMode } from '../services/demo';
 
 export interface WaypointRota {
@@ -264,8 +265,8 @@ export function useGPS(isAtivo: boolean, options: UseGPSOptions = {}) {
       setCoordenadas(novaTelemetria);
 
       // Envia telemetria GPS para o servidor propagar via SSE para os pais
-      if (typeof fetch !== 'undefined') {
-        fetch('/api/gps', {
+      if (typeof globalThis.fetch === 'function') {
+        fetchApp('/api/gps', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(novaTelemetria)
