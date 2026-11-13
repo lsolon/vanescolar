@@ -738,6 +738,20 @@ export interface ResumoFinanceiro {
  * Id aleatório deste aparelho no modo de teste: cada testador ganha a sua própria conta (dados separados).
  * Com `?conta=demo` na URL volta à conta de teste compartilhada (usada nas demonstrações).
  */
+/** Chave do modo de teste trancado: vem do link `?teste=<chave>`, fica neste aparelho e sai da barra de endereço. */
+function chaveModoTeste(): string {
+  try {
+    const url = new URL(window.location.href);
+    const naUrl = url.searchParams.get('teste');
+    if (naUrl) {
+      localStorage.setItem('van_teste_chave', naUrl.slice(0, 200));
+      url.searchParams.delete('teste');
+      window.history.replaceState(null, '', url.pathname + (url.search || '') + url.hash);
+    }
+    return localStorage.getItem('van_teste_chave') || '';
+  } catch { return ''; }
+}
+
 function idSessaoTeste(): string | undefined {
   try {
     if (new URLSearchParams(window.location.search).get('conta') === 'demo') return undefined;
@@ -1202,7 +1216,9 @@ export const TransportRepository = {
   async modoTesteAtivo(): Promise<boolean> {
     try {
       const r = await fetch(`${getBaseUrl()}/api/health`);
-      return !!(await r.json()).modoTeste;
+      const d = await r.json();
+      if (d.modoTeste) return true;
+      return !!d.testeComChave && !!chaveModoTeste();
     } catch { return false; }
   },
 
@@ -1210,7 +1226,7 @@ export const TransportRepository = {
     const res = await fetch(`${getBaseUrl()}/api/teste/entrar`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ papel, nome, sessao: idSessaoTeste() })
+      body: JSON.stringify({ papel, nome, sessao: idSessaoTeste(), chave: chaveModoTeste() || undefined })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Modo de teste indisponível.');
