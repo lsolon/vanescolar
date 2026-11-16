@@ -32,6 +32,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
   const [invites, setInvites] = useState<any[]>([]);
   const [parents, setParents] = useState<any[]>([]);
   const [cadastros, setCadastros] = useState<{ resumo: any; lista: any[] } | null>(null);
+  const [linksLp, setLinksLp] = useState<any[]>([]);
   const [filtroPapel, setFiltroPapel] = useState<'TODOS' | 'motorista' | 'responsavel'>('TODOS');
   const [indicadores, setIndicadores] = useState<any[]>([]);
   const [convitePorId, setConvitePorId] = useState<string>('');
@@ -77,6 +78,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
       } else if (activeTab === 'CADASTROS') {
         const data = await TransportRepository.listarCadastrosAdmin();
         setCadastros({ resumo: data.resumo, lista: data.cadastros || [] });
+        try { setLinksLp((await TransportRepository.listarVisitasLpAdmin()).links || []); } catch { setLinksLp([]); }
       } else if (activeTab === 'INDICACOES') {
         const data = await TransportRepository.listarIndicacoesAdmin();
         setIndicadores(data.indicadores || []);
@@ -495,6 +497,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onLogout }) => {
                   </tbody>
                 </table>
                 {cadastros.lista.length === 0 && <p className="text-sm text-slate-500 py-6">Nenhum cadastro ainda.</p>}
+              </div>
+              <div className="space-y-3">
+                <h3 className="text-sm font-bold text-white">Aberturas do link da página</h3>
+                {linksLp.length === 0 ? (
+                  <p className="text-sm text-slate-500">Nenhuma abertura registrada ainda. Cada mensagem de apresentação leva um código no link (…/lp.html?l=código).</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead className="text-slate-500 font-bold">
+                        <tr><th className="pb-3 pr-4">Código</th><th className="pb-3 pr-4">Primeira abertura</th><th className="pb-3 pr-4">Última</th><th className="pb-3 pr-4">Aberturas</th><th className="pb-3">Robôs</th></tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800">
+                        {linksLp.map((l) => (
+                          <tr key={l.codigo} className="text-slate-300">
+                            <td className="py-2 pr-4 font-mono text-xs text-white">{l.codigo}</td>
+                            <td className="py-2 pr-4 text-xs">{l.primeiraAbertura ? new Date(l.primeiraAbertura).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—'}</td>
+                            <td className="py-2 pr-4 text-xs">{l.ultimaAbertura ? new Date(l.ultimaAbertura).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—'}</td>
+                            <td className="py-2 pr-4 text-xs">{l.aberturas}</td>
+                            <td className="py-2 text-xs text-slate-500">{l.aberturasRobo}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <p className="text-[11px] text-slate-500">Só guarda o código e o horário (sem IP nem aparelho). "Robôs" são pré-visualizações do WhatsApp e buscadores, que não contam como abertura.</p>
               </div>
               <p className="text-[11px] text-slate-500">"Acessos" conta logins feitos pelo app (contas antigas começam a contar a partir desta versão). Quem só visitou o site sem criar conta aparece no Google Analytics.</p>
             </div>

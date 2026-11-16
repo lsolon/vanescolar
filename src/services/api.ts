@@ -918,6 +918,12 @@ export const TransportRepository = {
     return handleAdminResponse(res);
   },
 
+  /** Admin: aberturas do link da página inicial, por código (cada mensagem de apresentação leva um código). */
+  async listarVisitasLpAdmin() {
+    const res = await fetch(`${getBaseUrl()}/api/admin/visitas-lp`, { headers: getAuthHeaders(true) });
+    return handleAdminResponse(res);
+  },
+
   /** Admin: motoristas que indicaram outros, com os indicados e o benefício concedido. */
   async listarIndicacoesAdmin() {
     const res = await fetch(`${getBaseUrl()}/api/admin/indicacoes`, { headers: getAuthHeaders(true) });
