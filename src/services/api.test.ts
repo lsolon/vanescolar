@@ -3331,3 +3331,14 @@ test('Landing page: abertura do link com código é registrada (sem IP), robô n
   assert.equal(lista.some((x) => x.codigo.includes('RUIM')), false);
   assert.equal(JSON.stringify(lista).match(/\d+\.\d+\.\d+\.\d+/), null, 'nenhum IP guardado');
 });
+
+test('Landing page: /lp (sem extensão) abre a página, com ou sem código', async () => {
+  for (const caminho of ['/lp', '/lp?l=ab12cd3']) {
+    const res = await fetch(`${BASE}${caminho}`);
+    assert.equal(res.status, 200, caminho);
+    assert.match(res.headers.get('content-type') || '', /text\/html/);
+    const html = await res.text();
+    assert.match(html, /og:image/, 'tem a imagem de pré-visualização');
+    assert.match(html, /\/api\/lp\/visita/, 'avisa a abertura do link');
+  }
+});

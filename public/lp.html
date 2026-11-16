@@ -9,7 +9,7 @@
 <meta property="og:title" content="VanEscolar — 30 dias grátis para organizar a sua van">
 <meta property="og:description" content="Embarque, aviso para as famílias e mensalidades da van escolar no celular.">
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://vanescolar.ai.studio/lp.html">
+<meta property="og:url" content="https://vanescolar.ai.studio/lp">
 <meta property="og:site_name" content="VanEscolar">
 <meta property="og:locale" content="pt_BR">
 <meta property="og:image" content="https://vanescolar.ai.studio/og-lp.png">
@@ -31,9 +31,9 @@ summary{cursor:pointer}
 </head>
 <body>
 <script>
-// Quem já está no app (sessão ativa ou app instalado) vai direto para ele. /lp.html sempre mostra a página.
+// Quem já está no app (sessão ativa ou app instalado) vai direto para ele. /lp.html e /lp sempre mostram a página.
 try {
-  if (location.pathname !== '/lp.html' && (localStorage.getItem('van_token') || localStorage.getItem('adminToken') || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone)) { location.replace('/app'); }
+  if (location.pathname !== '/lp.html' && location.pathname !== '/lp' && (localStorage.getItem('van_token') || localStorage.getItem('adminToken') || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone)) { location.replace('/app'); }
 } catch (e) {}
 // Link com código (?l=…): avisa o servidor que a página foi aberta, para o Solon saber quem viu. Só o código é enviado.
 try {

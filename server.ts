@@ -4912,6 +4912,12 @@ async function startServer() {
     res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(path.resolve(__dirname, isProd ? 'dist' : 'public', 'lp.html'));
   });
+  // Endereço curto da landing, sem ".html": o WhatsApp Web corta links terminados em extensão (só "…/lp" fica clicável).
+  // Aceita ?l=código para o rastreio de abertura. Sempre mostra a página, mesmo para quem já está logado.
+  app.get('/lp', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(path.resolve(__dirname, isProd ? 'dist' : 'public', 'lp.html'));
+  });
   if (isProd) {
     // O service worker e o manifesto não podem ficar presos no cache do navegador, senão o app não atualiza.
     app.use(express.static(path.resolve(__dirname, 'dist'), {
