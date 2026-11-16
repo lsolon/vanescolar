@@ -13,6 +13,7 @@ import crypto from 'crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { createPersistence, createFirestoreFromEnv } from './persistence';
 import { LogUso, LogArquivo, LogFirestore, emCsv } from './logUso';
+import { VisitasLp, VisitasArquivo, VisitasFirestore, codigoLpValido, pareceRobo } from './visitasLp';
 import * as M from './mensalidades';
 import * as F from './financeiro';
 import * as MOD from './modulos';
@@ -1292,6 +1293,14 @@ async function startServer() {
   logUso = new LogUso(LOG_USO_ATIVO, instanciaId, storeLog);
   logUso.iniciar();
   const LOG = logUso;
+
+  // Aberturas do link da landing page (?l=código). Fica sempre ligado; guarda só código, horário e "parece robô". Ver visitasLp.ts.
+  let storeVisitas = null as ConstructorParameters<typeof VisitasLp>[0];
+  try {
+    if (persistence.kind === 'firestore') storeVisitas = new VisitasFirestore(await createFirestoreFromEnv());
+    else if (persistence.kind === 'file') storeVisitas = new VisitasArquivo(path.join(process.env.DATA_DIR || path.resolve(process.cwd(), 'data'), 'visitas-lp.jsonl'));
+  } catch (err: any) { console.error('[VisitasLp] Sem armazenamento durável, guardando só em memória:', err?.message || err); }
+  const VISITAS_LP = new VisitasLp(storeVisitas);
   const CAMPOS_LOG_CORPO = ['status', 'sentido', 'turno', 'trecho', 'horaIda', 'horaVolta', 'escolaEntrada', 'escolaSaida', 'entrada', 'saida', 'confirmar', 'remover', 'autorizacaoResponsavel', 'autorizacaoResponsaveis', 'avisoMin', 'estilo', 'aceite', 'aceiteLgpd', 'aceiteRegras', 'papel', 'deslocamento', 'direcao'];
   /** Troca nomes conhecidos (alunos, responsáveis, usuários), e-mails e números longos por marcadores. */
   const mascararTexto = (t: unknown): string => {
@@ -1901,6 +1910,18 @@ async function startServer() {
     } catch (err: any) {
       res.status(500).json({ error: 'Não foi possível ler o log de uso.' });
     }
+  });
+  // Público: a landing page avisa que o link com código foi aberto. Sempre responde 204 (não revela se gravou).
+  app.post('/api/lp/visita', rateLimiter(30, 60000), async (req: Request, res: Response) => {
+    const codigo = req.body?.l;
+    if (codigoLpValido(codigo)) {
+      try { await VISITAS_LP.registrar(codigo, pareceRobo(req.headers['user-agent'])); } catch { /* nunca atrapalha a página */ }
+    }
+    res.status(204).end();
+  });
+  // Admin: quem abriu o link da página (por código), com primeira e última abertura.
+  app.get('/api/admin/visitas-lp', authenticate, requireAdmin, async (_req: Request, res: Response) => {
+    res.json({ sucesso: true, links: await VISITAS_LP.resumo() });
   });
   app.delete('/api/admin/log-uso', authenticate, requireAdmin, rateLimiter(5, 60000), async (req: Request, res: Response) => {
     await LOG.limpar();

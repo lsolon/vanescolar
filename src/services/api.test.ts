@@ -3311,3 +3311,23 @@ test('Motorista: e-mail com "+" é recusado no cadastro (o Mercado Pago não ace
   const lista = (await jsonReq('GET', '/api/admin/motoristas', adm)).data;
   assert.equal(JSON.stringify(lista).includes('mais.plus'), false, 'nada foi criado');
 });
+
+test('Landing page: abertura do link com código é registrada (sem IP), robô não conta, e só o admin vê', async () => {
+  const adm = await adminToken();
+  const cod = 'lp' + crypto.randomBytes(4).toString('hex');
+  const post = (corpo: unknown, ua: string) => fetch(`${BASE}/api/lp/visita`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'User-Agent': ua }, body: JSON.stringify(corpo) });
+  const celular = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1';
+  assert.equal((await post({ l: cod }, celular)).status, 204);
+  assert.equal((await post({ l: cod }, 'WhatsApp/2.23.20 A')).status, 204, 'pré-visualização do WhatsApp');
+  assert.equal((await post({ l: 'CÓDIGO RUIM!' }, celular)).status, 204, 'código inválido é ignorado em silêncio');
+  assert.equal((await jsonReq('GET', '/api/admin/visitas-lp')).status, 401);
+  const mot = await novoMotorista(adm, 'lpvisita');
+  assert.equal((await jsonReq('GET', '/api/admin/visitas-lp', mot)).status, 403);
+  const lista = (await jsonReq('GET', '/api/admin/visitas-lp', adm)).data.links as any[];
+  const l = lista.find((x) => x.codigo === cod);
+  assert.ok(l, 'código aparece na lista');
+  assert.equal(l.aberturas, 1);
+  assert.equal(l.aberturasRobo, 1);
+  assert.equal(lista.some((x) => x.codigo.includes('RUIM')), false);
+  assert.equal(JSON.stringify(lista).match(/\d+\.\d+\.\d+\.\d+/), null, 'nenhum IP guardado');
+});

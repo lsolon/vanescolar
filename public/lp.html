@@ -26,6 +26,14 @@ summary{cursor:pointer}
 try {
   if (location.pathname !== '/lp.html' && (localStorage.getItem('van_token') || localStorage.getItem('adminToken') || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone)) { location.replace('/app'); }
 } catch (e) {}
+// Link com código (?l=…): avisa o servidor que a página foi aberta, para o Solon saber quem viu. Só o código é enviado.
+try {
+  var cod = new URLSearchParams(location.search).get('l');
+  if (cod && /^[a-z0-9]{4,16}$/.test(cod) && !sessionStorage.getItem('lp_visita_' + cod)) {
+    sessionStorage.setItem('lp_visita_' + cod, '1');
+    fetch('/api/lp/visita', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ l: cod }), keepalive: true }).catch(function () {});
+  }
+} catch (e) {}
 </script>
 <div style="font-family: 'Inter', system-ui, sans-serif; color: #14130F; background: #FFFBF0; line-height: 1.5">
 
