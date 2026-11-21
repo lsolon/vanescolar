@@ -393,10 +393,12 @@ export const ParentApp: React.FC<ParentAppProps> = ({
             {onLogout && (
               <button
                 onClick={onLogout}
-                className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-slate-700 transition-all active:scale-95"
-                title="Sair e voltar ao Portal"
+                className="flex items-center gap-1 px-3 min-h-[40px] rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-slate-100 border border-slate-700 text-[11px] font-bold transition-all active:scale-95 cursor-pointer"
+                title="Sair da conta e ir para a página inicial"
+                aria-label="Sair da conta"
               >
                 <LogOut className="w-4 h-4" />
+                <span>Sair</span>
               </button>
             )}
           </div>

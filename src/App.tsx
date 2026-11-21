@@ -144,6 +144,22 @@ export default function App() {
     }
   };
 
+  // Sair da conta: encerra a sessão e abre a landing page.
+  // Vai para /lp.html (e não para "/") porque "/" devolve ao app quem ainda tem sessão ou está com o app instalado.
+  // A troca de página inteira também desliga o GPS e apaga da memória os dados da tela anterior.
+  const irParaLanding = () => {
+    window.location.assign('/lp.html');
+  };
+  const sairParaLanding = async () => {
+    try {
+      await TransportRepository.logout();
+    } catch (err) {
+      console.error('Erro ao encerrar a sessão:', err);
+      AuthService.clearSession();
+    }
+    irParaLanding();
+  };
+
   // Limpar dados e sair do ambiente de teste
   const handleLimparDados = async () => {
     if (window.confirm("Deseja limpar todos os dados de alunos e motorista e sair do ambiente de teste?")) {
@@ -182,7 +198,7 @@ export default function App() {
           onLimparDados={handleLimparDados}
         />
       ) : viewMode === 'ADMIN' ? (
-        <AdminDashboard onLogout={() => navigateTo('LANDING')} />
+        <AdminDashboard onLogout={irParaLanding} />
       ) : viewMode === 'GESTAO' ? (
         <GestaoPanel onVoltar={() => navigateTo('DRIVER')} />
       ) : (
@@ -323,7 +339,7 @@ export default function App() {
                   coordenadas={coordenadas}
                   isRotaAtiva={isRotaAtiva}
                   onToggleRota={handleToggleRota}
-                  onLogout={() => navigateTo('LANDING')}
+                  onLogout={sairParaLanding}
                   onAbrirGestao={() => navigateTo('GESTAO')}
                   erroGps={erroGps}
                 />
@@ -335,7 +351,7 @@ export default function App() {
                 <ParentApp
                   coordenadas={coordenadas}
                   isRotaAtiva={isRotaAtiva}
-                  onLogout={() => navigateTo('LANDING')}
+                  onLogout={sairParaLanding}
                 />
               </div>
             )}
