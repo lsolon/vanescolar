@@ -27,8 +27,10 @@ import {
   KeyRound,
   ShieldCheck,
   BarChart3,
-  Settings
+  Settings,
+  LogOut
 } from 'lucide-react';
+import { AuthService } from '../../services/auth';
 
 interface LandingPageProps {
   onLoginDriver: () => void;
@@ -49,6 +51,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onOpenArchitecture,
   onLimparDados
 }) => {
+  // Sair da conta direto do portal: só aparece para quem tem sessão neste aparelho.
+  // Encerra a sessão (motorista, responsável ou admin) e abre a landing page. Vai para /lp.html porque "/" devolve ao app quem tem sessão.
+  const temSessao = typeof window !== 'undefined' && !!(AuthService.getSessionToken() || localStorage.getItem('adminToken'));
+  const sairDaConta = async () => {
+    try { await TransportRepository.logoutAdmin(); await TransportRepository.logout(); }
+    catch { AuthService.clearSession(); }
+    window.location.assign('/lp.html');
+  };
+
   const isDemoMode = (typeof window !== 'undefined' && window.location.search.includes('demo=true')) || import.meta.env.VITE_DEMO_MODE === 'true';
 
   // Link do motorista (?m=MOT-…) ou última van usada neste aparelho: cabeçalho "Van do João • Freguesia"
@@ -385,6 +396,17 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            {temSessao && (
+              <button
+                onClick={sairDaConta}
+                aria-label="Sair da conta"
+                title="Sair da conta e ir para a página inicial"
+                className="px-3 min-h-[44px] sm:min-h-0 sm:py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-bold border border-slate-700 flex items-center gap-1.5 cursor-pointer"
+              >
+                <LogOut className="w-4 h-4 text-slate-400" />
+                <span>Sair</span>
+              </button>
+            )}
             {isDemoMode && (
               <>
                 <button
