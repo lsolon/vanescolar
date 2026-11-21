@@ -553,9 +553,10 @@ export const DriverPanel: React.FC<DriverPanelProps> = ({
           </div>
           {onLogout && (
             <button
-              onClick={async () => { await TransportRepository.logout(); onLogout(); }}
+              onClick={onLogout}
               className="shrink-0 flex items-center gap-1 px-3 min-h-[40px] rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-[11px] font-bold cursor-pointer"
-              title="Sair do painel e voltar ao Portal"
+              title="Sair da conta e ir para a página inicial"
+              aria-label="Sair da conta"
             >
               <LogOut className="w-3.5 h-3.5 text-slate-400" />
               <span>Sair</span>
